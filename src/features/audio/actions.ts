@@ -63,13 +63,24 @@ export async function saveAudioRecording(formData: FormData) {
 /**
  * Transcreve um áudio usando Gemini API
  */
-export async function transcribeAudioRecord(audioId: string) {
+export async function transcribeAudioRecord(audioId: string, forceRetry = false) {
   const record = await db.query.audioRecords.findFirst({
     where: eq(audioRecords.id, audioId),
   });
   if (!record) throw new Error('Áudio não encontrado');
 
-  // Atualiza status
+  // Previne chamadas duplicadas à API se o áudio já estiver sendo processado
+  if (record.status === 'transcribing' && !forceRetry) {
+    console.log(`[Audio] Áudio ${audioId} já está em transcrever no momento. Ignorando chamada duplicada.`);
+    return { transcription: record.transcription || '', insights: record.insights || '{}' };
+  }
+
+  // Se já foi concluído e não é forceRetry, retorna o resultado salvo
+  if (record.status === 'done' && !forceRetry && record.transcription) {
+    return { transcription: record.transcription, insights: record.insights || '{}' };
+  }
+
+  // Atualiza status para transcribing
   await db.update(audioRecords)
     .set({ status: 'transcribing' })
     .where(eq(audioRecords.id, audioId));
@@ -111,7 +122,7 @@ export async function transcribeAudioRecord(audioId: string) {
  * Tenta novamente transcrever um áudio específico
  */
 export async function retryAudioTranscription(audioId: string) {
-  const result = await transcribeAudioRecord(audioId);
+  const result = await transcribeAudioRecord(audioId, true);
   try {
     revalidatePath('/audios');
     revalidatePath('/database');
