@@ -10,28 +10,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Processa vídeo do OBS: salva no filesystem, extrai screenshots
- * (se houver trades do CSV) e extrai a narração em áudio para transcrição
- * via Gemini 2.5 Flash AI mesmo se o dia não tiver trades cadastrados.
+ * Função central de processamento de arquivo de vídeo no disco local
  */
-export async function processOBSVideo(formData: FormData) {
-  const file = formData.get('video') as File;
-  let dateStr = formData.get('date') as string;
-  const recordingStartTime = formData.get('startTime') as string;
-  const shouldExtractAudio = formData.get('extractAudio') !== 'false';
+export async function processOBSVideoFromLocalPath({
+  localFilePath,
+  date,
+  startTime: inputStartTime,
+  shouldExtractAudio = true,
+}: {
+  localFilePath: string;
+  date?: string;
+  startTime?: string;
+  shouldExtractAudio?: boolean;
+}) {
+  if (!fs.existsSync(localFilePath)) {
+    throw new Error(`Arquivo não encontrado no disco: ${localFilePath}`);
+  }
 
-  if (!file) throw new Error('Nenhum arquivo de vídeo enviado');
+  const originalName = path.basename(localFilePath);
+  let dateStr = date;
 
-  const originalName = file.name;
-
-  // Se a data não foi informada ou veio genérica, tenta detectar do nome do arquivo OBS (ex: 2026-07-03)
+  // Auto-detecta data do nome do arquivo OBS (ex: 2026-08-07 09-04-54.mp4)
   const parsedObs = parseOBSFilename(originalName);
   if (parsedObs && parsedObs.date) {
     dateStr = parsedObs.date;
-    console.log(`[Video] Data auto-detectada do nome do arquivo OBS: ${dateStr}`);
+    console.log(`[Video] Data auto-detectada do arquivo OBS: ${dateStr}`);
   }
 
-  if (!dateStr) throw new Error('Data não informada e não foi possível detectar do arquivo');
+  if (!dateStr) {
+    dateStr = new Date().toISOString().slice(0, 10);
+  }
 
   // Busca ou cria o dia no banco
   let day = await db.query.tradingDays.findFirst({
@@ -56,36 +64,39 @@ export async function processOBSVideo(formData: FormData) {
     orderBy: trades.tradeNumber,
   });
 
-  // Salva o arquivo de vídeo
+  // Copia o arquivo para a pasta de data do app (se já não estiver lá)
   const videoDir = path.join(process.cwd(), 'data', 'videos', dateStr);
   if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
-  const videoPath = path.join(videoDir, originalName);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  fs.writeFileSync(videoPath, buffer);
+  const targetVideoPath = path.join(videoDir, originalName);
+  if (path.resolve(localFilePath) !== path.resolve(targetVideoPath)) {
+    console.log(`[Video] Copiando vídeo gigante do disco (${localFilePath} -> ${targetVideoPath})...`);
+    fs.copyFileSync(localFilePath, targetVideoPath);
+  }
 
-  console.log(`[Video] Salvo: ${videoPath} (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+  const fileStats = fs.statSync(targetVideoPath);
+  console.log(`[Video] Salvo localmente: ${targetVideoPath} (${(fileStats.size / 1024 / 1024).toFixed(1)} MB)`);
 
-  // Determina horário de início da gravação
-  let startTime = recordingStartTime;
+  // Horário de início da gravação
+  let startTime = inputStartTime;
   if (!startTime && parsedObs) {
     startTime = parsedObs.startTime;
     console.log(`[Video] Horário detectado do nome OBS: ${startTime}`);
   }
   if (!startTime) startTime = '09:00:00';
 
-  // Obtém info do vídeo (duração, resolução)
-  const videoInfo = await getVideoInfo(videoPath);
+  // Info do vídeo
+  const videoInfo = await getVideoInfo(targetVideoPath);
   console.log(`[Video] Duração: ${videoInfo.duration.toFixed(0)}s, ${videoInfo.width}x${videoInfo.height}`);
 
-  // Extrai frames se houver trades cadastrados
+  // Extração de frames se houver trades
   let totalFrames = 0;
   let resultsCount = 0;
 
   if (dayTrades.length > 0) {
     const framesDir = path.join(process.cwd(), 'data', 'images', dateStr, 'video-frames');
     const results = await extractTradeFrames(
-      videoPath,
+      targetVideoPath,
       startTime,
       dayTrades.map(t => ({
         id: t.id,
@@ -134,11 +145,9 @@ export async function processOBSVideo(formData: FormData) {
         totalFrames++;
       }
     }
-  } else {
-    console.log('[Video] 0 trades encontrados para este dia. Prosseguindo para extração e transcrição de áudio...');
   }
 
-  // ─── Extração e Transcrição de Áudio do Vídeo ─────────────────
+  // Extração de áudio & Transcrição Gemini AI
   let audioExtracted = false;
   let transcriptionSuccess = false;
 
@@ -152,7 +161,7 @@ export async function processOBSVideo(formData: FormData) {
       const audioFileName = `obs_narration_${timestamp}.mp3`;
       const audioPath = path.join(audioDir, audioFileName);
 
-      await extractAudioFromVideo(videoPath, audioPath);
+      await extractAudioFromVideo(targetVideoPath, audioPath);
 
       const audioStats = fs.statSync(audioPath);
       const audioId = generateId();
@@ -166,7 +175,7 @@ export async function processOBSVideo(formData: FormData) {
       });
       audioExtracted = true;
 
-      console.log(`[Video] Áudio extraído (${(audioStats.size / 1024 / 1024).toFixed(1)} MB). Transcrevendo com Gemini 2.5 Flash...`);
+      console.log(`[Video] Áudio extraído (${(audioStats.size / 1024 / 1024).toFixed(1)} MB). Transcrevendo com Gemini AI...`);
 
       try {
         await transcribeAudioRecord(audioId);
@@ -203,6 +212,61 @@ export async function processOBSVideo(formData: FormData) {
     audioExtracted,
     transcriptionSuccess,
   };
+}
+
+/**
+ * Processa vídeo do OBS enviado por FormData (pequenos a médios)
+ */
+export async function processOBSVideo(formData: FormData) {
+  const file = formData.get('video') as File;
+  let dateStr = formData.get('date') as string;
+  const recordingStartTime = formData.get('startTime') as string;
+  const shouldExtractAudio = formData.get('extractAudio') !== 'false';
+
+  if (!file) throw new Error('Nenhum arquivo de vídeo enviado');
+
+  const originalName = file.name;
+  const parsedObs = parseOBSFilename(originalName);
+  if (parsedObs && parsedObs.date) {
+    dateStr = parsedObs.date;
+  }
+  if (!dateStr) throw new Error('Data não informada');
+
+  const videoDir = path.join(process.cwd(), 'data', 'videos', dateStr);
+  if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
+
+  const tempVideoPath = path.join(videoDir, originalName);
+  const buffer = Buffer.from(await file.arrayBuffer());
+  fs.writeFileSync(tempVideoPath, buffer);
+
+  return processOBSVideoFromLocalPath({
+    localFilePath: tempVideoPath,
+    date: dateStr,
+    startTime: recordingStartTime,
+    shouldExtractAudio,
+  });
+}
+
+/**
+ * Action exposta para o cliente processar via caminho de arquivo no disco local (sem limite HTTP)
+ */
+export async function processVideoFromPathAction(formData: FormData) {
+  const pathInput = formData.get('path') as string;
+  const dateInput = formData.get('date') as string;
+  const startTime = formData.get('startTime') as string;
+  const extractAudio = formData.get('extractAudio') !== 'false';
+
+  if (!pathInput) throw new Error('Caminho do arquivo não informado');
+
+  // Limpa aspas do caminho se coladas pelo usuário
+  const cleanPath = pathInput.trim().replace(/^["']|["']$/g, '');
+
+  return processOBSVideoFromLocalPath({
+    localFilePath: cleanPath,
+    date: dateInput,
+    startTime,
+    shouldExtractAudio: extractAudio,
+  });
 }
 
 /**
