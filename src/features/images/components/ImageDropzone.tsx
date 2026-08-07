@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { uploadTradeImage, deleteTradeImage } from '@/features/images/actions';
 
 interface ImageItem {
@@ -24,34 +24,17 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
   const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [pasteNotification, setPasteNotification] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isPastingRef = useRef(false);
 
-  // Sincroniza com props
+  // Sincroniza com props iniciais
   useEffect(() => {
     setImages(initialImages);
   }, [initialImages]);
 
-  // Suporte a colar screenshot via Ctrl + V
-  useEffect(() => {
-    function handlePaste(e: ClipboardEvent) {
-      if (!e.clipboardData) return;
-      const items = e.clipboardData.items;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const blob = items[i].getAsFile();
-          if (blob) {
-            const file = new File([blob], `screenshot_trade_${Date.now()}.png`, { type: blob.type });
-            handleFile(file);
-          }
-        }
-      }
-    }
-
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [tradeId, date]);
-
-  async function handleFile(file: File) {
+  // Upload com atualização otimista instantânea (0ms de atraso visual, sem necessidade de F5)
+  const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) return;
 
     setUploading(true);
@@ -60,12 +43,74 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
       formData.append('image', file);
       formData.append('tradeId', tradeId);
       formData.append('date', date);
-      await uploadTradeImage(formData);
+
+      const newRecord = await uploadTradeImage(formData);
+
+      if (newRecord && newRecord.id) {
+        const newImg: ImageItem = {
+          id: newRecord.id,
+          filePath: newRecord.filePath,
+          caption: newRecord.caption || 'Screenshot do trade',
+          imageType: 'contexto',
+        };
+        // Adiciona INSTANTANEAMENTE na tela
+        setImages(prev => {
+          if (prev.some(img => img.id === newImg.id)) return prev;
+          return [...prev, newImg];
+        });
+      }
+
       onUploaded?.();
+    } catch (err) {
+      console.error('Erro ao fazer upload da imagem:', err);
     } finally {
       setUploading(false);
     }
-  }
+  }, [tradeId, date, onUploaded]);
+
+  // Handler para colar via Ctrl + V (com trava anti-duplicação)
+  const processClipboardData = useCallback((clipboardData: DataTransfer | null) => {
+    if (!clipboardData || isPastingRef.current) return;
+    const items = clipboardData.items;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        const blob = items[i].getAsFile();
+        if (blob) {
+          isPastingRef.current = true; // Trava de concorrência
+
+          const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const file = new File([blob], `paste_trade_${Date.now()}.png`, { type: blob.type || 'image/png' });
+
+          setPasteNotification(`📋 Screenshot colado da área de transferência às ${timestamp}!`);
+
+          handleFile(file).finally(() => {
+            setTimeout(() => {
+              isPastingRef.current = false; // Destrava após upload
+            }, 600);
+            setTimeout(() => setPasteNotification(null), 3500);
+          });
+
+          // Interrompe o loop no primeiro item para NUNCA duplicar imagens
+          break;
+        }
+      }
+    }
+  }, [handleFile]);
+
+  // Listener global de Ctrl + V no teclado
+  useEffect(() => {
+    function handleGlobalPaste(e: ClipboardEvent) {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable) {
+        return;
+      }
+      processClipboardData(e.clipboardData);
+    }
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [processClipboardData]);
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -78,18 +123,14 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
   async function executeDelete(imageId: string) {
     setDeletingId(imageId);
     setConfirmDeleteId(null);
-
-    // Otimista: remove do estado local na hora
     setImages(prev => prev.filter(img => img.id !== imageId));
     if (selectedImage?.id === imageId) setSelectedImage(null);
 
     try {
-      const res = await deleteTradeImage(imageId);
-      console.log('Exclusão de imagem concluída:', res);
+      await deleteTradeImage(imageId);
       onUploaded?.();
     } catch (err) {
       console.error('Erro ao deletar imagem:', err);
-      // Reverte se der erro
       setImages(initialImages);
     } finally {
       setDeletingId(null);
@@ -97,24 +138,37 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 font-mono">
+      {/* Header com contador e atalho Ctrl+V */}
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+        <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
           📸 Screenshots ({images.length})
+        </span>
+
+        <span className="text-[10px] text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2 py-0.5 rounded font-mono flex items-center gap-1">
+          <span>📋</span>
+          <span>CTRL + V ATIVO PARA COLAR PRINTS</span>
         </span>
       </div>
 
-      {/* Grid de Imagens */}
+      {/* Notificação de Paste */}
+      {pasteNotification && (
+        <div className="px-3 py-1.5 bg-teal-500/20 border border-teal-500/40 rounded-lg text-xs text-teal-300 font-mono flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
+          <span>✨</span>
+          <span>{pasteNotification}</span>
+        </div>
+      )}
+
+      {/* Grid de Imagens (Atualização Otimista Instantânea) */}
       {images.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
           {images.map((img) => (
             <div
               key={img.id}
-              className="relative group bg-slate-950 rounded-lg border border-slate-800 overflow-hidden hover:border-slate-600 transition-all flex flex-col"
+              className="relative group bg-[#070a10] rounded-lg border border-slate-800 overflow-hidden hover:border-teal-500/50 transition-all flex flex-col"
             >
-              {/* Thumbnail */}
               <div
-                className="relative aspect-video cursor-pointer overflow-hidden bg-slate-900"
+                className="relative aspect-video cursor-pointer overflow-hidden bg-slate-950"
                 onClick={() => setSelectedImage(img)}
               >
                 <img
@@ -122,13 +176,12 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                   alt={img.caption || 'Screenshot do trade'}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
-                <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-slate-200 font-medium">
+                <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-teal-300 font-medium">
                   🔍 Expandir
                 </div>
               </div>
 
-              {/* Bar com legenda e confirmação inline */}
-              <div className="p-2 bg-slate-900/90 border-t border-slate-800/80">
+              <div className="p-2 bg-[#0b1018] border-t border-slate-800/80">
                 {confirmDeleteId === img.id ? (
                   <div className="flex items-center justify-between gap-1 animate-in fade-in">
                     <button
@@ -147,7 +200,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] text-slate-400 truncate flex-1" title={img.caption || ''}>
+                    <span className="text-[10px] text-slate-400 truncate flex-1 font-mono" title={img.caption || ''}>
                       {img.caption || 'Screenshot'}
                     </span>
                     <button
@@ -169,16 +222,16 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
         </div>
       )}
 
-      {/* Dropzone para Upload */}
+      {/* Dropzone para Drag, Click ou Ctrl+V */}
       <div
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
-        className={`flex items-center justify-center gap-2 rounded-lg border border-dashed py-3 px-4 cursor-pointer transition-all text-xs ${
+        className={`flex flex-col sm:flex-row items-center justify-center gap-2 rounded-lg border border-dashed py-4 px-4 cursor-pointer transition-all text-xs outline-none ${
           isDragging
-            ? 'border-emerald-400 bg-emerald-400/5'
-            : 'border-slate-700/50 hover:border-slate-500 text-slate-500'
+            ? 'border-teal-400 bg-teal-400/10 scale-[1.01]'
+            : 'border-slate-800 hover:border-teal-500/50 bg-[#070a10] text-slate-400 hover:text-slate-200 focus:border-teal-500/60 focus:bg-teal-500/5'
         }`}
       >
         <input
@@ -189,32 +242,36 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
           className="hidden"
         />
         {uploading ? (
-          <span className="animate-spin">⏳ Fazendo upload...</span>
+          <span className="animate-spin text-teal-400 font-bold flex items-center gap-2">
+            ⏳ Salvando screenshot...
+          </span>
         ) : (
-          <>📷 Arrastar imagem aqui ou clique para selecionar</>
+          <div className="flex items-center gap-2 flex-wrap justify-center text-center">
+            <span className="text-base">📸</span>
+            <span>Arrastar imagem aqui, clicar para selecionar ou <strong className="text-teal-400 underline decoration-teal-500/40">pressionar Ctrl + V</strong> para colar print</span>
+          </div>
         )}
       </div>
 
       {/* Modal Expandido */}
       {selectedImage && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4"
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="relative max-w-5xl max-h-[90vh] bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col"
+            className="relative max-w-5xl max-h-[90vh] bg-[#0b1018] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col font-mono"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
-            <div className="p-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3">
-              <span className="text-sm text-slate-300 font-medium truncate">
+            <div className="p-3 bg-[#070a10] border-b border-slate-800 flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-300 font-bold truncate">
                 {selectedImage.caption || 'Visualização do Screenshot'}
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => executeDelete(selectedImage.id)}
                   disabled={deletingId === selectedImage.id}
-                  className="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
+                  className="px-3 py-1 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 rounded text-xs font-bold transition-all flex items-center gap-1.5"
                 >
                   🗑️ {deletingId === selectedImage.id ? 'Deletando...' : 'Deletar Imagem'}
                 </button>
@@ -227,12 +284,11 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
               </div>
             </div>
 
-            {/* Modal Image */}
-            <div className="overflow-auto max-h-[80vh] p-2 flex items-center justify-center bg-black/40">
+            <div className="overflow-auto max-h-[80vh] p-2 flex items-center justify-center bg-black/60">
               <img
                 src={`/api/files/${selectedImage.filePath}`}
                 alt={selectedImage.caption || 'Screenshot expandido'}
-                className="max-w-full max-h-[75vh] object-contain rounded-lg"
+                className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-xl"
               />
             </div>
           </div>
@@ -241,3 +297,5 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
     </div>
   );
 }
+
+export default ImageDropzone;
