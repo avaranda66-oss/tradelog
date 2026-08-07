@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter);
+  --color-background: #070a11;
+  --color-foreground: #f1f5f9;
+}
+
+/* ─── Global ──────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e293b transparent;
+}
+
+body {
+  background: #070a11;
+  color: #f1f5f9;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ─── Animations ──────────────────────────────────── */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in-from-top-2 {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-in-from-bottom-2 {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes pulse-emerald {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.25); }
+  50% { box-shadow: 0 0 16px 3px rgba(16, 185, 129, 0.15); }
+}
+
+@keyframes pulse-rose {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.25); }
+  50% { box-shadow: 0 0 16px 3px rgba(244, 63, 94, 0.15); }
+}
+
+.animate-in {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: fade-in;
+}
+
+.slide-in-from-top-2 {
+  animation-name: slide-in-from-top-2;
+}
+
+.slide-in-from-bottom-2 {
+  animation-name: slide-in-from-bottom-2;
+}
+
+/* ─── High-Tech Card & Glassmorphism ───────────────── */
+
+.v2-card {
+  background: #0d131f;
+  border: 1px solid rgba(30, 41, 59, 0.7);
+  border-radius: 0.75rem;
+}
+
+.v2-card-hover {
+  transition: all 0.2s ease-in-out;
+}
+
+.v2-card-hover:hover {
+  border-color: rgba(51, 65, 85, 0.9);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+}
+
+.glass {
+  background: rgba(13, 19, 31, 0.7);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(30, 41, 59, 0.5);
+}
+
+.glass-hover:hover {
+  background: rgba(13, 19, 31, 0.9);
+  border-color: rgba(51, 65, 85, 0.7);
+}
+
+/* ─── Custom Inputs ───────────────────────────────── */
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.1);
+}
