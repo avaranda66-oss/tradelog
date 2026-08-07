@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { processOBSVideo, processVideoFromPathAction } from '@/features/video/actions';
+import { processOBSVideo } from '@/features/video/actions';
 
 interface VideoUploaderProps {
   date: string;
@@ -10,7 +10,7 @@ interface VideoUploaderProps {
 }
 
 export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderProps) {
-  const [mode, setMode] = useState<'upload' | 'path'>('path'); // Padrão 'path' para vídeos grandes do OBS
+  const [mode, setMode] = useState<'upload' | 'path'>('path');
   const [localPath, setLocalPath] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'done' | 'error'>('idle');
@@ -20,7 +20,7 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
   const [extractAudio, setExtractAudio] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Processa via caminho do disco local (sem estourar limite HTTP em vídeos de 2.5GB+)
+  // Processa via caminho do disco local através do endpoint API /api/process-video
   async function handleProcessLocalPath(pathOverride?: string) {
     const pathToUse = (pathOverride || localPath).trim().replace(/^["']|["']$/g, '');
     if (!pathToUse) {
@@ -31,19 +31,28 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
 
     setStatus('processing');
     setMessage(`1/2 Processando vídeo no disco (${pathToUse})...`);
-    setProgress(extractAudio ? 'Extraindo screenshots dos trades + narração e transcrevendo via AI...' : 'Extraindo screenshots dos trades...');
+    setProgress(extractAudio ? 'Extraindo faixa de áudio + narração e transcrevendo via AI (pode levar 30-60s)...' : 'Extraindo screenshots dos trades...');
 
     try {
-      const formData = new FormData();
-      formData.append('path', pathToUse);
-      formData.append('date', date);
-      formData.append('extractAudio', extractAudio ? 'true' : 'false');
-      if (startTime) formData.append('startTime', startTime);
+      const res = await fetch('/api/process-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: pathToUse,
+          date,
+          startTime,
+          extractAudio,
+        }),
+      });
 
-      const result = await processVideoFromPathAction(formData);
+      const result = await res.json();
+
+      if (!res.ok || result.error) {
+        throw new Error(result.error || 'Erro no processamento do vídeo');
+      }
 
       setStatus('done');
-      let msg = `✅ Vídeo de ${Math.floor(result.duration / 60)}min processado no disco com sucesso! `;
+      let msg = `✅ Vídeo de ${Math.floor((result.duration || 0) / 60)}min processado com sucesso! `;
       if (result.framesExtracted > 0) {
         msg += `📸 ${result.framesExtracted} screenshots salvos nos trades. `;
       }
@@ -68,9 +77,8 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
       return;
     }
 
-    // Se o arquivo for maior que 250MB, alerta o usuário para usar o caminho local
     if (file.size > 250 * 1024 * 1024) {
-      setMessage(`⚠️ Vídeo grande (${(file.size / 1024 / 1024).toFixed(0)} MB). Utilize o modo "Caminho Local" abaixo para processar sem limite HTTP.`);
+      setMessage(`⚠️ Vídeo grande (${(file.size / 1024 / 1024).toFixed(0)} MB). Recomendado utilizar a opção "CAMINHO LOCAL" abaixo.`);
     }
 
     setStatus('uploading');
@@ -113,7 +121,6 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (file) {
-      // Se tiver path local da API do browser (electron/tauri) ou arquivo
       const pathProperty = (file as any).path;
       if (pathProperty) {
         setLocalPath(pathProperty);
@@ -131,8 +138,7 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
         <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2 uppercase tracking-wider">
           🎬 PROCESSAMENTO DE VÍDEO DO OBS REPLAY
         </h3>
-        
-        {/* Toggle de Modo */}
+
         <div className="flex items-center gap-1 text-[10px] bg-slate-950 p-1 rounded border border-slate-800">
           <button
             type="button"
@@ -155,9 +161,7 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
         </div>
       </div>
 
-      {/* Opções de processamento */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-        {/* Horário de início (opcional) */}
         <div className="flex items-center gap-2">
           <label className="text-slate-400 shrink-0">Início vídeo:</label>
           <input
@@ -171,7 +175,6 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
           <span className="text-[10px] text-slate-500 font-sans">(auto-detecta do nome)</span>
         </div>
 
-        {/* Extrair áudio toggle */}
         <label className="flex items-center gap-2 text-slate-300 cursor-pointer select-none">
           <input
             type="checkbox"
@@ -183,7 +186,6 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
         </label>
       </div>
 
-      {/* MODO 1: CAMINHO DO ARQUIVO LOCAL (Instantâneo sem estouro de RAM) */}
       {mode === 'path' ? (
         <div className="space-y-2 bg-[#070a10] p-3 rounded-lg border border-slate-800/80">
           <label className="text-[10px] text-slate-400 uppercase font-bold block">
@@ -208,11 +210,10 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
             </button>
           </div>
           <p className="text-[10px] text-teal-400/80 font-sans">
-            💡 <strong>Sem limite de tamanho!</strong> Lê diretamente do disco rígido sem travamentos ou falha de upload HTTP.
+            💡 <strong>Sem limite de tamanho!</strong> Lê diretamente do disco rígido via API local sem travamentos.
           </p>
         </div>
       ) : (
-        /* MODO 2: DROPZONE PADRÃO */
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
@@ -248,7 +249,6 @@ export function VideoUploader({ date, hasTrades, onProcessed }: VideoUploaderPro
         </div>
       )}
 
-      {/* Status Message */}
       {message && (
         <div className={`px-3 py-2 rounded-lg text-xs font-mono font-medium animate-in fade-in ${
           status === 'error' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30' :
