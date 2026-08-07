@@ -10,6 +10,7 @@ interface Segment {
   raw_text?: string | null;
   text?: string | null;
   ai_analysis?: string | null;
+  title?: string | null;
 }
 
 export function TranscriptionPanel({ audios: initialAudios, date }: { audios: AudioRecord[]; date?: string }) {
@@ -78,11 +79,11 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
   }
 
   return (
-    <div className="space-y-3 font-mono">
+    <div className="space-y-4 font-mono">
       {/* Header com contagem e botão de limpar erros */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-bold text-slate-300 flex items-center gap-2 uppercase tracking-wider">
-          📝 TRANSCRIÇÕES DE VOZ & LOGS DE TRADING ({audios.length})
+          📝 TRANSCRIÇÕES DE VOZ & LINHA DO TEMPO DA IA ({audios.length})
         </h3>
 
         {errorCount > 0 && (
@@ -132,7 +133,7 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
         return (
           <div
             key={audio.id}
-            className={`rounded-xl border p-4 space-y-3 transition-all ${
+            className={`rounded-xl border p-4 space-y-4 transition-all ${
               audio.status === 'error'
                 ? 'bg-rose-950/10 border-rose-500/20'
                 : 'bg-[#0b1018] border-slate-800/80 shadow-xl'
@@ -147,7 +148,7 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
                   audio.status === 'error' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
                   'bg-slate-800 text-slate-400'
                 }`}>
-                  {audio.status === 'done' ? '✓ Transcrito Fiel' :
+                  {audio.status === 'done' ? '✓ Transcrição Dupla Pronta' :
                    isProcessing ? '⏳ Processando Áudio API...' :
                    audio.status === 'error' ? '❌ Erro na transcrição' :
                    '🎙️ Gravado'}
@@ -205,7 +206,7 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
                       {deletingId === audio.id ? 'Deletando...' : 'Confirmar'}
                     </button>
                     <button
-                      onClick={() => setConfirmDeleteId(audio.id)}
+                      onClick={() => setConfirmDeleteId(null)}
                       className="px-1.5 text-slate-400 hover:text-slate-200 text-xs"
                     >
                       ✕
@@ -244,79 +245,98 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
               </div>
             )}
 
-            {/* Conteúdo da Transcrição Fiel em 1ª Pessoa */}
-            {audio.status === 'error' ? (
-              <div className="bg-rose-950/30 border border-rose-500/40 rounded-lg p-3 text-xs text-rose-300 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="space-y-1 max-w-xl">
-                    <span className="font-bold text-rose-400 block uppercase tracking-wider text-[10px]">
-                      ⚠️ FALHA NO PROCESSAMENTO DA IA GEMINI
+            {/* PAINEL LADO A LADO (2 COLUNAS): FALA NATURAL (ESQ) vs LINHA DO TEMPO IA (DIR) */}
+            {!isProcessing && segments.length > 0 && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* COLUNA 1: FALA NATURAL FIEL EM 1ª PESSOA */}
+                <div className="bg-[#070a10] rounded-xl p-3 border border-teal-500/30 space-y-3 font-mono">
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                    <span className="text-[10px] text-teal-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <span>🗣️</span>
+                      <span>SUA FALA NATURAL FIEL (INÍCIO EM 00:00)</span>
                     </span>
-                    <p className="font-mono text-[11px] text-rose-300/90 break-all">
-                      {audio.transcription || 'Chave API Gemini precisa ser configurada no .env.local'}
-                    </p>
+                    <span className="text-[9px] text-slate-500">1ª Pessoa Verbatim</span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleRetranscribe(audio.id)}
-                      disabled={isProcessing}
-                      className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded text-xs font-bold font-mono transition-all uppercase shadow-md flex items-center gap-1.5"
-                    >
-                      <span>🔄</span>
-                      <span>RE-TENTAR TRANSCRIÇÃO</span>
-                    </button>
+                  <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+                    {segments.map((seg, i) => (
+                      <div key={i} className="flex gap-2.5 border-b border-slate-800/40 last:border-0 pb-2 last:pb-0">
+                        <div className="shrink-0 flex flex-col items-end gap-1 pt-0.5">
+                          <span className="text-[10px] font-mono text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded font-bold border border-teal-500/20">
+                            ⏱️ {seg.audio_timestamp}
+                          </span>
+                          {seg.market_time && seg.market_time !== 'null' && (
+                            <span className="text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded font-bold border border-amber-400/20">
+                              🕐 {seg.market_time}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-200 leading-relaxed font-sans flex-1">
+                          {seg.raw_text || seg.text}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-            ) : !isProcessing && segments.length > 0 ? (
-              <div className="bg-[#070a10] rounded-lg p-3 border border-slate-800/80 space-y-3 max-h-96 overflow-y-auto font-mono">
-                <div className="flex items-center justify-between border-b border-slate-800/60 pb-1.5">
-                  <span className="text-[10px] text-teal-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                    <span>🗣️</span>
-                    <span>SUA FALA NATURAL FIEL EM 1ª PESSOA (INÍCIO EM 00:00)</span>
-                  </span>
-                </div>
 
-                {segments.map((seg, i) => (
-                  <div key={i} className="flex gap-3 group border-b border-slate-800/40 last:border-0 pb-2.5 last:pb-0">
-                    <div className="shrink-0 flex flex-col items-end gap-1 pt-0.5">
-                      <span className="text-[10px] font-mono text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded font-bold border border-teal-500/20">
-                        ⏱️ {seg.audio_timestamp}
-                      </span>
-                      {seg.market_time && seg.market_time !== 'null' && (
-                        <span className="text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded font-bold border border-amber-400/20">
-                          🕐 {seg.market_time}
+                {/* COLUNA 2: LINHA DO TEMPO & ANÁLISE TÉCNICA DA IA */}
+                <div className="bg-[#070a10] rounded-xl p-3 border border-amber-500/30 space-y-3 font-mono">
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                    <span className="text-[10px] text-amber-300 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <span>🤖</span>
+                      <span>LINHA DO TEMPO & ANÁLISE TÉCNICA DA IA</span>
+                    </span>
+                    <span className="text-[9px] text-amber-400/80 font-bold">Síntese Profissional</span>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+                    {segments.map((seg, i) => (
+                      <div key={i} className="flex gap-2.5 border-b border-slate-800/40 last:border-0 pb-2.5 last:pb-0">
+                        <div className="shrink-0 flex flex-col items-end gap-1 pt-0.5">
+                          <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded font-bold border border-amber-500/20">
+                            ⏱️ {seg.audio_timestamp}
+                          </span>
+                          {seg.market_time && seg.market_time !== 'null' && (
+                            <span className="text-[10px] font-mono text-teal-400 bg-teal-400/10 px-1.5 py-0.5 rounded font-bold border border-teal-400/20">
+                              🕐 {seg.market_time}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex-1 space-y-1">
+                          {seg.title && (
+                            <span className="text-[11px] font-bold text-amber-300 block">
+                              {seg.title}
+                            </span>
+                          )}
+                          <p className="text-xs text-amber-100/90 leading-relaxed font-sans">
+                            {seg.ai_analysis || seg.text}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Resumo Executivo da IA ao final da linha do tempo */}
+                    {insights.aiSummary && (
+                      <div className="mt-3 p-2.5 bg-[#0b1018] rounded-lg border border-amber-500/30 space-y-1">
+                        <span className="text-[9px] text-amber-400 font-bold uppercase tracking-wider block">
+                          📌 RESUMO TÉCNICO EXECUTIVO DA SESSÃO:
                         </span>
-                      )}
-                    </div>
-
-                    <div className="flex-1 space-y-1">
-                      <p className="text-xs text-slate-200 leading-relaxed font-sans">
-                        {seg.raw_text || seg.text}
-                      </p>
-
-                      {seg.ai_analysis && (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedAiAnalysis({
-                            summary: seg.ai_analysis || undefined,
-                            segments: [seg],
-                          })}
-                          className="text-[9px] text-amber-400/80 hover:text-amber-300 underline font-mono block pt-0.5"
-                        >
-                          💡 Ver interpretação técnica da IA sobre este trecho...
-                        </button>
-                      )}
-                    </div>
+                        <p className="text-xs text-slate-300 font-sans leading-relaxed">
+                          {insights.aiSummary}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                ))}
+                </div>
               </div>
-            ) : !isProcessing && audio.transcription ? (
+            )}
+
+            {/* Fallback de Transcrição Texto Simples */}
+            {!isProcessing && segments.length === 0 && audio.transcription && (
               <div className="bg-[#070a10] rounded-lg p-3 border border-slate-800/80 space-y-2">
                 <div className="flex items-center justify-between border-b border-slate-800/60 pb-1 text-[10px] text-teal-400 font-bold uppercase">
-                  <span>🗣️ SUA FALA NATURAL EM 1ª PESSOA</span>
+                  <span>🗣️ TRANSCRIÇÃO DA GRAVAÇÃO</span>
                 </div>
                 <div className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap font-sans space-y-2">
                   {audio.transcription.split('\n\n').map((paragraph, idx) => (
@@ -326,7 +346,7 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
                   ))}
                 </div>
               </div>
-            ) : null}
+            )}
 
             {/* Trades mencionados */}
             {!isProcessing && insights.trades && insights.trades.length > 0 && (
