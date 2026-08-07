@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { TradingDay } from '@/lib/db/schema';
 import { saveKeyLevels } from '@/features/dashboard/actions';
+import { IconTarget, IconCheck } from '@/components/ui/icons';
 
 interface KeyLevel {
   id: string;
@@ -21,9 +22,9 @@ export function KeyLevelsTable({
     initialLevels.length > 0
       ? initialLevels.map(l => ({ id: l.id, name: l.name, price: l.price.toString() }))
       : [
-          { id: '1', name: '', price: '' },
-          { id: '2', name: '', price: '' },
-          { id: '3', name: '', price: '' },
+          { id: '1', name: 'CALL WALL GEX', price: '125.600' },
+          { id: '2', name: 'PUT WALL GEX', price: '124.800' },
+          { id: '3', name: 'VWAP MATINAL', price: '125.000' },
         ]
   );
   const [saving, setSaving] = useState(false);
@@ -59,43 +60,51 @@ export function KeyLevelsTable({
   }
 
   return (
-    <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-300">📍 Níveis-Chave do Dia</h3>
+    <section aria-label="Níveis-chave" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3 shadow-xl">
+      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+        <div className="flex items-center gap-2">
+          <IconTarget className="text-teal-400" />
+          <h3 className="font-mono text-[10px] tracking-[0.25em] font-bold text-slate-300 uppercase">
+            KEY LEVELS · NÍVEIS-CHAVE DO DIA
+          </h3>
+        </div>
+
         <button
           onClick={addRow}
-          className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+          type="button"
+          className="font-mono text-[10px] text-teal-400 hover:text-teal-300 font-bold transition-colors uppercase tracking-wider"
         >
-          + Adicionar
+          + ADICIONAR LINHA
         </button>
       </div>
 
-      <div className="space-y-2">
-        {/* Header */}
-        <div className="grid grid-cols-[1fr_140px_32px] gap-2 text-[10px] text-slate-500 uppercase tracking-wider px-1">
-          <span>Nível</span>
-          <span>Preço</span>
+      <div className="space-y-1.5 font-mono text-xs">
+        {/* Header Table */}
+        <div className="grid grid-cols-[1fr_140px_28px] gap-2 text-[9px] text-slate-500 uppercase tracking-widest px-1">
+          <span>IDENTIFICADOR / NÍVEL</span>
+          <span className="text-right">PREÇO (PTS)</span>
           <span />
         </div>
 
         {/* Rows */}
         {levels.map((level) => (
-          <div key={level.id} className="grid grid-cols-[1fr_140px_32px] gap-2 items-center">
+          <div key={level.id} className="grid grid-cols-[1fr_140px_28px] gap-2 items-center">
             <input
               value={level.name}
               onChange={(e) => updateRow(level.id, 'name', e.target.value)}
-              placeholder="Ex: S1 GEX, Mín. anterior, VWAP..."
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500/50"
+              placeholder="Ex: CALL WALL, GAMMA FLIP, VWAP…"
+              className="bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-mono"
             />
             <input
               value={level.price}
               onChange={(e) => updateRow(level.id, 'price', e.target.value)}
-              placeholder="177.740"
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 font-mono text-right focus:outline-none focus:border-emerald-500/50"
+              placeholder="125.000"
+              className="bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-700 font-mono text-right focus:outline-none focus:border-teal-500/60 tabular-nums"
             />
             <button
               onClick={() => removeRow(level.id)}
-              className="text-slate-600 hover:text-rose-400 transition-colors text-sm"
+              type="button"
+              className="text-slate-600 hover:text-rose-400 transition-colors font-mono text-xs"
             >
               ✕
             </button>
@@ -103,16 +112,29 @@ export function KeyLevelsTable({
         ))}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 font-mono text-[10px]">
+        <span className="text-slate-500">{levels.length} NÍVEIS MAPEADOS</span>
+
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-all disabled:opacity-50 border border-emerald-500/20"
+          type="button"
+          className="px-3.5 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 rounded-md font-mono font-bold text-xs transition-all flex items-center gap-1.5 disabled:opacity-50"
         >
-          {saving ? 'Salvando...' : '💾 Salvar níveis'}
+          {saved ? (
+            <>
+              <IconCheck className="text-slate-950" />
+              <span>NÍVEIS SALVOS</span>
+            </>
+          ) : saving ? (
+            'SALVANDO…'
+          ) : (
+            'SALVAR NÍVEIS'
+          )}
         </button>
-        {saved && <span className="text-xs text-emerald-400 animate-in fade-in">✅ Salvo!</span>}
       </div>
-    </div>
+    </section>
   );
 }
+
+export default KeyLevelsTable;

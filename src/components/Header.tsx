@@ -1,91 +1,104 @@
-'use client';
+"use client";
 
-import { Suspense } from 'react';
-import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { useEffect, useState } from "react";
+import { IconSync, IconTerminal, IconSettings, IconAlert } from "./ui/icons";
 
-function HeaderContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const dateParam = searchParams.get('date');
+export type SyncStatus = "synced" | "syncing" | "error" | "offline";
 
-  const pathname = usePathname();
+export interface HeaderProps {
+  syncStatus?: SyncStatus;
+  lastSyncAt?: Date | string | null;
+  environment?: "LIVE" | "PAPER";
+  onOpenSettings?: () => void;
+}
 
-  function navigateDate(days: number) {
-    const current = dateParam ? new Date(dateParam + 'T12:00:00') : new Date();
-    current.setDate(current.getDate() + days);
-    const y = current.getFullYear();
-    const m = (current.getMonth() + 1).toString().padStart(2, '0');
-    const d = current.getDate().toString().padStart(2, '0');
-    router.push(`${pathname}?date=${y}-${m}-${d}`);
-  }
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  synced: "SYNCED",
+  syncing: "SYNCING",
+  error: "SYNC ERROR",
+  offline: "OFFLINE",
+};
 
-  const displayDate = dateParam
-    ? new Date(dateParam + 'T12:00:00').toLocaleDateString('pt-BR', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      })
-    : new Date().toLocaleDateString('pt-BR', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      });
+const dotColor: Record<SyncStatus, string> = {
+  synced: "bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.5)]",
+  syncing: "bg-teal-400 animate-pulse",
+  error: "bg-rose-400",
+  offline: "bg-slate-600",
+};
+
+function formatClock(d: Date) {
+  return d.toLocaleTimeString("pt-BR", { hour12: false });
+}
+
+export function Header({
+  syncStatus = "synced",
+  lastSyncAt = null,
+  environment = "LIVE",
+  onOpenSettings,
+}: HeaderProps) {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const syncTs =
+    lastSyncAt == null
+      ? "--:--:--"
+      : formatClock(typeof lastSyncAt === "string" ? new Date(lastSyncAt) : lastSyncAt);
 
   return (
-    <header className="h-16 border-b border-slate-800/80 bg-[#090d16]/60 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40">
-      {/* Date Navigator */}
+    <header className="flex h-11 items-center justify-between border-b border-slate-800/80 bg-[#0b1018] px-4 shadow-md">
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigateDate(-1)}
-          className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200 flex items-center justify-center transition-all text-xs font-mono"
-          title="Dia anterior"
-        >
-          ‹
-        </button>
+        <IconTerminal className="text-teal-400" />
+        <span className="font-mono text-[11px] font-semibold tracking-[0.2em] text-slate-100">
+          TRADELOG
+        </span>
+        <span className="hidden border-l border-slate-800/80 pl-3 font-mono text-[10px] tracking-widest text-slate-500 sm:inline">
+          WINFUT · B3
+        </span>
+      </div>
 
-        <span className="text-sm font-semibold text-slate-200 min-w-[160px] text-center capitalize">
-          📅 {displayDate}
+      <div className="flex items-center gap-4">
+        <div
+          className="flex items-center gap-2 font-mono text-[10px] tracking-wider"
+          role="status"
+          aria-live="polite"
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${dotColor[syncStatus]}`} />
+          <span className={syncStatus === "error" ? "text-rose-400" : "text-slate-400"}>
+            {syncStatus === "error" && <IconAlert className="mr-1 inline h-3 w-3" />}
+            {SYNC_LABEL[syncStatus]}
+          </span>
+          <span className="tabular-nums text-slate-600">{syncTs}</span>
+        </div>
+
+        <span
+          className={`border px-1.5 py-0.5 font-mono text-[9px] tracking-[0.15em] ${
+            environment === "LIVE"
+              ? "border-teal-500/40 text-teal-400"
+              : "border-slate-600 text-slate-400"
+          }`}
+        >
+          {environment}
+        </span>
+
+        <span className="hidden font-mono text-[11px] tabular-nums text-slate-400 md:inline">
+          {formatClock(now)}
         </span>
 
         <button
-          onClick={() => navigateDate(1)}
-          className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200 flex items-center justify-center transition-all text-xs font-mono"
-          title="Próximo dia"
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="Configurações"
+          className="flex h-7 w-7 items-center justify-center border border-slate-800 text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-200 rounded-sm"
         >
-          ›
-        </button>
-      </div>
-
-      {/* Quick Action Buttons */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => router.push('/audios')}
-          className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-all flex items-center gap-2 shadow-sm"
-        >
-          <span>🎙️</span>
-          <span className="hidden sm:inline">Gravar Áudio</span>
-        </button>
-
-        <button
-          onClick={() => router.push('/#import-csv')}
-          className="px-3.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-medium transition-all flex items-center gap-2 shadow-sm"
-        >
-          <span>📥</span>
-          <span>Importar CSV</span>
+          <IconSettings />
         </button>
       </div>
     </header>
   );
 }
 
-export function Header() {
-  return (
-    <Suspense fallback={
-      <header className="h-16 border-b border-slate-800/80 bg-[#090d16]/60 px-6 flex items-center justify-between sticky top-0 z-40 text-xs text-slate-500">
-        Carregando...
-      </header>
-    }>
-      <HeaderContent />
-    </Suspense>
-  );
-}
+export default Header;

@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import { updatePreMarket } from '@/features/trades/actions';
 import type { TradingDay } from '@/lib/db/schema';
+import { IconClock, IconCheck, IconArrowUp, IconArrowDown, IconDash } from '@/components/ui/icons';
 
 const biasOptions = [
-  { value: 'alta', label: '🟢 Alta', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  { value: 'baixa', label: '🔴 Baixa', color: 'bg-rose-500/10 text-rose-400 border-rose-500/20' },
-  { value: 'indefinido', label: '⚪ Indefinido', color: 'bg-slate-700 text-slate-400 border-slate-600' },
+  { value: 'alta', label: 'LONG // ALTA', color: 'border-teal-500/50 bg-teal-500/10 text-teal-400', Icon: IconArrowUp },
+  { value: 'baixa', label: 'SHORT // BAIXA', color: 'border-rose-400/50 bg-rose-400/10 text-rose-400', Icon: IconArrowDown },
+  { value: 'indefinido', label: 'NEUTRAL // INDEFINIDO', color: 'border-slate-600 bg-slate-900 text-slate-400', Icon: IconDash },
 ];
 
 export function PreMarketForm({ day }: { day: TradingDay }) {
@@ -38,40 +39,53 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
   }
 
   return (
-    <div className="bg-slate-900/50 border border-slate-800/50 rounded-xl p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-        🌅 Pré-Market
+    <section aria-label="Checklist pré-market" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4">
+      <header className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+        <div className="flex items-center gap-2">
+          <IconClock className="text-teal-400" />
+          <h3 className="font-mono text-[10px] tracking-[0.25em] font-bold text-slate-300 uppercase">
+            PRE-MARKET PROTOCOL · PREPARAÇÃO MATINAL
+          </h3>
+        </div>
+
         {day.preMarketDone && (
-          <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded">
-            ✓ Feito
+          <span className="font-mono text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded uppercase">
+            ✓ CONCLUÍDO
           </span>
         )}
-      </h3>
+      </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
         {/* Hora que acordou */}
         <div>
-          <label className="text-xs text-slate-500 block mb-1">Hora que acordou</label>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            HORA DE DESPERTAR (WAKE TIME)
+          </label>
           <input
             type="time"
             value={form.wakeUpTime}
             onChange={(e) => setForm(f => ({ ...f, wakeUpTime: e.target.value }))}
-            className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs tabular-nums"
           />
         </div>
 
         {/* Qualidade do sono */}
         <div>
-          <label className="text-xs text-slate-500 block mb-1">Qualidade do sono</label>
-          <div className="flex gap-1">
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            QUALIDADE DO SONO (1-5)
+          </label>
+          <div className="flex gap-1" role="radiogroup" aria-label="Qualidade do sono">
             {[1, 2, 3, 4, 5].map((v) => (
               <button
                 key={v}
+                type="button"
+                role="radio"
+                aria-checked={form.sleepQuality === v}
                 onClick={() => setForm(f => ({ ...f, sleepQuality: v }))}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
+                className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all border font-mono tabular-nums ${
                   form.sleepQuality === v
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-slate-800/50 text-slate-500 border border-slate-700/50 hover:text-slate-300'
+                    ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
+                    : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
                 }`}
               >
                 {v}
@@ -82,28 +96,36 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
 
         {/* Estado mental */}
         <div className="sm:col-span-2">
-          <label className="text-xs text-slate-500 block mb-1">Estado mental/emocional</label>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            ESTADO MENTAL & PRONTIDÃO EMOCIONAL
+          </label>
           <input
             value={form.mentalState}
             onChange={(e) => setForm(f => ({ ...f, mentalState: e.target.value }))}
-            placeholder="Como se sente ao sentar na tela..."
-            className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600"
+            placeholder="Ex: Foco no plano, sem ansiedade, 100% focado no setup…"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs"
           />
         </div>
 
         {/* Viés */}
         <div className="sm:col-span-2">
-          <label className="text-xs text-slate-500 block mb-1">Viés pré-abertura</label>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            VIÉS PRE-ABERTURA (DAY BIAS)
+          </label>
           <div className="flex gap-2">
             {biasOptions.map((opt) => (
               <button
                 key={opt.value}
+                type="button"
                 onClick={() => setForm(f => ({ ...f, generalBias: opt.value }))}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${
-                  form.generalBias === opt.value ? opt.color : 'bg-slate-800/50 text-slate-500 border-slate-700/50'
+                className={`flex-1 py-1.5 rounded-md text-xs font-bold border transition-all flex items-center justify-center gap-1.5 font-mono ${
+                  form.generalBias === opt.value
+                    ? opt.color
+                    : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
                 }`}
               >
-                {opt.label}
+                <opt.Icon width={12} height={12} />
+                <span>{opt.label}</span>
               </button>
             ))}
           </div>
@@ -111,40 +133,57 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
 
         {/* Overnight */}
         <div>
-          <label className="text-xs text-slate-500 block mb-1">Overnight / Cenário</label>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            OVERNIGHT & ASIA/EUROPA DRIVERS
+          </label>
           <textarea
             value={form.overnightNote}
             onChange={(e) => setForm(f => ({ ...f, overnightNote: e.target.value }))}
-            placeholder="Mercados internacionais, futuro americano..."
-            className="w-full h-16 bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 resize-none"
+            placeholder="Mercados globais, S&P futuro, DXY, commodities…"
+            className="w-full h-16 bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 placeholder:text-slate-700 resize-none focus:outline-none focus:border-teal-500/60 font-sans text-xs leading-relaxed"
           />
         </div>
 
         {/* Calendário macro */}
         <div>
-          <label className="text-xs text-slate-500 block mb-1">Calendário do dia</label>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            CALENDÁRIO MACRO & EVENTOS DO DIA
+          </label>
           <textarea
             value={form.macroCalendar}
             onChange={(e) => setForm(f => ({ ...f, macroCalendar: e.target.value }))}
-            placeholder="Payroll, COPOM, vencimento de opções..."
-            className="w-full h-16 bg-slate-800/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 resize-none"
+            placeholder="09:30 Payroll US | 15:00 COPOM | 16:30 CFTC…"
+            className="w-full h-16 bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 placeholder:text-slate-700 resize-none focus:outline-none focus:border-teal-500/60 font-mono text-xs leading-relaxed"
           />
         </div>
       </div>
 
       {/* Botão salvar */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 font-mono text-[10px]">
+        <span className="text-slate-500">
+          PROTOCOLO PRÉ-MARKET SINCRONIZADO
+        </span>
+
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-sm font-medium hover:bg-emerald-500/20 transition-all disabled:opacity-50 border border-emerald-500/20"
+          type="button"
+          className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-mono font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50"
         >
-          {saving ? 'Salvando...' : '💾 Salvar pré-market'}
+          {saved ? (
+            <>
+              <IconCheck className="text-slate-950" />
+              <span>LOG REGISTRADO</span>
+            </>
+          ) : saving ? (
+            'SALVANDO…'
+          ) : (
+            'LOG PRE-MARKET'
+          )}
         </button>
-        {saved && (
-          <span className="text-xs text-emerald-400 animate-in fade-in">✅ Salvo!</span>
-        )}
       </div>
-    </div>
+    </section>
   );
 }
+
+export default PreMarketForm;

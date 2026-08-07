@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { TradingDay } from '@/lib/db/schema';
 import { updatePreMarket } from '@/features/trades/actions';
+import { IconTarget, IconArrowUp, IconArrowDown, IconDash, IconCheck } from '@/components/ui/icons';
 
 interface FarolMarketCardProps {
   day: TradingDay;
@@ -26,7 +27,6 @@ export function FarolMarketCard({ day }: FarolMarketCardProps) {
   async function handleSave() {
     setLoading(true);
     try {
-      // Atualiza no banco via Server Action
       await updatePreMarket(day.id, {
         generalBias: day.generalBias || farolBias,
         farolBias,
@@ -50,101 +50,114 @@ export function FarolMarketCard({ day }: FarolMarketCardProps) {
   }
 
   return (
-    <div className="bg-[#0d131f] border border-slate-800/80 rounded-2xl p-5 space-y-4 shadow-xl">
-      {/* Header */}
+    <section aria-label="Farol do mercado" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4">
+      {/* Header Command */}
       <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
         <div className="flex items-center gap-2">
-          <span className="text-xl">🚨</span>
+          <IconTarget className="text-teal-400" width={16} height={16} />
           <div>
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-              PANORAMA FAROL DO MERCADO (GPS & ANÁLISE MACRO)
+            <h2 className="font-mono text-[10px] tracking-[0.25em] text-slate-300 uppercase font-bold">
+              MARKET BEACON · GEX & MACRO PROTOCOL
             </h2>
-            <p className="text-[11px] text-slate-500">
-              Integração de inteligência pré-market do Farol do Mercado vs Visão do Trader
+            <p className="text-[11px] text-slate-500 font-sans mt-0.5">
+              Mapeamento de viés, volatilidade implícita e níveis-chave de Gamma Flip
             </p>
           </div>
         </div>
 
         <button
           onClick={handleAutoFill}
-          className="px-3 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+          type="button"
+          className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-teal-400 border border-slate-700/80 rounded-md font-mono text-[10px] font-bold tracking-wider transition-all"
         >
-          <span>⚡ Impar/Atualizar Farol</span>
+          SYNC FAROL DATA
         </button>
       </div>
 
-      {/* Form Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+      {/* Grid do Formulário */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-mono text-xs">
         {/* Viés do Farol */}
         <div className="space-y-1">
-          <label className="text-[10px] text-slate-400 font-bold uppercase block font-mono">
-            Viés do Farol do Mercado
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            VIÉS DO FAROL DO MERCADO
           </label>
           <select
             value={farolBias}
             onChange={(e) => setFarolBias(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono font-bold"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs font-bold"
           >
-            <option value="Alta">Alta ↑ (Comprador)</option>
-            <option value="Baixa">Baixa ↓ (Vendedor)</option>
-            <option value="Lateral">Lateral ↔ (Consolidação)</option>
+            <option value="Alta">LONG // ALTA (COMPRADOR)</option>
+            <option value="Baixa">SHORT // BAIXA (VENDEDOR)</option>
+            <option value="Lateral">NEUTRAL // LATERAL (CONSOLIDAÇÃO)</option>
           </select>
         </div>
 
         {/* Níveis-Chave do Farol */}
         <div className="space-y-1">
-          <label className="text-[10px] text-slate-400 font-bold uppercase block font-mono">
-            Níveis-Chave (GEX & Call/Put Wall)
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            NÍVEIS-CHAVE (GEX & CALL/PUT WALL)
           </label>
           <input
             type="text"
             value={farolKeyLevels}
             onChange={(e) => setFarolKeyLevels(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs"
           />
         </div>
 
         {/* Notícias & Calendário Macro */}
         <div className="md:col-span-2 space-y-1">
-          <label className="text-[10px] text-slate-400 font-bold uppercase block font-mono">
-            Calendário Macro & Notícias do Farol
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            CALENDÁRIO MACRO & DRIVERS DO DIA
           </label>
           <input
             type="text"
             value={farolNews}
             onChange={(e) => setFarolNews(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs"
           />
         </div>
 
         {/* Insights do Farol */}
         <div className="md:col-span-2 space-y-1">
-          <label className="text-[10px] text-slate-400 font-bold uppercase block font-mono">
-            Insights & Leitura Estratégica do Farol
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            INSIGHTS & ANÁLISE ESTRATÉGICA DO FAROL
           </label>
           <textarea
             rows={2}
             value={farolInsights}
             onChange={(e) => setFarolInsights(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 text-xs"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-sans text-xs leading-relaxed"
           />
         </div>
       </div>
 
-      {/* Salvar Botão */}
-      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
-        <span className="text-[11px] text-slate-500 italic">
-          Compare a análise do Farol do Mercado com as suas entradas no diário pós-pregão.
+      {/* Footer de Ação */}
+      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 font-mono text-[10px]">
+        <span className="text-slate-500">
+          REGISTRO DO FAROL SISMICO VS PLANO DO PREGÃO
         </span>
 
         <button
           onClick={handleSave}
           disabled={loading}
-          className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 shadow-lg"
+          type="button"
+          className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-mono font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50"
         >
-          {saved ? '✅ Salvo!' : loading ? 'Salvando...' : '💾 Salvar Pré-Market Farol'}
+          {saved ? (
+            <>
+              <IconCheck className="text-slate-950" />
+              <span>REGISTRO SALVO</span>
+            </>
+          ) : loading ? (
+            'SALVANDO…'
+          ) : (
+            'SALVAR FAROL MARKET'
+          )}
         </button>
       </div>
-    </div>
+    </section>
   );
 }
+
+export default FarolMarketCard;
