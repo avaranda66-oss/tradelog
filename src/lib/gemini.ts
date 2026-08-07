@@ -5,19 +5,7 @@ import path from 'node:path';
 const API_KEY = process.env.GEMINI_API_KEY!;
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// ─── Limites ─────────────────────────────────────────────────
-/**
- * Limites de tamanho da Gemini API:
- * - inlineData: máx 15 MB (20 MB com base64 overhead = ~15 MB raw)
- * - Files API: máx 2 GB, ~8.4h de áudio
- * - Token limit de áudio: ~25-32 tokens/segundo
- * - Custo: ~US$ 0.005-0.01/minuto de áudio (Flash)
- * 
- * WebM/Opus bitrate típico: ~6-10 KB/s
- * - 15 MB ≈ 25-40 minutos de áudio
- * - Para gravações > 15 MB, usamos Files API automaticamente
- */
-const INLINE_MAX_BYTES = 14 * 1024 * 1024; // 14 MB (margem de segurança)
+const INLINE_MAX_BYTES = 14 * 1024 * 1024; // 14 MB
 
 const TRANSCRIPTION_PROMPT = `Você é um assistente especializado em trading de mini-índice futuro (WINFUT) no Brasil.
 
@@ -52,7 +40,6 @@ Responda EXATAMENTE neste formato JSON (sem markdown, sem code blocks):
   "key_observations": ["observação 1", "observação 2"]
 }`;
 
-// ─── MIME types aceitos pelo Gemini ──────────────────────────
 const MIME_MAP: Record<string, string> = {
   '.webm': 'audio/webm',
   '.mp3': 'audio/mp3',
@@ -64,11 +51,7 @@ const MIME_MAP: Record<string, string> = {
 };
 
 /**
- * Transcreve um arquivo de áudio usando Gemini 2.5 Flash.
- * 
- * Estratégia de upload:
- * - Arquivo < 14 MB → inlineData (base64 direto no request)
- * - Arquivo >= 14 MB → Files API (upload separado, referência por URI)
+ * Transcreve um arquivo de áudio usando a SDK Gemini com fallback de modelos
  */
 export async function transcribeAudio(filePath: string): Promise<{
   transcription: string;
@@ -83,19 +66,16 @@ export async function transcribeAudio(filePath: string): Promise<{
   let audioPart: { inlineData: { mimeType: string; data: string } } | { fileData: { fileUri: string; mimeType: string } };
 
   if (fileSize < INLINE_MAX_BYTES) {
-    // ─── Método 1: inlineData (rápido, < 14 MB) ───────────
     console.log('[Gemini] Usando inlineData');
     const base64Audio = fs.readFileSync(filePath).toString('base64');
     audioPart = { inlineData: { mimeType, data: base64Audio } };
   } else {
-    // ─── Método 2: Files API (robusto, até 2GB) ───────────
     console.log('[Gemini] Usando Files API');
     const uploadResult = await ai.files.upload({
       file: filePath,
       config: { mimeType },
     });
 
-    // Aguarda processamento
     let file = uploadResult;
     while (file.state === 'PROCESSING') {
       console.log('[Gemini] Aguardando processamento...');
@@ -104,46 +84,60 @@ export async function transcribeAudio(filePath: string): Promise<{
     }
 
     if (file.state === 'FAILED') {
-      throw new Error('Falha no processamento do arquivo pelo Gemini');
+      throw new Error('Falha no processamento do arquivo de áudio pelo Gemini');
     }
 
     audioPart = { fileData: { fileUri: file.uri!, mimeType } };
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-1.5-flash',
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          { text: TRANSCRIPTION_PROMPT },
-          audioPart,
+  // Modelos suportados pela Google GenAI SDK com fallback automático
+  const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+  let lastError: any = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`[Gemini] Tentando gerar conteúdo com modelo ${modelName}...`);
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: TRANSCRIPTION_PROMPT },
+              audioPart,
+            ],
+          },
         ],
-      },
-    ],
-    config: {
-      temperature: 0.2,
-    },
-  });
+        config: {
+          temperature: 0.2,
+        },
+      });
 
-  const text = response.text ?? '';
+      const text = response.text ?? '';
+      console.log(`[Gemini] Sucesso com o modelo ${modelName}!`);
 
-  // Tenta parsear como JSON
-  try {
-    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-    return {
-      transcription: parsed.transcription || text,
-      insights: JSON.stringify({
-        trades: parsed.trades_mentioned || [],
-        emotion: parsed.emotional_state || '',
-        observations: parsed.key_observations || [],
-      }),
-    };
-  } catch {
-    return {
-      transcription: text,
-      insights: '{}',
-    };
+      try {
+        const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        return {
+          transcription: parsed.transcription || text,
+          insights: JSON.stringify({
+            trades: parsed.trades_mentioned || [],
+            emotion: parsed.emotional_state || '',
+            observations: parsed.key_observations || [],
+          }),
+        };
+      } catch {
+        return {
+          transcription: text,
+          insights: '{}',
+        };
+      }
+    } catch (err: any) {
+      console.warn(`[Gemini] Falha no modelo ${modelName}:`, err.message || err);
+      lastError = err;
+    }
   }
+
+  throw lastError || new Error('Não foi possível transcrever com nenhum dos modelos Gemini.');
 }
