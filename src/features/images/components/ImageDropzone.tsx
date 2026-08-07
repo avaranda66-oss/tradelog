@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { uploadTradeImage, deleteTradeImage } from '@/features/images/actions';
+import { uploadTradeImage, deleteTradeImage, updateTradeImageCaption } from '@/features/images/actions';
 
 interface ImageItem {
   id: string;
@@ -22,18 +22,27 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
   const [uploading, setUploading] = useState(false);
   const [images, setImages] = useState<ImageItem[]>(initialImages);
   const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
+  const [editingCaption, setEditingCaption] = useState<string>('');
+  const [savingCaption, setSavingCaption] = useState(false);
+  const [savedCaptionSuccess, setSavedCaptionSuccess] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [pasteNotification, setPasteNotification] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isPastingRef = useRef(false);
 
-  // Sincroniza com props iniciais
   useEffect(() => {
     setImages(initialImages);
   }, [initialImages]);
 
-  // Upload com atualização otimista instantânea (0ms de atraso visual, sem necessidade de F5)
+  // Atualiza a legenda em edição quando um print é selecionado
+  useEffect(() => {
+    if (selectedImage) {
+      setEditingCaption(selectedImage.caption || '');
+      setSavedCaptionSuccess(false);
+    }
+  }, [selectedImage]);
+
   const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) return;
 
@@ -53,7 +62,6 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
           caption: newRecord.caption || 'Screenshot do trade',
           imageType: 'contexto',
         };
-        // Adiciona INSTANTANEAMENTE na tela
         setImages(prev => {
           if (prev.some(img => img.id === newImg.id)) return prev;
           return [...prev, newImg];
@@ -68,7 +76,6 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
     }
   }, [tradeId, date, onUploaded]);
 
-  // Handler para colar via Ctrl + V (com trava anti-duplicação)
   const processClipboardData = useCallback((clipboardData: DataTransfer | null) => {
     if (!clipboardData || isPastingRef.current) return;
     const items = clipboardData.items;
@@ -77,28 +84,22 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
       if (items[i].type.indexOf('image') !== -1) {
         const blob = items[i].getAsFile();
         if (blob) {
-          isPastingRef.current = true; // Trava de concorrência
-
+          isPastingRef.current = true;
           const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
           const file = new File([blob], `paste_trade_${Date.now()}.png`, { type: blob.type || 'image/png' });
 
-          setPasteNotification(`📋 Screenshot colado da área de transferência às ${timestamp}!`);
+          setPasteNotification(`📋 Screenshot colado às ${timestamp}!`);
 
           handleFile(file).finally(() => {
-            setTimeout(() => {
-              isPastingRef.current = false; // Destrava após upload
-            }, 600);
+            setTimeout(() => { isPastingRef.current = false; }, 600);
             setTimeout(() => setPasteNotification(null), 3500);
           });
-
-          // Interrompe o loop no primeiro item para NUNCA duplicar imagens
           break;
         }
       }
     }
   }, [handleFile]);
 
-  // Listener global de Ctrl + V no teclado
   useEffect(() => {
     function handleGlobalPaste(e: ClipboardEvent) {
       const activeTag = document.activeElement?.tagName.toLowerCase();
@@ -137,6 +138,28 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
     }
   }
 
+  async function handleSaveCaption() {
+    if (!selectedImage) return;
+    setSavingCaption(true);
+    setSavedCaptionSuccess(false);
+
+    try {
+      const res = await updateTradeImageCaption(selectedImage.id, editingCaption);
+      const updatedText = res.caption;
+
+      // Atualiza estado local
+      setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, caption: updatedText } : img));
+      setSelectedImage(prev => prev ? { ...prev, caption: updatedText } : null);
+
+      setSavedCaptionSuccess(true);
+      setTimeout(() => setSavedCaptionSuccess(false), 2500);
+    } catch (err) {
+      console.error('Erro ao salvar descrição da imagem:', err);
+    } finally {
+      setSavingCaption(false);
+    }
+  }
+
   return (
     <div className="space-y-3 font-mono">
       {/* Header com contador e atalho Ctrl+V */}
@@ -159,7 +182,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
         </div>
       )}
 
-      {/* Grid de Imagens (Atualização Otimista Instantânea) */}
+      {/* Grid de Imagens */}
       {images.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
           {images.map((img) => (
@@ -177,7 +200,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-teal-300 font-medium">
-                  🔍 Expandir
+                  🔍 Expandir / Editar
                 </div>
               </div>
 
@@ -201,7 +224,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                 ) : (
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-[10px] text-slate-400 truncate flex-1 font-mono" title={img.caption || ''}>
-                      {img.caption || 'Screenshot'}
+                      {img.caption || 'Sem descrição'}
                     </span>
                     <button
                       onClick={(e) => {
@@ -253,19 +276,21 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
         )}
       </div>
 
-      {/* Modal Expandido */}
+      {/* Modal Expandido com Edição de Legenda/Descrição Abaixo da Imagem */}
       {selectedImage && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4"
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="relative max-w-5xl max-h-[90vh] bg-[#0b1018] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col font-mono"
+            className="relative max-w-5xl w-full max-h-[92vh] bg-[#0b1018] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col font-mono"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Modal Header Limpo */}
             <div className="p-3 bg-[#070a10] border-b border-slate-800 flex items-center justify-between gap-3">
-              <span className="text-xs text-slate-300 font-bold truncate">
-                {selectedImage.caption || 'Visualização do Screenshot'}
+              <span className="text-xs text-slate-300 font-bold tracking-wider uppercase flex items-center gap-2">
+                <span>📸</span>
+                <span>Visualização do Screenshot</span>
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <button
@@ -284,12 +309,54 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
               </div>
             </div>
 
-            <div className="overflow-auto max-h-[80vh] p-2 flex items-center justify-center bg-black/60">
+            {/* Imagem em Destaque */}
+            <div className="overflow-auto max-h-[55vh] p-3 flex items-center justify-center bg-black/70 border-b border-slate-800/80">
               <img
                 src={`/api/files/${selectedImage.filePath}`}
-                alt={selectedImage.caption || 'Screenshot expandido'}
-                className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-xl"
+                alt="Screenshot do trade"
+                className="max-w-full max-h-[50vh] object-contain rounded-lg shadow-2xl"
               />
+            </div>
+
+            {/* Seção de Anotação/Descrição Editável ABAIXO DA IMAGEM */}
+            <div className="p-4 bg-[#070a10] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] text-teal-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                  <span>📝</span>
+                  <span>DESCRIÇÃO & EXPLICAÇÃO TÉCNICA DESTE PRINT</span>
+                </label>
+                <span className="text-[10px] text-slate-500 font-sans">
+                  Escreva e edite livremente sua observação sobre esta imagem
+                </span>
+              </div>
+
+              <textarea
+                value={editingCaption}
+                onChange={(e) => setEditingCaption(e.target.value)}
+                placeholder="Escreva sua explicação sobre esta imagem (ex: Entrou rompendo VWAP, stop técnico na máxima do candle 12, confluência com Fibo 76,4%)..."
+                className="w-full h-24 bg-[#0b1018] border border-slate-700/80 rounded-lg p-3 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-teal-500/60 font-mono leading-relaxed"
+              />
+
+              <div className="flex items-center justify-between pt-1">
+                {savedCaptionSuccess ? (
+                  <span className="text-xs text-teal-400 font-bold flex items-center gap-1">
+                    ✓ Descrição salva com sucesso no banco SQLite!
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-sans">
+                    Salva permanentemente no banco SQLite do diário
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSaveCaption}
+                  disabled={savingCaption}
+                  className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                >
+                  {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

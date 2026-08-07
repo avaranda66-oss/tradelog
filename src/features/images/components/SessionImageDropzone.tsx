@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { uploadSessionImage, deleteTradeImage, getSessionImages } from '@/features/images/actions';
+import { uploadSessionImage, deleteTradeImage, getSessionImages, updateTradeImageCaption } from '@/features/images/actions';
 
 interface ImageItem {
   id: string;
@@ -19,13 +19,15 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
   const [uploading, setUploading] = useState(false);
   const [images, setImages] = useState<ImageItem[]>([]);
   const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
+  const [editingCaption, setEditingCaption] = useState<string>('');
+  const [savingCaption, setSavingCaption] = useState(false);
+  const [savedCaptionSuccess, setSavedCaptionSuccess] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [pasteNotification, setPasteNotification] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isPastingRef = useRef(false);
 
-  // Carrega as imagens da sessão
   const loadImages = useCallback(async () => {
     try {
       const data = await getSessionImages(tradingDayId);
@@ -38,6 +40,13 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
   useEffect(() => {
     loadImages();
   }, [loadImages]);
+
+  useEffect(() => {
+    if (selectedImage) {
+      setEditingCaption(selectedImage.caption || '');
+      setSavedCaptionSuccess(false);
+    }
+  }, [selectedImage]);
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -130,6 +139,27 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
     }
   }
 
+  async function handleSaveCaption() {
+    if (!selectedImage) return;
+    setSavingCaption(true);
+    setSavedCaptionSuccess(false);
+
+    try {
+      const res = await updateTradeImageCaption(selectedImage.id, editingCaption);
+      const updatedText = res.caption;
+
+      setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, caption: updatedText } : img));
+      setSelectedImage(prev => prev ? { ...prev, caption: updatedText } : null);
+
+      setSavedCaptionSuccess(true);
+      setTimeout(() => setSavedCaptionSuccess(false), 2500);
+    } catch (err) {
+      console.error('Erro ao salvar descrição do gráfico da sessão:', err);
+    } finally {
+      setSavingCaption(false);
+    }
+  }
+
   return (
     <div className="space-y-3 font-mono">
       <div className="flex items-center justify-between">
@@ -167,7 +197,7 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs text-teal-300 font-medium">
-                  🔍 Expandir Gráfico
+                  🔍 Expandir / Editar
                 </div>
               </div>
 
@@ -191,7 +221,7 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
                 ) : (
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-[10px] text-slate-400 truncate flex-1 font-mono" title={img.caption || ''}>
-                      {img.caption || 'Gráfico'}
+                      {img.caption || 'Sem descrição'}
                     </span>
                     <button
                       onClick={(e) => {
@@ -243,19 +273,20 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
         )}
       </div>
 
-      {/* Modal Expandido */}
+      {/* Modal Expandido com Edição de Legenda/Descrição Abaixo da Imagem */}
       {selectedImage && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4"
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="relative max-w-5xl max-h-[90vh] bg-[#0b1018] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col font-mono"
+            className="relative max-w-5xl w-full max-h-[92vh] bg-[#0b1018] border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col font-mono"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-3 bg-[#070a10] border-b border-slate-800 flex items-center justify-between gap-3">
-              <span className="text-xs text-slate-300 font-bold truncate">
-                {selectedImage.caption || 'Gráfico da Sessão'}
+              <span className="text-xs text-slate-300 font-bold tracking-wider uppercase flex items-center gap-2">
+                <span>📸</span>
+                <span>Gráfico da Sessão</span>
               </span>
               <div className="flex items-center gap-2 shrink-0">
                 <button
@@ -274,12 +305,53 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
               </div>
             </div>
 
-            <div className="overflow-auto max-h-[80vh] p-2 flex items-center justify-center bg-black/60">
+            <div className="overflow-auto max-h-[55vh] p-3 flex items-center justify-center bg-black/70 border-b border-slate-800/80">
               <img
                 src={`/api/files/${selectedImage.filePath}`}
-                alt={selectedImage.caption || 'Gráfico da sessão expandido'}
-                className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-xl"
+                alt="Gráfico da sessão"
+                className="max-w-full max-h-[50vh] object-contain rounded-lg shadow-2xl"
               />
+            </div>
+
+            {/* Seção de Anotação/Descrição Editável ABAIXO DA IMAGEM */}
+            <div className="p-4 bg-[#070a10] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] text-teal-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                  <span>📝</span>
+                  <span>DESCRIÇÃO & EXPLICAÇÃO TÉCNICA DESTE GRÁFICO</span>
+                </label>
+                <span className="text-[10px] text-slate-500 font-sans">
+                  Escreva e edite livremente sua observação sobre esta imagem
+                </span>
+              </div>
+
+              <textarea
+                value={editingCaption}
+                onChange={(e) => setEditingCaption(e.target.value)}
+                placeholder="Escreva sua observação técnica sobre este gráfico do pregão..."
+                className="w-full h-24 bg-[#0b1018] border border-slate-700/80 rounded-lg p-3 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-teal-500/60 font-mono leading-relaxed"
+              />
+
+              <div className="flex items-center justify-between pt-1">
+                {savedCaptionSuccess ? (
+                  <span className="text-xs text-teal-400 font-bold flex items-center gap-1">
+                    ✓ Descrição salva com sucesso no banco SQLite!
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-sans">
+                    Salva permanentemente no banco SQLite do diário
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSaveCaption}
+                  disabled={savingCaption}
+                  className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                >
+                  {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
