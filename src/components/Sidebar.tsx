@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ReactNode } from "react";
 import {
   IconChart, IconJournal, IconUpload, IconTarget, IconScale, IconTerminal,
@@ -31,10 +32,12 @@ const DEFAULT_ITEMS: NavItem[] = [
 
 export function Sidebar({
   items = DEFAULT_ITEMS,
-  activePath = "/",
+  activePath: activePathProp,
   collapsed = false,
   sessionLabel = "PRE-MARKET",
 }: SidebarProps) {
+  const pathname = usePathname();
+  const currentPath = activePathProp ?? pathname ?? "/";
   return (
     <aside
       className={`flex h-full flex-col border-r border-slate-800/80 bg-[#0b1018] transition-[width] duration-150 ${
@@ -51,8 +54,8 @@ export function Sidebar({
           {items.map((item) => {
             const active =
               item.href === "/"
-                ? activePath === "/"
-                : activePath.startsWith(item.href);
+                ? currentPath === "/"
+                : currentPath.startsWith(item.href);
             return (
               <li key={item.href}>
                 <Link
