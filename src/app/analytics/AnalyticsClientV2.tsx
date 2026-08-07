@@ -6,14 +6,13 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
 } from 'recharts';
 
 import { AiCoachReport } from '@/features/dashboard/components/AiCoachReport';
+import { IconChart, IconTarget } from '@/components/ui/icons';
 
 export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: TradingDay[] }) {
   const [activeTab, setActiveTab] = useState<'geral' | 'horarios' | 'lados' | 'emocional'>('geral');
@@ -63,24 +62,26 @@ export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: Tra
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 font-mono">
       {/* Diagnóstico AI Coach Claude Cookbooks */}
       <AiCoachReport report={sampleCoachReport} />
+
       {/* Abas Superiores */}
-      <div className="flex border-b border-slate-800 bg-[#0d131f] rounded-xl p-1 gap-1 max-w-xl">
+      <div className="flex border-b border-slate-800/80 bg-[#070a10] rounded-md p-1 gap-1 max-w-xl text-xs">
         {[
-          { id: 'geral', label: 'Visão Geral' },
-          { id: 'horarios', label: 'PnL por Horário' },
-          { id: 'lados', label: 'Compra vs Venda' },
-          { id: 'emocional', label: 'Emocional & Execução' },
+          { id: 'geral', label: 'VISÃO GERAL' },
+          { id: 'horarios', label: 'PNL POR HORÁRIO' },
+          { id: 'lados', label: 'COMPRA VS VENDA' },
+          { id: 'emocional', label: 'EMOCIONAL & EXECUÇÃO' },
         ].map((t) => (
           <button
             key={t.id}
             onClick={() => setActiveTab(t.id as any)}
-            className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+            type="button"
+            className={`flex-1 py-1.5 rounded font-bold transition-all ${
               activeTab === t.id
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20'
+                : 'text-slate-500 hover:text-slate-300'
             }`}
           >
             {t.label}
@@ -89,33 +90,33 @@ export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: Tra
       </div>
 
       {/* KPI Cards Globais */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-4">
-          <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Resultado Acumulado</span>
-          <span className={`text-lg font-bold font-mono ${totalReais >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 tabular-nums">
+        <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-1">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider block font-bold">RESULTADO ACUMULADO</span>
+          <span className={`text-base font-bold font-mono ${totalReais >= 0 ? 'text-teal-400' : 'text-rose-400'}`}>
             R$ {totalReais > 0 ? '+' : ''}{totalReais.toFixed(2)}
           </span>
         </div>
 
-        <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-4">
-          <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Total de Trades</span>
-          <span className="text-lg font-bold font-mono text-slate-200">{totalTrades}</span>
+        <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-1">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider block font-bold">TOTAL DE TRADES</span>
+          <span className="text-base font-bold font-mono text-slate-200">{totalTrades}</span>
         </div>
 
-        <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-4">
-          <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Taxa de Acerto</span>
-          <span className="text-lg font-bold font-mono text-cyan-400">{winRate.toFixed(1)}%</span>
+        <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-1">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider block font-bold">TAXA DE ACERTO</span>
+          <span className="text-base font-bold font-mono text-teal-400">{winRate.toFixed(1)}%</span>
         </div>
 
-        <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-4">
-          <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Fator de Lucro (Payoff)</span>
-          <span className="text-lg font-bold font-mono text-amber-400">{profitFactor}</span>
+        <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-1">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider block font-bold">PAYOFF</span>
+          <span className="text-base font-bold font-mono text-slate-200">{profitFactor}</span>
         </div>
 
-        <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-4">
-          <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Maior Ganho / Perda</span>
-          <div className="flex gap-2 text-xs font-mono font-bold mt-1">
-            <span className="text-emerald-400">+{maxWin.toFixed(0)}</span>
+        <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-1">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider block font-bold">MAIOR GANHO / PERDA</span>
+          <div className="flex gap-2 text-xs font-mono font-bold">
+            <span className="text-teal-400">+{maxWin.toFixed(0)}</span>
             <span className="text-slate-600">/</span>
             <span className="text-rose-400">{maxLoss.toFixed(0)}</span>
           </div>
@@ -123,45 +124,55 @@ export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: Tra
       </div>
 
       {activeTab === 'geral' && (
-        <div className="space-y-6">
+        <div className="space-y-5">
           {/* Gráfico da Curva de Equity Histórica */}
-          <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-300">📈 Evolução da Curva de Patrimônio</h3>
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3 shadow-xl">
+            <div className="flex items-center gap-2 border-b border-slate-800/80 pb-2.5">
+              <IconChart className="text-teal-400" />
+              <h3 className="text-[10px] font-bold tracking-[0.25em] text-slate-300 uppercase">
+                EQUITY CURVE · EVOLUÇÃO PATRIMONIAL ACUMULADA
+              </h3>
+            </div>
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={equityData}>
                   <defs>
                     <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                      <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
                   <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} width={60} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#090d16', borderColor: '#1e293b', borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ backgroundColor: '#070a10', borderColor: '#1e293b', borderRadius: 6, fontSize: 12 }}
                     formatter={(v: any) => [`R$ ${Number(v).toFixed(2)}`, 'Acumulado']}
                   />
-                  <Area type="monotone" dataKey="valor" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#equityGradient)" />
+                  <Area type="monotone" dataKey="valor" stroke="#2dd4bf" strokeWidth={2} fillOpacity={1} fill="url(#equityGradient)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Círculos de Sequência de Resultados (Win/Loss Streaks) */}
-          <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-300">🔴🟢 Sequência de Resultados Recentes</h3>
-            <div className="flex gap-2 flex-wrap">
+          {/* Sequência de Resultados (Win/Loss Streaks) */}
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3 shadow-xl">
+            <div className="flex items-center gap-2 border-b border-slate-800/80 pb-2.5">
+              <IconTarget className="text-teal-400" />
+              <h3 className="text-[10px] font-bold tracking-[0.25em] text-slate-300 uppercase">
+                WIN / LOSS STREAK · SEQUÊNCIA DE EXECUÇÃO
+              </h3>
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
               {trades.slice(0, 30).map((t) => (
                 <div
                   key={t.id}
                   title={`Trade #${t.tradeNumber}: R$ ${t.reais?.toFixed(2)}`}
-                  className={`w-6 h-6 rounded-full border flex items-center justify-center text-[10px] font-bold ${
+                  className={`w-6 h-6 rounded border flex items-center justify-center text-[10px] font-mono font-bold ${
                     (t.reais || 0) > 0
-                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                      ? 'bg-teal-500/10 border-teal-500/30 text-teal-400'
                       : (t.reais || 0) < 0
-                      ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
-                      : 'bg-slate-700 border-slate-600 text-slate-400'
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      : 'bg-slate-900 border-slate-800 text-slate-500'
                   }`}
                 >
                   {(t.reais || 0) > 0 ? 'W' : (t.reais || 0) < 0 ? 'L' : '-'}
@@ -174,32 +185,32 @@ export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: Tra
 
       {activeTab === 'lados' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-emerald-400">🟢 Operações de Compra</h3>
-            <div className="space-y-2 text-xs">
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3">
+            <h3 className="text-xs font-bold text-teal-400 uppercase tracking-wider">LONG // OPERAÇÕES DE COMPRA</h3>
+            <div className="space-y-2 text-xs font-mono tabular-nums">
               <div className="flex justify-between">
-                <span className="text-slate-400">Total de Compras:</span>
-                <span className="font-mono text-slate-200 font-bold">{trades.filter(t => t.side === 'C').length}</span>
+                <span className="text-slate-500">TOTAL DE COMPRAS:</span>
+                <span className="text-slate-200 font-bold">{trades.filter(t => t.side === 'C').length}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Resultado Compras:</span>
-                <span className="font-mono text-emerald-400 font-bold">
+                <span className="text-slate-500">RESULTADO COMPRAS:</span>
+                <span className="text-teal-400 font-bold">
                   R$ {trades.filter(t => t.side === 'C').reduce((acc, t) => acc + (t.reais || 0), 0).toFixed(2)}
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="bg-[#0d131f] border border-slate-800/80 rounded-xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-rose-400">🔴 Operações de Venda</h3>
-            <div className="space-y-2 text-xs">
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3">
+            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-wider">SHORT // OPERAÇÕES DE VENDA</h3>
+            <div className="space-y-2 text-xs font-mono tabular-nums">
               <div className="flex justify-between">
-                <span className="text-slate-400">Total de Vendas:</span>
-                <span className="font-mono text-slate-200 font-bold">{trades.filter(t => t.side === 'V').length}</span>
+                <span className="text-slate-500">TOTAL DE VENDAS:</span>
+                <span className="text-slate-200 font-bold">{trades.filter(t => t.side === 'V').length}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Resultado Vendas:</span>
-                <span className="font-mono text-rose-400 font-bold">
+                <span className="text-slate-500">RESULTADO VENDAS:</span>
+                <span className="text-rose-400 font-bold">
                   R$ {trades.filter(t => t.side === 'V').reduce((acc, t) => acc + (t.reais || 0), 0).toFixed(2)}
                 </span>
               </div>
@@ -210,3 +221,5 @@ export function AnalyticsClientV2({ trades, days }: { trades: Trade[]; days: Tra
     </div>
   );
 }
+
+export default AnalyticsClientV2;

@@ -7,6 +7,7 @@ import { deleteAudioRecord } from '@/features/audio/actions';
 import { deleteTradeImage } from '@/features/images/actions';
 import { deleteTrade, deleteTradingDayAction } from '@/features/trades/actions';
 import { useRouter } from 'next/navigation';
+import { IconScale, IconVideo, IconChart, IconMic, IconCamera, IconAlert, IconCheck } from '@/components/ui/icons';
 
 interface DatabaseClientViewProps {
   days: TradingDay[];
@@ -79,94 +80,115 @@ export function DatabaseClientView({
   }
 
   return (
-    <div className="max-w-[1440px] mx-auto space-y-6 pb-16 animate-in fade-in">
-      {/* Header Datalog */}
-      <div className="border-b border-slate-800/80 pb-4">
-        <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-          💾 Frontend do Banco de Dados & Datalog
-        </h1>
-        <p className="text-xs text-slate-500 mt-0.5 font-mono">
-          Gerenciador completo dos arquivos locais (`data/`) e registros SQLite
-        </p>
+    <div className="max-w-[1440px] mx-auto space-y-5 pb-16 animate-in fade-in font-mono">
+      {/* Header Datalog Command */}
+      <div className="border-b border-slate-800/80 pb-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <IconScale className="text-teal-400" />
+          <div>
+            <h1 className="text-sm font-mono font-bold text-slate-100 uppercase tracking-[0.2em]">
+              SQLITE LOCAL DATABASE INTAKE // DATALOG ENGINE
+            </h1>
+            <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+              Gerenciamento estrito de tabelas SQLite e diretórios locais (data/)
+            </p>
+          </div>
+        </div>
+
+        <span className="text-[10px] bg-[#070a10] border border-slate-800/80 px-2.5 py-1 rounded text-slate-400 font-bold tabular-nums">
+          SYSTEM ACTIVE
+        </span>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-800 bg-[#0d131f] rounded-2xl p-1 gap-1 max-w-3xl font-mono text-xs">
+      <div className="flex border-b border-slate-800/80 bg-[#070a10] rounded-md p-1 gap-1 max-w-3xl text-xs font-mono">
         <button
           onClick={() => setActiveTab('videos')}
-          className={`flex-1 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'videos' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-400 hover:text-slate-200'
+          type="button"
+          className={`flex-1 py-2 rounded font-bold transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'videos' ? 'bg-[#0b1018] text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <span>🎬</span> Vídeos OBS ({videos.length})
+          <IconVideo width={14} height={14} className="text-cyan-400" />
+          <span>VÍDEOS OBS ({videos.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('trades')}
-          className={`flex-1 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'trades' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-400 hover:text-slate-200'
+          type="button"
+          className={`flex-1 py-2 rounded font-bold transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'trades' ? 'bg-[#0b1018] text-teal-400 border border-teal-500/30' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <span>📊</span> Trades ({trades.length})
+          <IconChart width={14} height={14} className="text-teal-400" />
+          <span>TRADES ({trades.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('audios')}
-          className={`flex-1 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'audios' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'text-slate-400 hover:text-slate-200'
+          type="button"
+          className={`flex-1 py-2 rounded font-bold transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'audios' ? 'bg-[#0b1018] text-purple-400 border border-purple-500/30' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <span>🎙️</span> Áudios ({audios.length})
+          <IconMic width={14} height={14} className="text-purple-400" />
+          <span>ÁUDIOS ({audios.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('images')}
-          className={`flex-1 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'images' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'text-slate-400 hover:text-slate-200'
+          type="button"
+          className={`flex-1 py-2 rounded font-bold transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'images' ? 'bg-[#0b1018] text-amber-400 border border-amber-500/30' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <span>🖼️</span> Screenshots ({images.length})
+          <IconCamera width={14} height={14} className="text-amber-400" />
+          <span>PRINTS ({images.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('days')}
-          className={`flex-1 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'days' ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200'
+          type="button"
+          className={`flex-1 py-2 rounded font-bold transition-all flex items-center justify-center gap-2 ${
+            activeTab === 'days' ? 'bg-[#0b1018] text-slate-200 border border-slate-700' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <span>📅</span> Dias ({days.length})
+          <IconScale width={14} height={14} className="text-slate-300" />
+          <span>DIAS ({days.length})</span>
         </button>
       </div>
 
       {/* ABA 1: VÍDEOS OBS */}
       {activeTab === 'videos' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-200">
-              Vídeos do OBS Processados
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+            <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+              REGISTROS DE VÍDEO DO OBS REPLAY
             </h2>
-            <span className="text-xs text-slate-500 font-mono">Diretório: data/videos/</span>
+            <span className="text-[10px] text-slate-500 font-mono">LOCATION: data/videos/</span>
           </div>
 
           {videos.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {videos.map((vid) => (
-                <div key={vid.id} className="bg-[#0d131f] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-xl">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-200 truncate max-w-[240px]">
-                      📹 {vid.filename}
+                <div key={vid.id} className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-3 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                    <span className="text-xs font-bold text-slate-200 truncate max-w-[240px] flex items-center gap-2">
+                      <IconVideo className="text-cyan-400" />
+                      {vid.filename}
                     </span>
                     <button
                       onClick={() => handleDeleteVideo(vid.id)}
                       disabled={deletingId === vid.id}
-                      className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-bold transition-all"
+                      type="button"
+                      className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded font-mono text-[10px] font-bold transition-all"
                     >
-                      {deletingId === vid.id ? 'Excluindo...' : '🗑️ Deletar'}
+                      {deletingId === vid.id ? 'EXCLUINDO…' : 'DELETAR'}
                     </button>
                   </div>
 
                   {/* Player HTML5 */}
-                  <div className="aspect-video bg-slate-950 rounded-xl overflow-hidden border border-slate-800">
+                  <div className="aspect-video bg-[#070a10] rounded-md overflow-hidden border border-slate-800/80">
                     <video
                       src={`/api/files/${vid.filePath}`}
                       controls
@@ -174,65 +196,66 @@ export function DatabaseClientView({
                     />
                   </div>
 
-                  <div className="text-[11px] font-mono text-slate-400 space-y-1">
-                    <p>Caminho: <span className="text-slate-200">{vid.filePath}</span></p>
-                    <p>Duração: <span className="text-cyan-400">{vid.durationSecs || 0}s</span> | Resolução: <span className="text-cyan-400">{vid.resolution || '1920x1080'}</span></p>
+                  <div className="text-[10px] font-mono text-slate-400 space-y-0.5 tabular-nums">
+                    <p>CAMINHO: <span className="text-slate-300">{vid.filePath}</span></p>
+                    <p>DURAÇÃO: <span className="text-teal-400">{vid.durationSecs || 0}s</span> | RES: <span className="text-teal-400">{vid.resolution || '1920x1080'}</span></p>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-slate-500 italic p-6 text-center bg-[#0d131f] border border-slate-800 rounded-2xl">
-              Nenhum vídeo do OBS cadastrado no banco.
-            </p>
+            <div className="p-8 text-center bg-[#0b1018] border border-slate-800/80 rounded-xl">
+              <p className="text-xs text-slate-500 font-mono uppercase">NENHUM VÍDEO DO OBS CADASTRADO NO BANCO DE DADOS.</p>
+            </div>
           )}
         </div>
       )}
 
       {/* ABA 2: TRADES */}
       {activeTab === 'trades' && (
-        <div className="space-y-4">
-          <h2 className="text-sm font-bold text-slate-200">Trades no Banco SQLite</h2>
+        <div className="space-y-3">
+          <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">TABELA DE TRADES (SQLITE TRADES TABLE)</h2>
 
-          <div className="bg-[#0d131f] border border-slate-800 rounded-2xl overflow-x-auto shadow-xl">
-            <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-slate-950 text-slate-400 uppercase border-b border-slate-800">
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl overflow-x-auto shadow-xl">
+            <table className="w-full text-left text-xs font-mono tabular-nums">
+              <thead className="bg-[#070a10] text-slate-500 uppercase border-b border-slate-800/80 text-[10px] tracking-widest">
                 <tr>
                   <th className="p-3">#</th>
-                  <th className="p-3">Ativo</th>
-                  <th className="p-3">Abertura</th>
-                  <th className="p-3">Lado</th>
-                  <th className="p-3">Contratos</th>
-                  <th className="p-3">Pontos</th>
-                  <th className="p-3">Resultado R$</th>
-                  <th className="p-3">Ações</th>
+                  <th className="p-3">ATIVO</th>
+                  <th className="p-3">HORÁRIO</th>
+                  <th className="p-3">LADO</th>
+                  <th className="p-3">QTD</th>
+                  <th className="p-3">PONTOS</th>
+                  <th className="p-3">REAIS (R$)</th>
+                  <th className="p-3">AÇÃO</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-200">
                 {trades.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-900/40">
-                    <td className="p-3 font-bold">{t.tradeNumber}</td>
-                    <td className="p-3 font-bold text-emerald-400">{t.instrument}</td>
-                    <td className="p-3 text-slate-400">{t.openTime}</td>
+                  <tr key={t.id} className="hover:bg-white/[0.02]">
+                    <td className="p-3 font-bold text-slate-400">#{t.tradeNumber}</td>
+                    <td className="p-3 font-bold text-slate-200">{t.instrument}</td>
+                    <td className="p-3 text-slate-500">{t.openTime}</td>
                     <td className="p-3 font-bold">
-                      <span className={`px-2 py-0.5 rounded text-[10px] ${t.side === 'C' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                        {t.side === 'C' ? 'COMPRA' : 'VENDA'}
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] border ${t.side === 'C' ? 'bg-teal-500/10 text-teal-400 border-teal-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30'}`}>
+                        {t.side === 'C' ? 'BUY' : 'SELL'}
                       </span>
                     </td>
                     <td className="p-3">{t.contracts}</td>
-                    <td className={`p-3 font-bold ${(t.points || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <td className={`p-3 font-bold ${(t.points || 0) >= 0 ? 'text-teal-400' : 'text-rose-400'}`}>
                       {t.points} pts
                     </td>
-                    <td className={`p-3 font-bold ${(t.reais || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <td className={`p-3 font-bold ${(t.reais || 0) >= 0 ? 'text-teal-400' : 'text-rose-400'}`}>
                       R$ {t.reais?.toFixed(2)}
                     </td>
                     <td className="p-3">
                       <button
                         onClick={() => handleDeleteTrade(t.id)}
                         disabled={deletingId === t.id}
-                        className="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[10px] font-bold"
+                        type="button"
+                        className="px-2 py-0.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[9px] font-bold"
                       >
-                        🗑️
+                        DEL
                       </button>
                     </td>
                   </tr>
@@ -245,27 +268,29 @@ export function DatabaseClientView({
 
       {/* ABA 3: ÁUDIOS */}
       {activeTab === 'audios' && (
-        <div className="space-y-4">
-          <h2 className="text-sm font-bold text-slate-200">Áudios & Transcrições</h2>
+        <div className="space-y-3">
+          <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">REGISTROS DE ÁUDIO & TRANSCRIÇÕES</h2>
 
           <div className="space-y-3">
             {audios.map((a) => (
-              <div key={a.id} className="bg-[#0d131f] border border-slate-800 rounded-2xl p-4 space-y-2 shadow-xl">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-200">
-                    🎙️ {a.filePath}
+              <div key={a.id} className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-2 shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                    <IconMic className="text-purple-400" />
+                    {a.filePath}
                   </span>
                   <button
                     onClick={() => handleDeleteAudio(a.id)}
                     disabled={deletingId === a.id}
-                    className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-bold"
+                    type="button"
+                    className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[10px] font-bold"
                   >
-                    🗑️ Deletar
+                    DELETAR
                   </button>
                 </div>
 
                 <audio src={`/api/files/${a.filePath}`} controls className="w-full h-8" />
-                <p className="text-xs text-slate-300 italic bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                <p className="text-xs text-slate-300 font-sans italic bg-[#070a10] p-2.5 rounded-md border border-slate-800/80">
                   "{a.transcription || 'Sem transcrição'}"
                 </p>
               </div>
@@ -276,20 +301,21 @@ export function DatabaseClientView({
 
       {/* ABA 4: IMAGENS */}
       {activeTab === 'images' && (
-        <div className="space-y-4">
-          <h2 className="text-sm font-bold text-slate-200">Screenshots dos Trades</h2>
+        <div className="space-y-3">
+          <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">SCREENSHOTS DE TRADES</h2>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {images.map((img) => (
-              <div key={img.id} className="bg-[#0d131f] border border-slate-800 rounded-xl p-2 space-y-2 relative group">
-                <img src={`/api/files/${img.filePath}`} alt="Screenshot" className="w-full h-32 object-cover rounded-lg" />
+              <div key={img.id} className="bg-[#0b1018] border border-slate-800/80 rounded-lg p-2 space-y-2 relative group">
+                <img src={`/api/files/${img.filePath}`} alt="Screenshot" className="w-full h-32 object-cover rounded-md border border-slate-800/80" />
                 <button
                   onClick={() => handleDeleteImage(img.id)}
-                  className="absolute top-3 right-3 bg-rose-500 text-white p-1 rounded-lg text-xs font-bold opacity-80 hover:opacity-100"
+                  type="button"
+                  className="absolute top-3 right-3 bg-rose-600 hover:bg-rose-500 text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-md"
                 >
-                  🗑️
+                  DEL
                 </button>
-                <p className="text-[10px] text-slate-400 truncate">{img.caption || img.filePath}</p>
+                <p className="text-[9px] font-mono text-slate-400 truncate">{img.caption || img.filePath}</p>
               </div>
             ))}
           </div>
@@ -298,23 +324,22 @@ export function DatabaseClientView({
 
       {/* ABA 5: DIAS */}
       {activeTab === 'days' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-200">Dias de Operação Cadastrados</h2>
-            <span className="text-xs text-slate-500 font-mono">
-              ⚠️ Deletar um dia remove TODOS os trades, áudios, vídeos e screenshots daquele dia
+        <div className="space-y-3 font-mono">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+            <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">DIAS DE PREGÃO CADASTRADOS NO BANCO</h2>
+            <span className="text-[10px] text-slate-500 font-mono">
+              AVISO: Deletar um dia remove todos os seus dados associados.
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {days.map((d) => (
-              <div key={d.id} className="bg-[#0d131f] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-xl">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-emerald-400 font-mono">📅 {d.date}</span>
+              <div key={d.id} className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-3 shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <span className="text-xs font-bold text-teal-400 font-mono tabular-nums">{d.date}</span>
 
                   {confirmDayId === d.id ? (
-                    <div className="flex items-center gap-2 animate-in fade-in">
-                      <span className="text-[10px] text-rose-400 font-bold">TEM CERTEZA?</span>
+                    <div className="flex items-center gap-1.5 font-mono text-[10px]">
                       <button
                         onClick={async () => {
                           setDeletingId(d.id);
@@ -328,56 +353,49 @@ export function DatabaseClientView({
                           }
                         }}
                         disabled={deletingId === d.id}
-                        className="px-2.5 py-1 bg-rose-500 hover:bg-rose-400 text-white rounded-lg text-[10px] font-bold transition-all"
+                        type="button"
+                        className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-bold transition-all"
                       >
-                        {deletingId === d.id ? '⏳ Excluindo...' : '✅ SIM, DELETAR TUDO'}
+                        {deletingId === d.id ? '…' : 'CONFIRMAR'}
                       </button>
                       <button
                         onClick={() => setConfirmDayId(null)}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-bold transition-all"
+                        type="button"
+                        className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded font-bold transition-all"
                       >
-                        Cancelar
+                        CANCELAR
                       </button>
                     </div>
                   ) : (
                     <button
                       onClick={() => setConfirmDayId(d.id)}
-                      className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                      type="button"
+                      className="px-2 py-0.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[10px] font-bold transition-all"
                     >
-                      🗑️ Deletar Dia
+                      DELETAR DIA
                     </button>
                   )}
                 </div>
 
-                <div className="text-xs text-slate-300 font-mono space-y-1 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60">
+                <div className="text-[10px] text-slate-300 font-mono space-y-1 bg-[#070a10] p-2 rounded-md border border-slate-800/80 tabular-nums">
                   <p>
-                    Resultado: <span className={`font-bold ${(d.totalReais || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    RESULTADO: <span className={`font-bold ${(d.totalReais || 0) >= 0 ? 'text-teal-400' : 'text-rose-400'}`}>
                       R$ {d.totalReais?.toFixed(2) || '0.00'}
-                    </span> | Pontos: <span className={`font-bold ${(d.totalPoints || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    </span> | PTS: <span className={`font-bold ${(d.totalPoints || 0) >= 0 ? 'text-teal-400' : 'text-rose-400'}`}>
                       {d.totalPoints || 0}
                     </span>
                   </p>
                   <p className="text-slate-500">
-                    Viés: {d.generalBias || 'N/A'} | Pré-Market: {d.preMarketDone ? '✅' : '❌'}
+                    VIÉS: {d.generalBias || 'N/A'} | PRE-MARKET: {d.preMarketDone ? 'DONE' : 'PENDING'}
                   </p>
                 </div>
-
-                {confirmDayId === d.id && (
-                  <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-2.5 text-[11px] text-rose-300 animate-in fade-in">
-                    ⚠️ <strong>Esta ação é irreversível.</strong> Serão removidos permanentemente: todos os trades, screenshots de trades, áudios/transcrições, vídeos do OBS e níveis-chave do dia <strong>{d.date}</strong>.
-                  </div>
-                )}
               </div>
             ))}
           </div>
-
-          {days.length === 0 && (
-            <p className="text-xs text-slate-500 italic p-6 text-center bg-[#0d131f] border border-slate-800 rounded-2xl">
-              Nenhum dia de operação cadastrado no banco.
-            </p>
-          )}
         </div>
       )}
     </div>
   );
 }
+
+export default DatabaseClientView;
