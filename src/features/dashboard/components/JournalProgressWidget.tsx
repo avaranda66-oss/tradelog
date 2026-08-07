@@ -46,7 +46,7 @@ export function JournalProgressWidget({
           <div className="flex items-center gap-3">
             <DisciplineFlameIcon
               level={result.flameLevel}
-              size={38}
+              size={48}
               complete={result.score === 100}
             />
 

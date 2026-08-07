@@ -152,8 +152,8 @@ export function DisciplineFlameIcon({
 
       {/* Chama Vetorial com Gradiente Tático */}
       <motion.svg
-        width={size * 0.65}
-        height={size * 0.65}
+        width={size * 0.78}
+        height={size * 0.78}
         viewBox="0 0 24 24"
         fill="none"
         animate={flameAnimate}
