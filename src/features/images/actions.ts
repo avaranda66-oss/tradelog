@@ -20,20 +20,17 @@ export async function uploadTradeImage(formData: FormData) {
 
   if (!file || !tradeId) throw new Error('Arquivo e tradeId são obrigatórios');
 
-  // Cria pasta de imagens do dia
   const imgDir = path.join(process.cwd(), 'data', 'images', date);
   if (!fs.existsSync(imgDir)) {
     fs.mkdirSync(imgDir, { recursive: true });
   }
 
-  // Salva o arquivo
   const ext = path.extname(file.name) || '.png';
   const fileName = `trade_${tradeId.slice(-6)}_${Date.now()}${ext}`;
   const filePath = path.join(imgDir, fileName);
   const buffer = Buffer.from(await file.arrayBuffer());
   fs.writeFileSync(filePath, buffer);
 
-  // Executa Análise Multimodal de Visão Computacional (Claude/Gemini Vision Cookbook)
   let visionCaption = '';
   try {
     visionCaption = await analyzeTradeScreenshotVision(filePath);
@@ -41,7 +38,6 @@ export async function uploadTradeImage(formData: FormData) {
     console.error('Falha ao analisar imagem via Vision AI:', err);
   }
 
-  // Registra no banco
   const imageId = generateId();
   await db.insert(tradeImages).values({
     id: imageId,
@@ -53,6 +49,56 @@ export async function uploadTradeImage(formData: FormData) {
 
   revalidatePath('/');
   return { id: imageId, filePath: `images/${date}/${fileName}`, caption: visionCaption };
+}
+
+/**
+ * Salva imagem associada à sessão do dia (Debrief / Retrospectiva)
+ */
+export async function uploadSessionImage(formData: FormData) {
+  const file = formData.get('image') as File;
+  const tradingDayId = formData.get('tradingDayId') as string;
+  const date = formData.get('date') as string || new Date().toISOString().split('T')[0];
+
+  if (!file || !tradingDayId) throw new Error('Arquivo e tradingDayId são obrigatórios');
+
+  const imgDir = path.join(process.cwd(), 'data', 'images', date);
+  if (!fs.existsSync(imgDir)) {
+    fs.mkdirSync(imgDir, { recursive: true });
+  }
+
+  const ext = path.extname(file.name) || '.png';
+  const fileName = `session_${tradingDayId.slice(-6)}_${Date.now()}${ext}`;
+  const filePath = path.join(imgDir, fileName);
+  const buffer = Buffer.from(await file.arrayBuffer());
+  fs.writeFileSync(filePath, buffer);
+
+  let visionCaption = '';
+  try {
+    visionCaption = await analyzeTradeScreenshotVision(filePath);
+  } catch (err) {
+    console.error('Falha ao analisar imagem via Vision AI:', err);
+  }
+
+  const imageId = generateId();
+  await db.insert(tradeImages).values({
+    id: imageId,
+    tradingDayId,
+    filePath: `images/${date}/${fileName}`,
+    imageType: 'session',
+    caption: visionCaption || 'Gráfico/Screenshot da Sessão',
+  });
+
+  revalidatePath('/');
+  return { id: imageId, filePath: `images/${date}/${fileName}`, caption: visionCaption };
+}
+
+/**
+ * Busca imagens da sessão do dia
+ */
+export async function getSessionImages(tradingDayId: string) {
+  return db.query.tradeImages.findMany({
+    where: eq(tradeImages.tradingDayId, tradingDayId),
+  });
 }
 
 /**
@@ -77,7 +123,7 @@ export async function analyzeImageWithVision(imageId: string) {
 }
 
 /**
- * Remove uma imagem de trade do banco de dados e do disco
+ * Remove uma imagem de trade ou sessão do banco de dados e do disco
  */
 export async function deleteTradeImage(imageId: string) {
   console.log(`[Image] Solicitando exclusão da imagem ID: ${imageId}`);

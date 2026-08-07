@@ -96,10 +96,11 @@ export const trades = sqliteTable('trades', {
 export const tradeImages = sqliteTable('trade_images', {
   id: text('id').primaryKey(),
   tradeId: text('trade_id').references(() => trades.id, { onDelete: 'cascade' }),
+  tradingDayId: text('trading_day_id').references(() => tradingDays.id, { onDelete: 'cascade' }),
 
   filePath: text('file_path').notNull(),
   caption: text('caption'),
-  imageType: text('image_type'), // "entrada" | "saida" | "contexto"
+  imageType: text('image_type'), // "entrada" | "saida" | "contexto" | "session"
 
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
 });

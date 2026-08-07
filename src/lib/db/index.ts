@@ -46,6 +46,7 @@ try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_key_levels TEXT;');
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_news TEXT;'); } catch {}
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_insights TEXT;'); } catch {}
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN sleep_time TEXT;'); } catch {}
+try { sqlite.exec('ALTER TABLE trade_images ADD COLUMN trading_day_id TEXT;'); } catch {}
 
 // Semeia todas as categorias padrão no SQLite se a tabela custom_tags estiver vazia
 const tagSeeds: Record<string, string[]> = {

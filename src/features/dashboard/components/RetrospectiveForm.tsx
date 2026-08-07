@@ -4,332 +4,190 @@ import { useState } from 'react';
 import { updateDayRetrospective } from '@/features/trades/actions';
 import type { TradingDay } from '@/lib/db/schema';
 import { IconScale, IconCheck } from '@/components/ui/icons';
+import { SessionImageDropzone } from '@/features/images/components/SessionImageDropzone';
+import { TagGroupSelector } from '@/components/ui/TagGroupSelector';
 
 const EXECUTION_GRADES = [
-  { id: 'A', label: 'A — EXCELENTE', desc: 'Execução alinhada ao processo; decisões conscientes' },
+  { id: 'A', label: 'A — EXCELENTE', desc: 'Execução 100% alinhada ao plano; decisões conscientes' },
   { id: 'B', label: 'B — PARCIAL', desc: 'Execução sólida com pequenos desvios contidos' },
-  { id: 'C', label: 'C — REATIVA', desc: 'Desvios relevantes do processo ou decisões reativas' },
-];
-
-const DOMINANT_EMOTIONS = [
-  { id: 'Calmo', label: 'Calmo', tone: 'teal' },
-  { id: 'Focado', label: 'Focado', tone: 'teal' },
-  { id: 'Neutro', label: 'Neutro', tone: 'slate' },
-  { id: 'Ansioso', label: 'Ansioso', tone: 'rose' },
-  { id: 'Frustrado', label: 'Frustrado', tone: 'rose' },
-  { id: 'Eufórico', label: 'Eufórico', tone: 'rose' },
-  { id: 'Cansado', label: 'Cansado', tone: 'slate' },
-  { id: 'Irritado', label: 'Irritado', tone: 'rose' },
-];
-
-const OPERATIONAL_ERRORS = [
-  'Nenhum (Execução Limpa)',
-  'Overtrading (Operou Demais)',
-  'FOMO / Impulso',
-  'Revenge Trade / Vingança',
-  'Hesitação na Entrada',
-  'Saída Antecipada por Medo',
-  'Violou Stop Loss',
-  'Moveu Stop Contra Posição',
-  'Tamanho de Mão Incorreto',
-  'Ignorou Plano Matinal',
-  'Excedeu Limite Diário',
-];
-
-const DISCIPLINE_LEVELS = [
-  { value: 1, label: '1 — REATIVO' },
-  { value: 2, label: '2 — INSTÁVEL' },
-  { value: 3, label: '3 — PARCIAL' },
-  { value: 4, label: '4 — CONSISTENTE' },
-  { value: 5, label: '5 — PRECISO' },
+  { id: 'C', label: 'C — REATIVA', desc: 'Desvios relevantes do plano ou trades por impulso' },
 ];
 
 export function RetrospectiveForm({ day }: { day: TradingDay }) {
-  // Parse inicial seguro de dados salvos anteriormente
+  // Parse seguro da nota de execução A/B/C
   const parsedGrade = day.retrospective?.match(/\[GRADE: ([A-C])\]/)?.[1] || null;
-  const parsedDiscipline = day.retrospective?.match(/\[DISCIPLINA: ([1-5])\/5\]/)?.[1];
-  const parsedTrigger = day.retrospective?.match(/GATILHO: (.*?)(?=\s*\|\s*AÇÃO:|\n|$)/)?.[1] || '';
-  const parsedAction = day.retrospective?.match(/AÇÃO: (.*?)(?=\n|$)/)?.[1] || '';
+
+  // Extrai o texto livre do diário limpo (removendo tags de compilação antigas)
+  const initialText = day.retrospective
+    ? day.retrospective
+        .replace(/\[GRADE:.*?\]/g, '')
+        .replace(/\[DISCIPLINA:.*?\]/g, '')
+        .replace(/ERROS:.*?/g, '')
+        .replace(/GATILHO:.*?/g, '')
+        .replace(/AÇÃO:.*?/g, '')
+        .replace(/HINDSIGHT:.*?/g, '')
+        .trim()
+    : '';
 
   const [executionGrade, setExecutionGrade] = useState<string | null>(parsedGrade);
-  const [dominantEmotion, setDominantEmotion] = useState<string | null>(day.emotionalPost || null);
-  const [emotionalIntensity, setEmotionalIntensity] = useState<number | null>(3);
-  
-  const [selectedErrors, setSelectedErrors] = useState<string[]>([]);
-  const [disciplineScore, setDisciplineScore] = useState<number | null>(parsedDiscipline ? Number(parsedDiscipline) : null);
-  
-  const [trigger, setTrigger] = useState<string>(parsedTrigger);
-  const [actionRule, setActionRule] = useState<string>(parsedAction);
-  
+  const [dominantEmotion, setDominantEmotion] = useState<string>(day.emotionalPost || '');
+  const [selectedErrors, setSelectedErrors] = useState<string>('');
+  const [journalText, setJournalText] = useState<string>(initialText);
   const [honestPhrase, setHonestPhrase] = useState<string>(day.honestPhrase || '');
-  const [hindsightText, setHindsightText] = useState<string>(
-    day.retrospective?.replace(/\[GRADE:.*?\]|\[DISCIPLINA:.*?\]|ERROS:.*?|GATILHO:.*?|AÇÃO:.*/g, '').trim() || ''
-  );
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-
-  function toggleError(err: string) {
-    if (err === 'Nenhum (Execução Limpa)') {
-      setSelectedErrors(prev => prev.includes('Nenhum (Execução Limpa)') ? [] : ['Nenhum (Execução Limpa)']);
-      return;
-    }
-
-    setSelectedErrors(prev => {
-      const filtered = prev.filter(e => e !== 'Nenhum (Execução Limpa)');
-      if (filtered.includes(err)) {
-        return filtered.filter(e => e !== err);
-      }
-      return [...filtered, err];
-    });
-  }
 
   async function handleSave() {
     setSaving(true);
     try {
       const compiledRetrospective = [
         executionGrade ? `[GRADE: ${executionGrade}]` : '',
-        disciplineScore ? `[DISCIPLINA: ${disciplineScore}/5]` : '',
-        selectedErrors.length > 0 ? `ERROS: ${selectedErrors.join(', ')}` : '',
-        trigger || actionRule ? `GATILHO: ${trigger} | AÇÃO: ${actionRule}` : '',
-        hindsightText ? `HINDSIGHT: ${hindsightText}` : '',
-      ].filter(Boolean).join('\n');
-
-      const compiledEmotion = dominantEmotion
-        ? `${dominantEmotion} (Intensidade: ${emotionalIntensity || 3}/5)`
-        : '';
+        journalText ? journalText : '',
+      ].filter(Boolean).join('\n\n');
 
       await updateDayRetrospective(day.id, {
         honestPhrase,
         retrospective: compiledRetrospective,
-        emotionalPost: compiledEmotion,
+        emotionalPost: dominantEmotion || selectedErrors ? `${dominantEmotion} | ${selectedErrors}` : '',
       });
 
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => setSaved(false), 2500);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <section aria-label="Retrospectiva pós-pregão" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4 font-mono">
-      <header className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+    <section aria-label="Retrospectiva pós-pregão" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-5 shadow-2xl space-y-5 font-mono">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-slate-800/80 pb-3">
         <div className="flex items-center gap-2">
           <IconScale className="text-teal-400" />
-          <h3 className="text-[10px] tracking-[0.2em] font-bold text-slate-300 uppercase">
-            POST-SESSION DEBRIEF · AVALIAÇÃO DE PROCESSO
+          <h3 className="text-xs tracking-[0.2em] font-bold text-slate-200 uppercase">
+            POST-SESSION DEBRIEF · RETROSPECTIVA DO PREGÃO
           </h3>
         </div>
-        <span className="text-[9px] tracking-widest text-slate-500 font-bold">
+        <span className="text-[10px] tracking-wider text-teal-400 font-bold bg-teal-500/10 border border-teal-500/20 px-2 py-0.5 rounded">
           PROCESSO &gt; RESULTADO
         </span>
       </header>
 
-      {/* BLOCO 1: QUALIDADE DA EXECUÇÃO (A/B/C) */}
-      <div className="space-y-1">
-        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+      {/* BLOCO 1: SCREENSHOTS & GRÁFICOS DO PREGÃO (Com Ctrl + V) */}
+      <div className="space-y-2">
+        <SessionImageDropzone tradingDayId={day.id} date={day.date} />
+      </div>
+
+      {/* BLOCO 2: EXECUÇÃO DO PLANO (A / B / C) */}
+      <div className="space-y-2 pt-2 border-t border-slate-800/60">
+        <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">
           01 // VOCÊ EXECUTOU O PROCESSO PLANEJADO?
         </label>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {EXECUTION_GRADES.map(g => (
             <button
               key={g.id}
               type="button"
               onClick={() => setExecutionGrade(g.id)}
-              className={`p-2 rounded-md border text-left transition-all ${
+              className={`p-3 rounded-lg border text-left transition-all ${
                 executionGrade === g.id
                   ? g.id === 'A'
-                    ? 'border-teal-500/50 bg-teal-500/10 text-teal-400 font-bold'
+                    ? 'border-teal-500/60 bg-teal-500/10 text-teal-300 font-bold shadow-[0_0_12px_rgba(45,212,191,0.15)]'
                     : g.id === 'B'
-                    ? 'border-amber-500/50 bg-amber-500/10 text-amber-300 font-bold'
-                    : 'border-rose-500/50 bg-rose-500/10 text-rose-400 font-bold'
-                  : 'bg-[#070a10] border-slate-800/80 text-slate-500 hover:text-slate-300'
+                    ? 'border-amber-500/60 bg-amber-500/10 text-amber-300 font-bold shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+                    : 'border-rose-500/60 bg-rose-500/10 text-rose-300 font-bold shadow-[0_0_12px_rgba(244,63,94,0.15)]'
+                  : 'bg-[#070a10] border-slate-800/80 text-slate-400 hover:text-slate-200 hover:border-slate-700'
               }`}
             >
-              <span className="text-xs font-bold block">{g.label}</span>
-              <p className="text-[10px] text-slate-400 font-sans leading-tight mt-0.5">{g.desc}</p>
+              <span className="text-xs font-bold block flex items-center justify-between">
+                <span>{g.label}</span>
+                {executionGrade === g.id && <span>✓</span>}
+              </span>
+              <p className="text-[11px] text-slate-400 font-sans leading-tight mt-1">{g.desc}</p>
             </button>
           ))}
         </div>
       </div>
 
-      {/* BLOCO 2: ESTADO DOMINANTE & INTENSIDADE */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-        <div className="md:col-span-8 space-y-1">
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
-            02 // ESTADO EMOCIONAL DOMINANTE
-          </label>
-          <div className="flex flex-wrap gap-1 font-mono">
-            {DOMINANT_EMOTIONS.map(emo => {
-              const active = dominantEmotion === emo.label;
-              return (
-                <button
-                  key={emo.id}
-                  type="button"
-                  onClick={() => setDominantEmotion(active ? null : emo.label)}
-                  className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                    active
-                      ? emo.tone === 'teal'
-                        ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
-                        : emo.tone === 'rose'
-                        ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
-                        : 'bg-slate-700 text-slate-100 border-slate-600'
-                      : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
-                  }`}
-                >
-                  {emo.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      {/* BLOCO 3: EMOCIONAL DOMINANTE & DESVIOS OPERACIONAIS (Multi-Select & CRUD) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-800/60">
+        <TagGroupSelector
+          category="emotion_post"
+          label="02 // ESTADO EMOCIONAL DOMINANTE DA SESSÃO"
+          value={dominantEmotion}
+          onChange={setDominantEmotion}
+          defaultOptions={['Calmo', 'Focado', 'Centrado', 'Neutro', 'Ansioso', 'Frustrado', 'Eufórico', 'Cansado', 'Irritado']}
+        />
 
-        <div className="md:col-span-4 space-y-1">
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
-            INTENSIDADE (1 A 5)
-          </label>
-          <div className="flex gap-1">
-            {[1, 2, 3, 4, 5].map(v => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setEmotionalIntensity(v)}
-                className={`flex-1 py-1 rounded-md text-[10px] font-bold border transition-all tabular-nums ${
-                  emotionalIntensity === v
-                    ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
-                    : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
-                }`}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TagGroupSelector
+          category="operational_error"
+          label="03 // PRINCIPAL DESVIO / ERRO OPERACIONAL"
+          value={selectedErrors}
+          onChange={setSelectedErrors}
+          defaultOptions={[
+            'Nenhum (Execução Limpa)',
+            'Overtrading (Operou Demais)',
+            'FOMO / Impulso',
+            'Revenge Trade / Vingança',
+            'Hesitação na Entrada',
+            'Saída Antecipada por Medo',
+            'Violou Stop Loss',
+            'Moveu Stop Contra Posição',
+            'Tamanho de Mão Incorreto',
+          ]}
+        />
       </div>
 
-      {/* BLOCO 3: PRINCIPAL DESVIO / ERROS */}
-      <div className="space-y-1">
-        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
-          03 // PRINCIPAL DESVIO OPERACIONAL
+      {/* BLOCO 4: DIÁRIO LIVRE DA SESSÃO (CAMPO DE TEXTO AMPLO) */}
+      <div className="space-y-2 pt-2 border-t border-slate-800/60">
+        <label className="text-[10px] text-slate-300 font-bold uppercase tracking-wider block flex items-center justify-between">
+          <span>04 // DIÁRIO & NARRATIVA DA SESSÃO (TEXTO LIVRE)</span>
+          <span className="text-[9px] text-slate-500 font-sans">Escreva livremente a história do pregão</span>
         </label>
-        <div className="flex flex-wrap gap-1">
-          {OPERATIONAL_ERRORS.map(err => {
-            const active = selectedErrors.includes(err);
-            const isClean = err === 'Nenhum (Execução Limpa)';
-            return (
-              <button
-                key={err}
-                type="button"
-                onClick={() => toggleError(err)}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                  active
-                    ? isClean
-                      ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
-                      : 'bg-rose-500/20 text-rose-400 border-rose-500/40'
-                    : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
-                }`}
-              >
-                {err}
-              </button>
-            );
-          })}
-        </div>
+
+        <textarea
+          value={journalText}
+          onChange={(e) => setJournalText(e.target.value)}
+          placeholder="Escreva livremente sobre a sessão de hoje: como o mercado se comportou em relação ao Farol do Mercado/GEX, leitura de fluxo, gatilhos acionados, o que funcionou bem e o que pode melhorar no próximo pregão…"
+          className="w-full h-32 bg-[#070a10] border border-slate-800/80 rounded-lg p-3 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-teal-500/60 font-sans leading-relaxed"
+        />
       </div>
 
-      {/* BLOCO 4: NOTA DE DISCIPLINA OPERACIONAL */}
-      <div className="space-y-1">
-        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
-          04 // DISCIPLINA DA SESSÃO
+      {/* BLOCO 5: REGRA DE OURO PARA O PRÓXIMO PREGÃO */}
+      <div className="space-y-1.5 pt-2 border-t border-slate-800/60">
+        <label className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">
+          05 // REGRA DE OURO / LIÇÃO PARA O PRÓXIMO PREGÃO
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 text-[10px]">
-          {DISCIPLINE_LEVELS.map(d => (
-            <button
-              key={d.value}
-              type="button"
-              onClick={() => setDisciplineScore(d.value)}
-              className={`py-1.5 rounded-md font-bold border transition-all ${
-                disciplineScore === d.value
-                  ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
-                  : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
-              }`}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
+        <input
+          value={honestPhrase}
+          onChange={(e) => setHonestPhrase(e.target.value)}
+          placeholder="Ex: Não operar no primeiro candle de abertura se o Payroll estiver pendente..."
+          className="w-full bg-[#070a10] border border-slate-800/80 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-amber-500/50 font-mono text-xs"
+        />
       </div>
 
-      {/* BLOCO 5: CICLO DE TENDLER (GATILHO -> REGRA DE AÇÃO) */}
-      <div className="space-y-2 pt-2 border-t border-slate-800/80">
-        <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
-          05 // CORREÇÃO DE LOGICA (GATILHO → AÇÃO PARA O PRÓXIMO PREGÃO)
-        </label>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div>
-            <span className="text-[9px] text-slate-500 block uppercase">GATILHO / SINAL</span>
-            <input
-              value={trigger}
-              onChange={(e) => setTrigger(e.target.value)}
-              placeholder="Ex: Após 2 stops consecutivos no início do pregão…"
-              className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs mt-0.5"
-            />
-          </div>
-          <div>
-            <span className="text-[9px] text-slate-500 block uppercase">AÇÃO CONCRETA</span>
-            <input
-              value={actionRule}
-              onChange={(e) => setActionRule(e.target.value)}
-              placeholder="Ex: Fechar a plataforma e pausar por 15 minutos."
-              className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs mt-0.5"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-          <div>
-            <span className="text-[9px] text-slate-500 block uppercase">FRASE BRUTALMENTE HONESTA</span>
-            <input
-              value={honestPhrase}
-              onChange={(e) => setHonestPhrase(e.target.value)}
-              placeholder="Qual foi a decisão mais cara tomada hoje?"
-              className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs mt-0.5"
-            />
-          </div>
-          <div>
-            <span className="text-[9px] text-slate-500 block uppercase">HINDSIGHT (VISÃO POSTERIOR)</span>
-            <input
-              value={hindsightText}
-              onChange={(e) => setHindsightText(e.target.value)}
-              placeholder="Depois do fechamento, ficou claro que…"
-              className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs mt-0.5"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* BOTÃO SALVAR */}
-      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[10px]">
-        <span className="text-slate-500 font-mono">
-          DEBRIEF COMPLETO // SEM JULGAMENTO DE EGO
+      {/* BOTÃO DE REGISTRO */}
+      <div className="flex items-center justify-between pt-3 border-t border-slate-800/80 text-xs">
+        <span className="text-slate-500 font-mono text-[10px]">
+          DEBRIEF COMPLETO // SALVO NO BANCO SQLITE
         </span>
 
         <button
           onClick={handleSave}
           disabled={saving}
           type="button"
-          className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-mono font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+          className="px-5 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-mono font-bold text-xs rounded-lg transition-all flex items-center gap-2 shadow-lg disabled:opacity-50"
         >
           {saved ? (
             <>
               <IconCheck className="text-slate-950" />
-              <span>SALVO COM SUCESSO</span>
+              <span>RETROSPECTIVA SALVA COM SUCESSO!</span>
             </>
           ) : saving ? (
-            'SALVANDO…'
+            'SALVANDO NO BANCO…'
           ) : (
-            'REGISTRAR RETROSPECTIVA'
+            'REGISTRAR RETROSPECTIVA DA SESSÃO'
           )}
         </button>
       </div>
