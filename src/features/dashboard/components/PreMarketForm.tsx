@@ -28,7 +28,7 @@ const TRADING_PSYCHOLOGY_STATES = [
 
 export function PreMarketForm({ day }: { day: TradingDay }) {
   const [form, setForm] = useState({
-    sleepTime: '', // Horário que dormiu na noite anterior
+    sleepTime: day.sleepTime || '', // Horário que dormiu na noite anterior (persistido no banco)
     wakeUpTime: day.wakeUpTime || '',
     sleepQuality: day.sleepQuality || 3,
     mentalState: day.mentalState || '',
@@ -43,15 +43,12 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
   async function handleSave() {
     setSaving(true);
     try {
-      const personalNoteWithSleep = form.sleepTime
-        ? `[Dormiu: ${form.sleepTime}] ${form.personalNote}`.trim()
-        : form.personalNote;
-
       await updatePreMarket(day.id, {
+        sleepTime: form.sleepTime,
         wakeUpTime: form.wakeUpTime,
         sleepQuality: form.sleepQuality,
         mentalState: form.mentalState,
-        personalNote: personalNoteWithSleep,
+        personalNote: form.personalNote,
         macroCalendar: form.macroCalendar,
         overnightNote: form.overnightNote,
         generalBias: form.generalBias,

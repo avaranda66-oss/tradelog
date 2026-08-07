@@ -274,6 +274,7 @@ export async function updateTradeNotes(
 export async function updatePreMarket(
   dayId: string,
   data: {
+    sleepTime?: string;
     wakeUpTime?: string;
     sleepQuality?: number;
     mentalState?: string;

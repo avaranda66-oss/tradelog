@@ -6,6 +6,7 @@ export const tradingDays = sqliteTable('trading_days', {
   date: text('date').notNull().unique(), // "2026-08-06"
 
   // Pré-Market
+  sleepTime: text('sleep_time'),      // Horário que dormiu na noite anterior
   wakeUpTime: text('wake_up_time'),
   sleepQuality: integer('sleep_quality'), // 1-5
   mentalState: text('mental_state'),

@@ -15,6 +15,7 @@ export async function updateTradingDayCell(
 ) {
   const allowedFields = [
     'generalBias',
+    'sleepTime',
     'wakeUpTime',
     'sleepQuality',
     'mentalState',
