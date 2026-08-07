@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { IconSync, IconTerminal, IconSettings, IconAlert } from "./ui/icons";
+import { DateNavigatorBar } from "./DateNavigatorBar";
 
 export type SyncStatus = "synced" | "syncing" | "error" | "offline";
 
@@ -49,16 +50,21 @@ export function Header({
       : formatClock(typeof lastSyncAt === "string" ? new Date(lastSyncAt) : lastSyncAt);
 
   return (
-    <header className="flex h-11 items-center justify-between border-b border-slate-800/80 bg-[#0b1018] px-4 shadow-md">
+    <header className="flex h-11 items-center justify-between border-b border-slate-800/80 bg-[#0b1018] px-4 shadow-md gap-4">
       <div className="flex items-center gap-3">
         <IconTerminal className="text-teal-400" />
         <span className="font-mono text-[11px] font-semibold tracking-[0.2em] text-slate-100">
           TRADELOG
         </span>
-        <span className="hidden border-l border-slate-800/80 pl-3 font-mono text-[10px] tracking-widest text-slate-500 sm:inline">
+        <span className="hidden border-l border-slate-800/80 pl-3 font-mono text-[10px] tracking-widest text-slate-500 lg:inline">
           WINFUT · B3
         </span>
       </div>
+
+      {/* Date Navigator Bar */}
+      <Suspense fallback={<div className="font-mono text-[10px] text-slate-500">CARREGANDO DATA…</div>}>
+        <DateNavigatorBar />
+      </Suspense>
 
       <div className="flex items-center gap-4">
         <div
