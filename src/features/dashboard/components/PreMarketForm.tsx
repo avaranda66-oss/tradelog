@@ -12,12 +12,18 @@ const biasOptions = [
 ];
 
 const TRADING_PSYCHOLOGY_STATES = [
-  'Calmo & Centrado',
-  'Confiante & Focado',
-  'Ansioso / Agitado',
-  'Estressado / Pressionado',
-  'Cansado / Fadigado',
-  'Impulsivo / Eufórico',
+  'Calmo',
+  'Centrado',
+  'Confiante',
+  'Focado',
+  'Ansioso',
+  'Agitado',
+  'Estressado',
+  'Pressionado',
+  'Cansado',
+  'Fadigado',
+  'Impulsivo',
+  'Eufórico',
 ];
 
 export function PreMarketForm({ day }: { day: TradingDay }) {
