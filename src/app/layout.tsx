@@ -17,11 +17,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR" className={`${inter.variable} dark`}>
-      <body className="min-h-screen bg-[#070a11] text-slate-100 font-[family-name:var(--font-inter)] flex">
-        <Sidebar />
-        <div className="flex-1 ml-16 lg:ml-64 flex flex-col min-h-screen">
-          <Header />
-          <main className="flex-1 p-6 overflow-auto">
+      <body className="h-screen bg-[#070a11] text-slate-100 font-[family-name:var(--font-inter)] flex flex-col overflow-hidden antialiased">
+        <Header />
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar />
+          <main className="flex-1 p-5 overflow-y-auto bg-[#070a11]">
             {children}
           </main>
         </div>

@@ -4,6 +4,11 @@
   --font-sans: var(--font-inter);
   --color-background: #070a11;
   --color-foreground: #f1f5f9;
+  --color-terminal-base: #070A10;
+  --color-terminal-panel: #0B1018;
+  --color-terminal-line: #1E293B;
+  --color-accent: #2DD4BF;
+  --color-ice: #F8FAFC;
 }
 
 /* ─── Global ──────────────────────────────────────── */
