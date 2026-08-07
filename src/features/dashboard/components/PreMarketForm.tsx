@@ -62,7 +62,11 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
     setForm(f => {
       const current = f.mentalState.trim();
       if (!current) return { ...f, mentalState: stateText };
-      if (current.includes(stateText)) return f;
+      const items = current.split(/\s*\|\s*/).filter(Boolean);
+      if (items.includes(stateText)) {
+        const updated = items.filter(s => s !== stateText).join(' | ');
+        return { ...f, mentalState: updated };
+      }
       return { ...f, mentalState: `${current} | ${stateText}` };
     });
   }
