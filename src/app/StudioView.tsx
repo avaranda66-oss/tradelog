@@ -21,6 +21,8 @@ interface StudioViewProps {
   dayAudios: AudioRecord[];
   dayLevels: (typeof keyLevels.$inferSelect)[];
   dayTrades?: Trade[];
+  allTrades?: Trade[];
+  allAudios?: AudioRecord[];
   imageCount: number;
   historyDays?: TradingDay[];
 }
@@ -35,6 +37,8 @@ export function StudioView({
   dayAudios,
   dayLevels,
   dayTrades = [],
+  allTrades = [],
+  allAudios = [],
   imageCount,
   historyDays = [],
 }: StudioViewProps) {
@@ -49,6 +53,8 @@ export function StudioView({
       <JournalProgressWidget
         day={day}
         trades={dayTrades}
+        allTrades={allTrades}
+        allAudios={allAudios}
         levels={dayLevels}
         audios={dayAudios}
         imagesCount={imageCount}

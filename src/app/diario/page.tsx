@@ -50,12 +50,18 @@ export default async function DiarioPage({
     });
   }
 
+  // Busca histórico global para insígnias acumuladas
+  const allTrades = await db.query.trades.findMany();
+  const allAudios = await db.query.audioRecords.findMany();
+
   return (
     <JournalHubView
       day={day || null}
       date={targetDate}
       trades={dayTrades}
+      allTrades={allTrades}
       audios={dayAudios}
+      allAudios={allAudios}
       levels={dayLevels}
     />
   );

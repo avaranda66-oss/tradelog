@@ -9,6 +9,8 @@ import { BadgeMatrixWidget } from './BadgeMatrixWidget';
 interface JournalProgressWidgetProps {
   day: TradingDay | null;
   trades?: Trade[];
+  allTrades?: Trade[];
+  allAudios?: AudioRecord[];
   levels?: (typeof keyLevels.$inferSelect)[];
   audios?: AudioRecord[];
   imagesCount?: number;
@@ -22,6 +24,8 @@ interface JournalProgressWidgetProps {
 export function JournalProgressWidget({
   day,
   trades = [],
+  allTrades = [],
+  allAudios = [],
   levels = [],
   audios = [],
   imagesCount = 0,
@@ -182,7 +186,7 @@ export function JournalProgressWidget({
       {/* Arquivo de Conquistas (Sessão Expansível sob demanda) */}
       {showArchive && (
         <div className="animate-in fade-in duration-300">
-          <BadgeMatrixWidget historyDays={historyDays} currentDay={day} tradesList={trades} />
+          <BadgeMatrixWidget historyDays={historyDays} currentDay={day} allTrades={allTrades} audios={allAudios} />
         </div>
       )}
     </div>

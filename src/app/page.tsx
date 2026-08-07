@@ -103,6 +103,10 @@ export default async function HomePage({
     orderBy: desc(tradingDays.date),
   });
 
+  // Busca todos os trades e áudios globais para estatísticas e insígnias acumuladas
+  const allTrades = await db.query.trades.findMany();
+  const allAudios = await db.query.audioRecords.findMany();
+
   return (
     <StudioView
       day={day}
@@ -114,6 +118,8 @@ export default async function HomePage({
       dayAudios={dayAudios}
       dayLevels={dayLevels}
       dayTrades={dayTrades}
+      allTrades={allTrades}
+      allAudios={allAudios}
       imageCount={imageCount}
       historyDays={historyDays}
     />

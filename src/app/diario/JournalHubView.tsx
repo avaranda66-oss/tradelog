@@ -13,11 +13,13 @@ interface JournalHubViewProps {
   day: TradingDay | null;
   date: string;
   trades: Trade[];
+  allTrades?: Trade[];
   audios: AudioRecord[];
+  allAudios?: AudioRecord[];
   levels?: (typeof keyLevels.$inferSelect)[];
 }
 
-export function JournalHubView({ day, date, trades, audios, levels = [] }: JournalHubViewProps) {
+export function JournalHubView({ day, date, trades, allTrades = [], audios, allAudios = [], levels = [] }: JournalHubViewProps) {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   const wins = trades.filter(t => (t.reais || 0) > 0);
@@ -56,6 +58,8 @@ export function JournalHubView({ day, date, trades, audios, levels = [] }: Journ
       <JournalProgressWidget
         day={day}
         trades={trades}
+        allTrades={allTrades}
+        allAudios={allAudios}
         levels={levels}
         audios={audios}
       />
