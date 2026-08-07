@@ -6,13 +6,23 @@ import type { TradingDay } from '@/lib/db/schema';
 import { IconClock, IconCheck, IconArrowUp, IconArrowDown, IconDash } from '@/components/ui/icons';
 
 const biasOptions = [
-  { value: 'alta', label: 'LONG // ALTA', color: 'border-teal-500/50 bg-teal-500/10 text-teal-400', Icon: IconArrowUp },
-  { value: 'baixa', label: 'SHORT // BAIXA', color: 'border-rose-400/50 bg-rose-400/10 text-rose-400', Icon: IconArrowDown },
-  { value: 'indefinido', label: 'NEUTRAL // INDEFINIDO', color: 'border-slate-600 bg-slate-900 text-slate-400', Icon: IconDash },
+  { value: 'alta', label: '↑ ALTA (COMPRADOR)', color: 'border-teal-500/50 bg-teal-500/10 text-teal-400', Icon: IconArrowUp },
+  { value: 'baixa', label: '↓ BAIXA (VENDEDOR)', color: 'border-rose-400/50 bg-rose-400/10 text-rose-400', Icon: IconArrowDown },
+  { value: 'indefinido', label: '— LATERAL / INDEFINIDO', color: 'border-slate-600 bg-slate-900 text-slate-400', Icon: IconDash },
+];
+
+const TRADING_PSYCHOLOGY_STATES = [
+  'Calmo & Centrado',
+  'Confiante & Focado',
+  'Ansioso / Agitado',
+  'Estressado / Pressionado',
+  'Cansado / Fadigado',
+  'Impulsivo / Eufórico',
 ];
 
 export function PreMarketForm({ day }: { day: TradingDay }) {
   const [form, setForm] = useState({
+    sleepTime: '', // Horário que dormiu na noite anterior
     wakeUpTime: day.wakeUpTime || '',
     sleepQuality: day.sleepQuality || 3,
     mentalState: day.mentalState || '',
@@ -27,8 +37,18 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
   async function handleSave() {
     setSaving(true);
     try {
+      const personalNoteWithSleep = form.sleepTime
+        ? `[Dormiu: ${form.sleepTime}] ${form.personalNote}`.trim()
+        : form.personalNote;
+
       await updatePreMarket(day.id, {
-        ...form,
+        wakeUpTime: form.wakeUpTime,
+        sleepQuality: form.sleepQuality,
+        mentalState: form.mentalState,
+        personalNote: personalNoteWithSleep,
+        macroCalendar: form.macroCalendar,
+        overnightNote: form.overnightNote,
+        generalBias: form.generalBias,
         preMarketDone: true,
       });
       setSaved(true);
@@ -38,41 +58,63 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
     }
   }
 
+  function handleSelectState(stateText: string) {
+    setForm(f => {
+      const current = f.mentalState.trim();
+      if (!current) return { ...f, mentalState: stateText };
+      if (current.includes(stateText)) return f;
+      return { ...f, mentalState: `${current} | ${stateText}` };
+    });
+  }
+
   return (
-    <section aria-label="Checklist pré-market" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4">
+    <section aria-label="Checklist pré-market" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4 font-mono">
       <header className="flex items-center justify-between border-b border-slate-800/80 pb-3">
         <div className="flex items-center gap-2">
           <IconClock className="text-teal-400" />
-          <h3 className="font-mono text-[10px] tracking-[0.25em] font-bold text-slate-300 uppercase">
-            PRE-MARKET PROTOCOL · PREPARAÇÃO MATINAL
+          <h3 className="text-[10px] tracking-[0.25em] font-bold text-slate-300 uppercase">
+            PROTOCOLO PRÉ-MARKET · PREPARAÇÃO & REPOUSO MATINAL
           </h3>
         </div>
 
         {day.preMarketDone && (
-          <span className="font-mono text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded uppercase">
+          <span className="text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded uppercase">
             ✓ CONCLUÍDO
           </span>
         )}
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        {/* Horário que dormiu */}
+        <div>
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
+            HORÁRIO QUE DORMIU (NOITE ANTERIOR)
+          </label>
+          <input
+            type="time"
+            value={form.sleepTime}
+            onChange={(e) => setForm(f => ({ ...f, sleepTime: e.target.value }))}
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs tabular-nums"
+          />
+        </div>
+
         {/* Hora que acordou */}
         <div>
           <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            HORA DE DESPERTAR (WAKE TIME)
+            HORÁRIO DE DESPERTAR (MANHÃ)
           </label>
           <input
             type="time"
             value={form.wakeUpTime}
             onChange={(e) => setForm(f => ({ ...f, wakeUpTime: e.target.value }))}
-            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs tabular-nums"
+            className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-1.5 text-slate-200 focus:outline-none focus:border-teal-500/60 font-mono text-xs tabular-nums"
           />
         </div>
 
         {/* Qualidade do sono */}
         <div>
           <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            QUALIDADE DO SONO (1-5)
+            QUALIDADE DO SONO (1 A 5)
           </label>
           <div className="flex gap-1" role="radiogroup" aria-label="Qualidade do sono">
             {[1, 2, 3, 4, 5].map((v) => (
@@ -94,23 +136,45 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
           </div>
         </div>
 
-        {/* Estado mental */}
-        <div className="sm:col-span-2">
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            ESTADO MENTAL & PRONTIDÃO EMOCIONAL
+        {/* Estado Emocional & Psicologia do Trading */}
+        <div className="sm:col-span-3 space-y-1.5">
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            ESTADO EMOCIONAL & PRONTIDÃO (PSICOLOGIA DE TRADING)
           </label>
+          
+          {/* Botões Rápidos de Sentimentos */}
+          <div className="flex flex-wrap gap-1.5">
+            {TRADING_PSYCHOLOGY_STATES.map((st) => {
+              const active = form.mentalState.includes(st);
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => handleSelectState(st)}
+                  className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
+                    active
+                      ? 'bg-teal-500/20 text-teal-400 border-teal-500/40'
+                      : 'bg-[#070a10] text-slate-400 border-slate-800/80 hover:border-slate-700 hover:text-slate-200'
+                  }`}
+                >
+                  {st}
+                </button>
+              );
+            })}
+          </div>
+
           <input
             value={form.mentalState}
             onChange={(e) => setForm(f => ({ ...f, mentalState: e.target.value }))}
-            placeholder="Ex: Foco no plano, sem ansiedade, 100% focado no setup…"
+            placeholder="Descreva seu sentimento ou selecione os botões acima…"
             className="w-full bg-[#070a10] border border-slate-800/80 rounded-md px-3 py-2 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-teal-500/60 font-sans text-xs"
           />
         </div>
 
-        {/* Viés */}
-        <div className="sm:col-span-2">
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            VIÉS PRE-ABERTURA (DAY BIAS)
+        {/* Viés pré-abertura (Sem inglês) */}
+        <div className="sm:col-span-3 space-y-1">
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            VIÉS PRÉ-ABERTURA DO PREGÃO
           </label>
           <div className="flex gap-2">
             {biasOptions.map((opt) => (
@@ -118,13 +182,12 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
                 key={opt.value}
                 type="button"
                 onClick={() => setForm(f => ({ ...f, generalBias: opt.value }))}
-                className={`flex-1 py-1.5 rounded-md text-xs font-bold border transition-all flex items-center justify-center gap-1.5 font-mono ${
+                className={`flex-1 py-2 rounded-md text-xs font-bold border transition-all flex items-center justify-center gap-1.5 font-mono ${
                   form.generalBias === opt.value
                     ? opt.color
                     : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:text-slate-300'
                 }`}
               >
-                <opt.Icon width={12} height={12} />
                 <span>{opt.label}</span>
               </button>
             ))}
@@ -132,9 +195,9 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
         </div>
 
         {/* Overnight */}
-        <div>
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            OVERNIGHT & ASIA/EUROPA DRIVERS
+        <div className="sm:col-span-3 md:col-span-1 space-y-1">
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            CENÁRIO OVERNIGHT & ASIA/EUROPA
           </label>
           <textarea
             value={form.overnightNote}
@@ -145,9 +208,9 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
         </div>
 
         {/* Calendário macro */}
-        <div>
-          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mb-1">
-            CALENDÁRIO MACRO & EVENTOS DO DIA
+        <div className="sm:col-span-3 md:col-span-2 space-y-1">
+          <label className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">
+            CALENDÁRIO MACRO & DRIVERS DO DIA
           </label>
           <textarea
             value={form.macroCalendar}
@@ -161,7 +224,7 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
       {/* Botão salvar */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 font-mono text-[10px]">
         <span className="text-slate-500">
-          PROTOCOLO PRÉ-MARKET SINCRONIZADO
+          REGISTRO MATINAL PRONTO PARA ABERTURA
         </span>
 
         <button
@@ -173,12 +236,12 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
           {saved ? (
             <>
               <IconCheck className="text-slate-950" />
-              <span>LOG REGISTRADO</span>
+              <span>REGISTRADO COM SUCESSO</span>
             </>
           ) : saving ? (
             'SALVANDO…'
           ) : (
-            'LOG PRE-MARKET'
+            'SALVAR PRÉ-MARKET'
           )}
         </button>
       </div>
