@@ -51,7 +51,7 @@ const MIME_MAP: Record<string, string> = {
 };
 
 /**
- * Transcreve um arquivo de áudio usando a SDK Gemini com fallback de modelos
+ * Transcreve um arquivo de áudio usando Gemini API
  */
 export async function transcribeAudio(filePath: string): Promise<{
   transcription: string;
@@ -84,19 +84,19 @@ export async function transcribeAudio(filePath: string): Promise<{
     }
 
     if (file.state === 'FAILED') {
-      throw new Error('Falha no processamento do arquivo de áudio pelo Gemini');
+      throw new Error('Falha no processamento do arquivo pelo Gemini');
     }
 
     audioPart = { fileData: { fileUri: file.uri!, mimeType } };
   }
 
-  // Modelos suportados pela Google GenAI SDK com fallback automático
-  const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+  // Restaurado modelo padrão gemini-2.5-flash com fallbacks (gemini-2.0-flash, gemini-1.5-flash)
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   let lastError: any = null;
 
   for (const modelName of modelsToTry) {
     try {
-      console.log(`[Gemini] Tentando gerar conteúdo com modelo ${modelName}...`);
+      console.log(`[Gemini] Tentando modelo ${modelName}...`);
       const response = await ai.models.generateContent({
         model: modelName,
         contents: [
@@ -139,5 +139,5 @@ export async function transcribeAudio(filePath: string): Promise<{
     }
   }
 
-  throw lastError || new Error('Não foi possível transcrever com nenhum dos modelos Gemini.');
+  throw lastError || new Error('Falha na autenticação ou modelos Gemini.');
 }

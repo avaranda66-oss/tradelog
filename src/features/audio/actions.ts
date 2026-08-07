@@ -88,7 +88,11 @@ export async function transcribeAudioRecord(audioId: string) {
 
     return result;
   } catch (error: any) {
-    const errorMsg = error?.message || String(error);
+    let errorMsg = error?.message || String(error);
+    if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
+      errorMsg = 'A chave GEMINI_API_KEY no arquivo .env.local é inválida ou expirou. Por favor, atualize com uma nova chave válida do aistudio.google.com.';
+    }
+
     await db.update(audioRecords)
       .set({
         status: 'error',
