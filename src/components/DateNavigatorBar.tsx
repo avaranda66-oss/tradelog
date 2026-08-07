@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { IconArrowUp, IconArrowDown } from '@/components/ui/icons';
 
 /**
  * Converte string 'YYYY-MM-DD' para objeto Date local (evitando timezone offset UTC)
@@ -37,39 +36,34 @@ export function DateNavigatorBar() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
+  const todayISO = formatDateISO(new Date());
   const currentDateParam = searchParams.get('date');
-  const [selectedDate, setSelectedDate] = useState<Date>(() => {
-    return currentDateParam ? parseDateISO(currentDateParam) : new Date();
-  });
 
-  useEffect(() => {
-    if (currentDateParam) {
-      setSelectedDate(parseDateISO(currentDateParam));
-    }
-  }, [currentDateParam]);
+  // Fonte da verdade derivada da URL (ou HOJE caso não esteja na URL)
+  const activeDateISO = currentDateParam || todayISO;
+  const selectedDate = parseDateISO(activeDateISO);
+  const isToday = activeDateISO === todayISO;
 
-  const handleDateChange = (newDate: Date) => {
-    setSelectedDate(newDate);
-    const dateStr = formatDateISO(newDate);
+  const handleDateChange = (newDateISO: string) => {
     const params = new URLSearchParams(searchParams.toString());
-    params.set('date', dateStr);
+    params.set('date', newDateISO);
     router.push(`${pathname}?${params.toString()}`);
   };
 
   const handlePrevDay = () => {
     const prev = new Date(selectedDate);
     prev.setDate(prev.getDate() - 1);
-    handleDateChange(prev);
+    handleDateChange(formatDateISO(prev));
   };
 
   const handleNextDay = () => {
     const next = new Date(selectedDate);
     next.setDate(next.getDate() + 1);
-    handleDateChange(next);
+    handleDateChange(formatDateISO(next));
   };
 
   const handleToday = () => {
-    handleDateChange(new Date());
+    handleDateChange(todayISO);
   };
 
   const dayNum = String(selectedDate.getDate()).padStart(2, '0');
@@ -80,6 +74,7 @@ export function DateNavigatorBar() {
 
   return (
     <div className="flex items-center gap-1.5 bg-[#070a10] px-2.5 py-1 rounded-md border border-slate-800/80 font-mono">
+      {/* Dia Anterior */}
       <button
         onClick={handlePrevDay}
         type="button"
@@ -91,14 +86,20 @@ export function DateNavigatorBar() {
         </svg>
       </button>
 
+      {/* Botão HOJE */}
       <button
         onClick={handleToday}
         type="button"
-        className="px-2 py-0.5 text-[10px] font-bold text-slate-400 hover:text-teal-400 border border-slate-800 rounded transition-colors tracking-wider"
+        className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all tracking-wider ${
+          isToday
+            ? 'bg-teal-500/20 text-teal-400 border border-teal-500/40 shadow-[0_0_8px_rgba(45,212,191,0.2)]'
+            : 'text-slate-400 hover:text-teal-400 border border-slate-800'
+        }`}
       >
         HOJE
       </button>
 
+      {/* Próximo Dia */}
       <button
         onClick={handleNextDay}
         type="button"
@@ -110,17 +111,19 @@ export function DateNavigatorBar() {
         </svg>
       </button>
 
+      {/* Input de Data */}
       <input
         type="date"
-        value={formatDateISO(selectedDate)}
+        value={activeDateISO}
         onChange={(e) => {
           if (e.target.value) {
-            handleDateChange(parseDateISO(e.target.value));
+            handleDateChange(e.target.value);
           }
         }}
         className="bg-[#0b1018] border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-teal-500/60 tabular-nums cursor-pointer"
       />
 
+      {/* Label Formatada da Data */}
       <span className="hidden md:inline-block text-[10px] font-bold text-teal-400/90 tracking-wider pl-1 border-l border-slate-800/80">
         {dateFormattedLabel}
       </span>
