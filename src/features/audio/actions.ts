@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { audioRecords, tradingDays } from '@/lib/db/schema';
+import { audioRecords, tradingDays, trades } from '@/lib/db/schema';
 import { generateId, todayISO } from '@/lib/utils';
 import { transcribeAudio } from '@/lib/gemini';
 import { eq, and } from 'drizzle-orm';
@@ -87,7 +87,38 @@ export async function transcribeAudioRecord(audioId: string, forceRetry = false)
 
   try {
     const fullPath = path.join(process.cwd(), 'data', record.filePath);
-    const result = await transcribeAudio(fullPath);
+    
+    // Extrai a hora de início da gravação (ex: 09:04:54)
+    let startMarketTime = '09:04:54';
+    if (record.filePath) {
+      const match = record.filePath.match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/);
+      if (match) {
+        const parts = match[1].split('T')[1].split('-');
+        startMarketTime = `${parts[0]}:${parts[1]}:${parts[2]}`;
+      }
+    }
+
+    // Busca dados do dia e trades para alimentar o Gemini com o contexto real
+    let dayContext = '';
+    if (record.tradingDayId) {
+      const day = await db.query.tradingDays.findFirst({
+        where: eq(tradingDays.id, record.tradingDayId),
+      });
+      const dayTrades = await db.query.trades.findMany({
+        where: eq(trades.tradingDayId, record.tradingDayId),
+      });
+
+      if (day) {
+        dayContext += `Dia: ${day.date} | Acordou: ${day.wakeUpTime || '—'} | Viés: ${day.generalBias || '—'} | Calendário: ${day.macroCalendar || '—'}\n`;
+      }
+      if (dayTrades && dayTrades.length > 0) {
+        dayContext += `Trades Executados no Dia:\n` + dayTrades.map(t => 
+          `• Trade #${t.tradeNumber} [${t.side === 'C' ? 'COMPRA' : 'VENDA'}]: Horário ${t.openTime} -> ${t.closeTime}, Entrada: ${t.entryPrice}, Saída: ${t.exitPrice}, Resultado: ${t.points} pts (R$ ${t.reais})`
+        ).join('\n');
+      }
+    }
+
+    const result = await transcribeAudio(fullPath, startMarketTime, dayContext);
 
     await db.update(audioRecords)
       .set({
