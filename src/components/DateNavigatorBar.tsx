@@ -2,6 +2,8 @@
 
 import React from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import Link from 'next/link';
+import { IconChart } from '@/components/ui/icons';
 
 /**
  * Converte string 'YYYY-MM-DD' para objeto Date local (evitando timezone offset UTC)
@@ -39,10 +41,9 @@ export function DateNavigatorBar() {
   const todayISO = formatDateISO(new Date());
   const currentDateParam = searchParams.get('date');
 
-  // Fonte da verdade derivada da URL (ou HOJE caso não esteja na URL)
+  // Fonte da verdade derivada da URL (ou HOJE por padrão caso não esteja na URL)
   const activeDateISO = currentDateParam || todayISO;
   const selectedDate = parseDateISO(activeDateISO);
-  const isToday = activeDateISO === todayISO;
 
   const handleDateChange = (newDateISO: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -62,10 +63,6 @@ export function DateNavigatorBar() {
     handleDateChange(formatDateISO(next));
   };
 
-  const handleToday = () => {
-    handleDateChange(todayISO);
-  };
-
   const dayNum = String(selectedDate.getDate()).padStart(2, '0');
   const monthName = MONTH_NAMES[selectedDate.getMonth()];
   const yearNum = selectedDate.getFullYear();
@@ -73,60 +70,59 @@ export function DateNavigatorBar() {
   const dateFormattedLabel = `${dayNum} ${monthName} ${yearNum} // ${weekdayName}`;
 
   return (
-    <div className="flex items-center gap-1.5 bg-[#070a10] px-2.5 py-1 rounded-md border border-slate-800/80 font-mono">
-      {/* Dia Anterior */}
-      <button
-        onClick={handlePrevDay}
-        type="button"
-        className="p-1 text-slate-400 hover:text-teal-400 transition-colors"
-        title="Dia Anterior"
+    <div className="flex items-center gap-2 font-mono">
+      <div className="flex items-center gap-1.5 bg-[#070a10] px-2.5 py-1 rounded-md border border-slate-800/80">
+        {/* Dia Anterior */}
+        <button
+          onClick={handlePrevDay}
+          type="button"
+          className="p-1 text-slate-400 hover:text-teal-400 transition-colors"
+          title="Dia Anterior"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+
+        {/* Input de Data */}
+        <input
+          type="date"
+          value={activeDateISO}
+          onChange={(e) => {
+            if (e.target.value) {
+              handleDateChange(e.target.value);
+            }
+          }}
+          className="bg-[#0b1018] border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-teal-500/60 tabular-nums cursor-pointer"
+        />
+
+        {/* Próximo Dia */}
+        <button
+          onClick={handleNextDay}
+          type="button"
+          className="p-1 text-slate-400 hover:text-teal-400 transition-colors"
+          title="Próximo Dia"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+
+        {/* Label Formatada da Data */}
+        <span className="hidden md:inline-block text-[10px] font-bold text-teal-400/90 tracking-wider pl-1 border-l border-slate-800/80">
+          {dateFormattedLabel}
+        </span>
+      </div>
+
+      {/* Botão de Atalho para o Calendário P&L */}
+      <Link
+        href={`/calendario?date=${activeDateISO}`}
+        className="flex items-center gap-1.5 px-2.5 py-1 bg-[#070a10] hover:bg-slate-800 text-slate-300 hover:text-teal-400 border border-slate-800 rounded-md text-[10px] font-bold tracking-wider transition-all"
+        title="Abrir Calendário de Resultados"
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M15 18l-6-6 6-6" />
-        </svg>
-      </button>
-
-      {/* Botão HOJE */}
-      <button
-        onClick={handleToday}
-        type="button"
-        className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all tracking-wider ${
-          isToday
-            ? 'bg-teal-500/20 text-teal-400 border border-teal-500/40 shadow-[0_0_8px_rgba(45,212,191,0.2)]'
-            : 'text-slate-400 hover:text-teal-400 border border-slate-800'
-        }`}
-      >
-        HOJE
-      </button>
-
-      {/* Próximo Dia */}
-      <button
-        onClick={handleNextDay}
-        type="button"
-        className="p-1 text-slate-400 hover:text-teal-400 transition-colors"
-        title="Próximo Dia"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M9 18l6-6-6-6" />
-        </svg>
-      </button>
-
-      {/* Input de Data */}
-      <input
-        type="date"
-        value={activeDateISO}
-        onChange={(e) => {
-          if (e.target.value) {
-            handleDateChange(e.target.value);
-          }
-        }}
-        className="bg-[#0b1018] border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-teal-500/60 tabular-nums cursor-pointer"
-      />
-
-      {/* Label Formatada da Data */}
-      <span className="hidden md:inline-block text-[10px] font-bold text-teal-400/90 tracking-wider pl-1 border-l border-slate-800/80">
-        {dateFormattedLabel}
-      </span>
+        <IconChart width={12} height={12} className="text-teal-400" />
+        <span className="hidden sm:inline">CALENDÁRIO P&L</span>
+      </Link>
     </div>
   );
 }

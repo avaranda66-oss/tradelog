@@ -10,7 +10,7 @@ import {
 export interface NavItem {
   href: string;
   label: string;
-  code: string; // ex: "01"
+  code: string;
   icon?: ReactNode;
 }
 
@@ -18,16 +18,17 @@ export interface SidebarProps {
   items?: NavItem[];
   activePath?: string;
   collapsed?: boolean;
-  sessionLabel?: string; // ex: "PRE-MARKET" | "OPEN" | "CLOSED"
+  sessionLabel?: string;
 }
 
 const DEFAULT_ITEMS: NavItem[] = [
   { href: "/", label: "Estúdio Command", code: "01", icon: <IconTerminal /> },
   { href: "/diario", label: "Diário de Trades", code: "02", icon: <IconJournal /> },
-  { href: "/operacoes", label: "Operações & Trades", code: "03", icon: <IconChart /> },
-  { href: "/analytics", label: "Analytics & Métricas", code: "04", icon: <IconTarget /> },
-  { href: "/audios", label: "Estúdio de Áudios", code: "05", icon: <IconUpload /> },
-  { href: "/database", label: "Banco SQLite", code: "06", icon: <IconScale /> },
+  { href: "/calendario", label: "Calendário P&L", code: "03", icon: <IconChart /> },
+  { href: "/operacoes", label: "Operações & Trades", code: "04", icon: <IconChart /> },
+  { href: "/analytics", label: "Analytics & Métricas", code: "05", icon: <IconTarget /> },
+  { href: "/audios", label: "Estúdio de Áudios", code: "06", icon: <IconUpload /> },
+  { href: "/database", label: "Banco SQLite", code: "07", icon: <IconScale /> },
 ];
 
 export function Sidebar({
