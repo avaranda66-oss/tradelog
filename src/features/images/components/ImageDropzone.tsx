@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { uploadTradeImage, deleteTradeImage, updateTradeImageCaption } from '@/features/images/actions';
+import { uploadTradeImage, deleteTradeImage, updateTradeImageCaption, analyzeImageWithVision } from '@/features/images/actions';
 
 interface ImageItem {
   id: string;
@@ -160,6 +160,25 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
     }
   }
 
+  const [analyzingAi, setAnalyzingAi] = useState(false);
+
+  async function handleAnalyzeAi() {
+    if (!selectedImage) return;
+    setAnalyzingAi(true);
+    try {
+      const res = await analyzeImageWithVision(selectedImage.id);
+      if (res && res.caption) {
+        setEditingCaption(res.caption);
+        setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, caption: res.caption } : img));
+        setSelectedImage(prev => prev ? { ...prev, caption: res.caption } : null);
+      }
+    } catch (err) {
+      console.error('Erro ao analisar imagem via Vision AI:', err);
+    } finally {
+      setAnalyzingAi(false);
+    }
+  }
+
   return (
     <div className="space-y-3 font-mono">
       {/* Header com contador e atalho Ctrl+V */}
@@ -276,7 +295,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
         )}
       </div>
 
-      {/* Modal Expandido com Edição de Legenda/Descrição Abaixo da Imagem */}
+      {/* Modal Expandido com Edição de Legenda/Descrição Abaixo da Imagem + Botão Opcional de IA */}
       {selectedImage && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4"
@@ -326,7 +345,7 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                   <span>DESCRIÇÃO & EXPLICAÇÃO TÉCNICA DESTE PRINT</span>
                 </label>
                 <span className="text-[10px] text-slate-500 font-sans">
-                  Escreva e edite livremente sua observação sobre esta imagem
+                  Escreva livremente ou use o botão de IA opcional
                 </span>
               </div>
 
@@ -348,14 +367,25 @@ export function ImageDropzone({ tradeId, date, images: initialImages, onUploaded
                   </span>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleSaveCaption}
-                  disabled={savingCaption}
-                  className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
-                >
-                  {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeAi}
+                    disabled={analyzingAi}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                  >
+                    {analyzingAi ? '🤖 ANALISANDO IA...' : '✨ ANALISAR COM IA (GEMINI)'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveCaption}
+                    disabled={savingCaption}
+                    className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                  >
+                    {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

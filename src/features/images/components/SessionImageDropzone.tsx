@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { uploadSessionImage, deleteTradeImage, getSessionImages, updateTradeImageCaption } from '@/features/images/actions';
+import { uploadSessionImage, deleteTradeImage, getSessionImages, updateTradeImageCaption, analyzeImageWithVision } from '@/features/images/actions';
 
 interface ImageItem {
   id: string;
@@ -157,6 +157,25 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
       console.error('Erro ao salvar descrição do gráfico da sessão:', err);
     } finally {
       setSavingCaption(false);
+    }
+  }
+
+  const [analyzingAi, setAnalyzingAi] = useState(false);
+
+  async function handleAnalyzeAi() {
+    if (!selectedImage) return;
+    setAnalyzingAi(true);
+    try {
+      const res = await analyzeImageWithVision(selectedImage.id);
+      if (res && res.caption) {
+        setEditingCaption(res.caption);
+        setImages(prev => prev.map(img => img.id === selectedImage.id ? { ...img, caption: res.caption } : img));
+        setSelectedImage(prev => prev ? { ...prev, caption: res.caption } : null);
+      }
+    } catch (err) {
+      console.error('Erro ao analisar imagem via Vision AI:', err);
+    } finally {
+      setAnalyzingAi(false);
     }
   }
 
@@ -321,7 +340,7 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
                   <span>DESCRIÇÃO & EXPLICAÇÃO TÉCNICA DESTE GRÁFICO</span>
                 </label>
                 <span className="text-[10px] text-slate-500 font-sans">
-                  Escreva e edite livremente sua observação sobre esta imagem
+                  Escreva livremente ou use o botão de IA opcional
                 </span>
               </div>
 
@@ -343,14 +362,25 @@ export function SessionImageDropzone({ tradingDayId, date }: SessionImageDropzon
                   </span>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleSaveCaption}
-                  disabled={savingCaption}
-                  className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
-                >
-                  {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeAi}
+                    disabled={analyzingAi}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                  >
+                    {analyzingAi ? '🤖 ANALISANDO IA...' : '✨ ANALISAR COM IA (GEMINI)'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveCaption}
+                    disabled={savingCaption}
+                    className="px-4 py-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-md transition-all flex items-center gap-1.5 disabled:opacity-50 font-mono uppercase"
+                  >
+                    {savingCaption ? 'SALVANDO...' : '💾 SALVAR DESCRIÇÃO'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

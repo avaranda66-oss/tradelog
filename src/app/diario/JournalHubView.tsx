@@ -20,6 +20,47 @@ interface JournalHubViewProps {
   levels?: (typeof keyLevels.$inferSelect)[];
 }
 
+function calculateSleepDuration(sleepTime?: string | null, wakeUpTime?: string | null): string {
+  if (!sleepTime || !wakeUpTime) return '—';
+  const [sH, sM] = sleepTime.split(':').map(Number);
+  const [wH, wM] = wakeUpTime.split(':').map(Number);
+  if (isNaN(sH) || isNaN(sM) || isNaN(wH) || isNaN(wM)) return '—';
+
+  let startMinutes = sH * 60 + sM;
+  let endMinutes = wH * 60 + wM;
+
+  if (endMinutes <= startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  const diffMinutes = endMinutes - startMinutes;
+  const hours = Math.floor(diffMinutes / 60);
+  const mins = diffMinutes % 60;
+
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}min`;
+}
+
+function calculatePrepTime(wakeUpTime?: string | null, marketOpenTime: string = '09:00'): string {
+  if (!wakeUpTime) return '—';
+  const [wH, wM] = wakeUpTime.split(':').map(Number);
+  const [mH, mM] = marketOpenTime.split(':').map(Number);
+  if (isNaN(wH) || isNaN(wM) || isNaN(mH) || isNaN(mM)) return '—';
+
+  const startMinutes = wH * 60 + wM;
+  const openMinutes = mH * 60 + mM;
+
+  if (startMinutes >= openMinutes) return '0 min (acordou pós 09:00)';
+
+  const diffMinutes = openMinutes - startMinutes;
+  const hours = Math.floor(diffMinutes / 60);
+  const mins = diffMinutes % 60;
+
+  if (hours === 0) return `${mins} min de estudo`;
+  if (mins === 0) return `${hours}h de estudo`;
+  return `${hours}h ${mins}min de estudo`;
+}
+
 export function JournalHubView({ day, date, trades, allTrades = [], audios, allAudios = [], levels = [] }: JournalHubViewProps) {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
@@ -139,35 +180,116 @@ export function JournalHubView({ day, date, trades, allTrades = [], audios, allA
         {/* COLUNA DIREITA (5 colunas): Contexto do Pregão, Níveis & Transcrições */}
         <div className="lg:col-span-5 space-y-4 font-mono">
           {/* Pré-Market & Plano do Dia */}
-          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3 shadow-xl">
-            <span className="text-[9px] text-slate-500 uppercase tracking-widest font-bold block border-b border-slate-800/80 pb-2">
-              CONTEXTO & PLANO MATINAL
-            </span>
+          <div className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3 shadow-xl font-mono">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-bold block">
+                CONTEXTO & PLANO MATINAL
+              </span>
+              {day?.generalBias && (
+                <span className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase border ${
+                  day.generalBias === 'alta'
+                    ? 'bg-teal-500/10 text-teal-400 border-teal-500/30'
+                    : day.generalBias === 'baixa'
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                    : 'bg-slate-800 text-slate-300 border-slate-700'
+                }`}>
+                  VIÉS: {day.generalBias}
+                </span>
+              )}
+            </div>
 
             {day ? (
-              <div className="space-y-2.5 text-xs">
-                <div className="grid grid-cols-2 gap-2 bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 font-mono tabular-nums">
+              <div className="space-y-3 text-xs">
+                {/* Métricas de Rotina e Sono (Cálculo Automático) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 tabular-nums">
                   <div>
-                    <span className="text-slate-500 block text-[9px] uppercase font-bold">WAKE TIME</span>
-                    <span className="font-semibold text-slate-300">{day.wakeUpTime || '06:30'}</span>
+                    <span className="text-slate-500 block text-[9px] uppercase font-bold">DORMIU</span>
+                    <span className="font-semibold text-slate-300">{day.sleepTime || '—'}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[9px] uppercase font-bold">DAY BIAS</span>
-                    <span className="font-semibold text-teal-400 uppercase">{day.generalBias || 'Alta'}</span>
+                    <span className="text-slate-500 block text-[9px] uppercase font-bold">ACORDOU</span>
+                    <span className="font-semibold text-slate-300">{day.wakeUpTime || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase font-bold">HORAS SONO</span>
+                    <span className="font-semibold text-teal-400">{calculateSleepDuration(day.sleepTime, day.wakeUpTime)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase font-bold">PREP. PRÉ-MARKET</span>
+                    <span className="font-semibold text-teal-300">{calculatePrepTime(day.wakeUpTime)}</span>
                   </div>
                 </div>
 
+                {/* Qualidade do Sono e Estado Mental */}
+                {(day.sleepQuality || day.mentalState) && (
+                  <div className="grid grid-cols-2 gap-2 bg-[#070a10] p-2.5 rounded-md border border-slate-800/80">
+                    {day.sleepQuality && (
+                      <div>
+                        <span className="text-slate-500 block text-[9px] uppercase font-bold">QUALIDADE SONO</span>
+                        <span className="font-bold text-amber-400">{day.sleepQuality} / 5 ★</span>
+                      </div>
+                    )}
+                    {day.mentalState && (
+                      <div>
+                        <span className="text-slate-500 block text-[9px] uppercase font-bold">ESTADO MENTAL</span>
+                        <span className="font-bold text-slate-200 truncate block">{day.mentalState}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Calendário Macro & Drivers */}
+                {day.macroCalendar && (
+                  <div className="bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 space-y-0.5">
+                    <span className="text-[9px] text-amber-400 uppercase font-bold flex items-center gap-1">
+                      <span>📅</span>
+                      <span>CALENDÁRIO MACRO & DRIVERS</span>
+                    </span>
+                    <p className="text-slate-300 font-mono text-xs whitespace-pre-line">{day.macroCalendar}</p>
+                  </div>
+                )}
+
+                {/* Cenário Overnight */}
+                {day.overnightNote && (
+                  <div className="bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 space-y-0.5">
+                    <span className="text-[9px] text-teal-400 uppercase font-bold flex items-center gap-1">
+                      <span>🌐</span>
+                      <span>CENÁRIO OVERNIGHT & ASIA/EUROPA</span>
+                    </span>
+                    <p className="text-slate-300 font-sans text-xs whitespace-pre-line">{day.overnightNote}</p>
+                  </div>
+                )}
+
+                {/* Farol do Mercado Snapshot */}
+                {(day.farolBias || day.farolKeyLevels) && (
+                  <div className="bg-[#070a10] p-2.5 rounded-md border border-teal-500/30 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] text-teal-400 uppercase font-bold flex items-center gap-1">
+                        <span>🚦</span>
+                        <span>FAROL DO MERCADO SNAPSHOT</span>
+                      </span>
+                      {day.farolBias && (
+                        <span className="text-[9px] font-bold text-teal-300">{day.farolBias}</span>
+                      )}
+                    </div>
+                    {day.farolKeyLevels && (
+                      <p className="text-slate-300 font-mono text-[11px]">{day.farolKeyLevels}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Nota Pessoal Matinal (Limpa de duplicações) */}
                 {day.personalNote && (
                   <div className="bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 space-y-0.5">
-                    <span className="text-[9px] text-slate-500 uppercase font-bold">NOTA PESSOAL</span>
-                    <p className="text-slate-300 font-sans text-xs">"{day.personalNote}"</p>
+                    <span className="text-[9px] text-slate-500 uppercase font-bold">NOTA PESSOAL MATINAL</span>
+                    <p className="text-slate-300 font-sans text-xs">"{day.personalNote.replace(/\[Dormiu:.*?\]/g, '').trim()}"</p>
                   </div>
                 )}
 
                 {day.honestPhrase && (
                   <div className="bg-[#070a10] p-2.5 rounded-md border border-slate-800/80 space-y-0.5">
-                    <span className="text-[9px] text-slate-500 uppercase font-bold">FRASE BRUTALMENTE HONESTA</span>
-                    <p className="text-rose-400 font-mono text-xs">"{day.honestPhrase}"</p>
+                    <span className="text-[9px] text-rose-400 uppercase font-bold">REGRA / FRASE HONESTA</span>
+                    <p className="text-rose-300 font-mono text-xs">"{day.honestPhrase}"</p>
                   </div>
                 )}
               </div>
