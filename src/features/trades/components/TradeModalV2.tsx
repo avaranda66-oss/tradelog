@@ -5,6 +5,7 @@ import type { Trade, TradeImage } from '@/lib/db/schema';
 import { updateTradeNotes, deleteTrade } from '@/features/trades/actions';
 import { getTradeImages } from '@/features/images/actions';
 import { ImageDropzone } from '@/features/images/components/ImageDropzone';
+import { StrategySelector } from '@/components/ui/StrategySelector';
 import { IconChart, IconTarget, IconScale, IconCamera, IconMic, IconCheck } from '@/components/ui/icons';
 
 const EMOTIONS_PRE = [
@@ -154,22 +155,35 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
   }
 
   function PillSelector({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+    const selectedList = value ? value.split(/\s*\|\s*/).filter(Boolean) : [];
     return (
       <div className="flex flex-wrap gap-1 font-mono">
-        {options.map(opt => (
-          <button
-            key={opt}
-            type="button"
-            onClick={() => onChange(value === opt ? '' : opt)}
-            className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
-              value === opt
-                ? 'bg-teal-500/15 text-teal-400 border-teal-500/30'
-                : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:border-slate-700 hover:text-slate-400'
-            }`}
-          >
-            {opt}
-          </button>
-        ))}
+        {options.map(opt => {
+          const isSelected = selectedList.includes(opt);
+          return (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => {
+                if (isSelected) {
+                  const updated = selectedList.filter(s => s !== opt).join(' | ');
+                  onChange(updated);
+                } else {
+                  const updated = [...selectedList, opt].join(' | ');
+                  onChange(updated);
+                }
+              }}
+              className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all flex items-center gap-1 ${
+                isSelected
+                  ? 'bg-teal-500/20 text-teal-300 border-teal-500/50 shadow-[0_0_8px_rgba(45,212,191,0.2)]'
+                  : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:border-slate-700 hover:text-slate-400'
+              }`}
+            >
+              {isSelected && <span className="text-teal-400 font-bold">✓</span>}
+              <span>{opt}</span>
+            </button>
+          );
+        })}
       </div>
     );
   }
@@ -367,8 +381,8 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
           {activeTab === 'pre' && (
             <div className="space-y-4 font-mono">
               <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Estratégia / Setup</label>
-                <PillSelector options={STRATEGIES} value={form.strategy} onChange={(v) => updateForm('strategy', v)} />
+                <label className="text-[10px] text-slate-400 font-bold uppercase">Estratégia / Setup (Multi-Seleção & CRUD)</label>
+                <StrategySelector value={form.strategy} onChange={(v) => updateForm('strategy', v)} />
               </div>
 
               <div className="space-y-1">

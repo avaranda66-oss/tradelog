@@ -168,6 +168,14 @@ export const videoRecords = sqliteTable('video_records', {
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
 });
 
+// ─── Custom Strategies ─────────────────────────────────────────
+export const customStrategies = sqliteTable('custom_strategies', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  category: text('category').default('geral'),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+});
+
 // ─── Types ───────────────────────────────────────────────────
 export type TradingDay = typeof tradingDays.$inferSelect;
 export type NewTradingDay = typeof tradingDays.$inferInsert;
@@ -177,3 +185,4 @@ export type TradeImage = typeof tradeImages.$inferSelect;
 export type CandleData = typeof candleData.$inferSelect;
 export type AudioRecord = typeof audioRecords.$inferSelect;
 export type VideoRecord = typeof videoRecords.$inferSelect;
+export type CustomStrategy = typeof customStrategies.$inferSelect;
