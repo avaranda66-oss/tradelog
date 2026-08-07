@@ -176,6 +176,14 @@ export const customStrategies = sqliteTable('custom_strategies', {
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
 });
 
+// ─── Custom Tags (Setups, Emocionais, Regimes, Stops, Fases) ───
+export const customTags = sqliteTable('custom_tags', {
+  id: text('id').primaryKey(),
+  category: text('category').notNull(),
+  name: text('name').notNull(),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+});
+
 // ─── Types ───────────────────────────────────────────────────
 export type TradingDay = typeof tradingDays.$inferSelect;
 export type NewTradingDay = typeof tradingDays.$inferInsert;
@@ -186,3 +194,4 @@ export type CandleData = typeof candleData.$inferSelect;
 export type AudioRecord = typeof audioRecords.$inferSelect;
 export type VideoRecord = typeof videoRecords.$inferSelect;
 export type CustomStrategy = typeof customStrategies.$inferSelect;
+export type CustomTag = typeof customTags.$inferSelect;

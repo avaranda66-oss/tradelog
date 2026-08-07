@@ -6,6 +6,7 @@ import { updateTradeNotes, deleteTrade } from '@/features/trades/actions';
 import { getTradeImages } from '@/features/images/actions';
 import { ImageDropzone } from '@/features/images/components/ImageDropzone';
 import { StrategySelector } from '@/components/ui/StrategySelector';
+import { TagGroupSelector } from '@/components/ui/TagGroupSelector';
 import { IconArrowUp, IconArrowDown, IconCheck } from '@/components/ui/icons';
 
 const STRATEGIES = ['Rompimento', 'Pullback', 'VWAP Revert', 'Fluxo', 'Scalp', 'Momentum', 'Contra-Tendência', 'Abertura'];
@@ -304,10 +305,13 @@ export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
                 <StrategySelector value={form.strategy} onChange={(v) => updateForm('strategy', v)} />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase font-bold">Tipo de Entrada</label>
-                <PillSelector options={ENTRY_TYPES} value={form.entryType} onChange={(v) => updateForm('entryType', v)} />
-              </div>
+              <TagGroupSelector
+                category="entry_type"
+                label="Tipo de Entrada"
+                value={form.entryType}
+                onChange={(v) => updateForm('entryType', v)}
+                defaultOptions={['Breakout', 'Pullback', 'Reversão', 'Scalp', 'Momentum', 'Contra-Tendência', 'Abertura Ações', 'Abertura Mercado Americano', 'Região ADR']}
+              />
 
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-400 uppercase font-bold">Tese do Trade (O que pensei antes)</label>
@@ -324,20 +328,29 @@ export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
           {inlineTab === 'durante' && (
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase font-bold">Regime de Mercado</label>
-                  <PillSelector options={MARKET_REGIMES} value={form.marketRegime} onChange={(v) => updateForm('marketRegime', v)} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase font-bold">Fase do Pregão</label>
-                  <PillSelector options={DAY_PHASES} value={form.dayPhase} onChange={(v) => updateForm('dayPhase', v)} />
-                </div>
+                <TagGroupSelector
+                  category="market_regime"
+                  label="Regime de Mercado"
+                  value={form.marketRegime}
+                  onChange={(v) => updateForm('marketRegime', v)}
+                  defaultOptions={['Tendência', 'Range', 'Chop', 'Volatilidade', 'Abertura', 'Pós-Payroll', 'Reversão Macro']}
+                />
+                <TagGroupSelector
+                  category="day_phase"
+                  label="Fase do Pregão"
+                  value={form.dayPhase}
+                  onChange={(v) => updateForm('dayPhase', v)}
+                  defaultOptions={['Pré-Abertura', 'Abertura B3 (10h)', 'Abertura EUA (NYSE)', 'Meio Pregão', 'Fechamento']}
+                />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase font-bold">Tipo de Stop</label>
-                <PillSelector options={STOP_TYPES} value={form.stopType} onChange={(v) => updateForm('stopType', v)} />
-              </div>
+              <TagGroupSelector
+                category="stop_type"
+                label="Tipo de Stop"
+                value={form.stopType}
+                onChange={(v) => updateForm('stopType', v)}
+                defaultOptions={['Técnico', 'Financeiro', 'Temporal', 'Trail', 'Breakeven', 'Nível GEX']}
+              />
 
               {/* Gestão da Operação */}
               <div className="space-y-1">
@@ -374,7 +387,13 @@ export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
           {/* Tab: Pós-Trade */}
           {inlineTab === 'pos' && (
             <div className="space-y-3 font-mono">
-              <StarRating label="Qualidade" value={form.tradeQuality} onChange={(v) => updateForm('tradeQuality', v)} />
+              <TagGroupSelector
+                category="emotion_post"
+                label="Estado Emocional Pós-Trade"
+                value={form.emotionalPost}
+                onChange={(v) => updateForm('emotionalPost', v)}
+                defaultOptions={['Calmo', 'Satisfeito', 'Centrado', 'Neutro', 'Frustrado', 'Aliviado', 'Arrependido', 'Eufórico']}
+              />
 
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-400 uppercase font-bold">O que vi NA HORA</label>

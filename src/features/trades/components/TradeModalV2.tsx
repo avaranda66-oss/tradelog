@@ -6,6 +6,7 @@ import { updateTradeNotes, deleteTrade } from '@/features/trades/actions';
 import { getTradeImages } from '@/features/images/actions';
 import { ImageDropzone } from '@/features/images/components/ImageDropzone';
 import { StrategySelector } from '@/components/ui/StrategySelector';
+import { TagGroupSelector } from '@/components/ui/TagGroupSelector';
 import { IconChart, IconTarget, IconScale, IconCamera, IconMic, IconCheck } from '@/components/ui/icons';
 
 const EMOTIONS_PRE = [
@@ -385,30 +386,21 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
                 <StrategySelector value={form.strategy} onChange={(v) => updateForm('strategy', v)} />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Estado Emocional Pré-Trade</label>
-                <div className="flex flex-wrap gap-1 font-mono">
-                  {EMOTIONS_PRE.map(emo => (
-                    <button
-                      key={emo.value}
-                      type="button"
-                      onClick={() => updateForm('emotionalPre', form.emotionalPre === emo.value ? '' : emo.value)}
-                      className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                        form.emotionalPre === emo.value
-                          ? 'bg-teal-500/15 text-teal-400 border-teal-500/30'
-                          : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:border-slate-700'
-                      }`}
-                    >
-                      {emo.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <TagGroupSelector
+                category="emotion_pre"
+                label="Estado Emocional Pré-Trade"
+                value={form.emotionalPre}
+                onChange={(v) => updateForm('emotionalPre', v)}
+                defaultOptions={['Confiante', 'Centrado', 'Neutro', 'Focado', 'Ansioso', 'FOMO', 'Revenge', 'Medo', 'Euforia']}
+              />
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Tipo de Entrada</label>
-                <PillSelector options={ENTRY_TYPES} value={form.entryType} onChange={(v) => updateForm('entryType', v)} />
-              </div>
+              <TagGroupSelector
+                category="entry_type"
+                label="Tipo de Entrada"
+                value={form.entryType}
+                onChange={(v) => updateForm('entryType', v)}
+                defaultOptions={['Breakout', 'Pullback', 'Reversão', 'Scalp', 'Momentum', 'Contra-Tendência', 'Abertura Ações', 'Abertura Mercado Americano', 'Região ADR']}
+              />
 
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-400 font-bold uppercase">Tese do Trade (Antes de entrar)</label>
@@ -428,21 +420,30 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
           {activeTab === 'durante' && (
             <div className="space-y-4 font-mono">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 font-bold uppercase">Regime de Mercado</label>
-                  <PillSelector options={MARKET_REGIMES} value={form.marketRegime} onChange={(v) => updateForm('marketRegime', v)} />
-                </div>
+                <TagGroupSelector
+                  category="market_regime"
+                  label="Regime de Mercado"
+                  value={form.marketRegime}
+                  onChange={(v) => updateForm('marketRegime', v)}
+                  defaultOptions={['Tendência', 'Range', 'Chop', 'Volatilidade', 'Abertura', 'Pós-Payroll', 'Reversão Macro']}
+                />
 
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 font-bold uppercase">Fase do Pregão</label>
-                  <PillSelector options={DAY_PHASES} value={form.dayPhase} onChange={(v) => updateForm('dayPhase', v)} />
-                </div>
+                <TagGroupSelector
+                  category="day_phase"
+                  label="Fase do Pregão"
+                  value={form.dayPhase}
+                  onChange={(v) => updateForm('dayPhase', v)}
+                  defaultOptions={['Pré-Abertura', 'Abertura B3 (10h)', 'Abertura EUA (NYSE)', 'Meio Pregão', 'Fechamento']}
+                />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Tipo de Stop</label>
-                <PillSelector options={STOP_TYPES} value={form.stopType} onChange={(v) => updateForm('stopType', v)} />
-              </div>
+              <TagGroupSelector
+                category="stop_type"
+                label="Tipo de Stop"
+                value={form.stopType}
+                onChange={(v) => updateForm('stopType', v)}
+                defaultOptions={['Técnico', 'Financeiro', 'Temporal', 'Trail', 'Breakeven', 'Nível GEX']}
+              />
 
               {/* Gestão da Operação */}
               <div className="space-y-1">
@@ -483,25 +484,13 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
           {/* ABA PÓS-TRADE */}
           {activeTab === 'pos' && (
             <div className="space-y-4 font-mono">
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Estado Emocional Pós-Trade</label>
-                <div className="flex flex-wrap gap-1 font-mono">
-                  {EMOTIONS_POST.map(emo => (
-                    <button
-                      key={emo.value}
-                      type="button"
-                      onClick={() => updateForm('emotionalPost', form.emotionalPost === emo.value ? '' : emo.value)}
-                      className={`px-2.5 py-1 rounded-md text-[10px] font-bold border transition-all ${
-                        form.emotionalPost === emo.value
-                          ? 'bg-teal-500/15 text-teal-400 border-teal-500/30'
-                          : 'bg-[#070a10] text-slate-500 border-slate-800/80 hover:border-slate-700'
-                      }`}
-                    >
-                      {emo.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <TagGroupSelector
+                category="emotion_post"
+                label="Estado Emocional Pós-Trade"
+                value={form.emotionalPost}
+                onChange={(v) => updateForm('emotionalPost', v)}
+                defaultOptions={['Calmo', 'Satisfeito', 'Centrado', 'Neutro', 'Frustrado', 'Aliviado', 'Arrependido', 'Eufórico']}
+              />
 
               <StarRating label="Qualidade do Trade (1-5 ★)" value={form.tradeQuality} onChange={(v) => updateForm('tradeQuality', v)} />
 
