@@ -111,7 +111,7 @@ export function DisciplineFlameIcon({
   const flameTransition: Transition = extinguishing
     ? { duration: 0.45, ease: 'easeOut' }
     : igniting
-    ? { type: 'spring', stiffness: 260, damping: 18 }
+    ? { duration: 0.6, ease: [0.16, 1, 0.3, 1] }
     : idleTransition;
 
   return (
