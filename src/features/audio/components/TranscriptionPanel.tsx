@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import type { AudioRecord } from '@/lib/db/schema';
-import { deleteAudioRecord, clearAudioErrors } from '@/features/audio/actions';
+import { deleteAudioRecord, clearAudioErrors, retryAudioTranscription } from '@/features/audio/actions';
 
 interface Segment {
   audio_timestamp: string;
@@ -189,14 +189,30 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
                 </p>
               </div>
             ) : audio.status === 'error' ? (
-              <div className="bg-rose-950/20 border border-rose-500/20 rounded-lg p-3 text-xs text-rose-300 flex items-center justify-between">
-                <span>⚠️ Ocorreu uma falha no processamento deste áudio.</span>
-                <button
-                  onClick={() => handleDelete(audio.id)}
-                  className="underline text-rose-400 hover:text-rose-200"
-                >
-                  Excluir este log
-                </button>
+              <div className="bg-rose-950/20 border border-rose-500/20 rounded-lg p-3 text-xs text-rose-300 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span>⚠️ Falha na transcrição AI: {audio.transcription || 'Chave API Gemini precisa ser configurada no .env.local'}</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await retryAudioTranscription(audio.id);
+                        } catch (err: any) {
+                          alert(`Erro ao reprocessar áudio: ${err.message || String(err)}`);
+                        }
+                      }}
+                      className="px-2 py-1 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 rounded text-[10px] font-bold font-mono transition-all"
+                    >
+                      🔄 TENTAR NOVAMENTE
+                    </button>
+                    <button
+                      onClick={() => handleDelete(audio.id)}
+                      className="underline text-rose-400 hover:text-rose-200 text-[10px]"
+                    >
+                      Excluir este log
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : null}
 

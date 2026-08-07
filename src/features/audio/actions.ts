@@ -87,12 +87,29 @@ export async function transcribeAudioRecord(audioId: string) {
       .where(eq(audioRecords.id, audioId));
 
     return result;
-  } catch (error) {
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
     await db.update(audioRecords)
-      .set({ status: 'error' })
+      .set({
+        status: 'error',
+        transcription: `⚠️ Erro Gemini AI: ${errorMsg}`,
+      })
       .where(eq(audioRecords.id, audioId));
+    revalidatePath('/audios');
+    revalidatePath('/');
     throw error;
   }
+}
+
+/**
+ * Tenta novamente transcrever um áudio específico
+ */
+export async function retryAudioTranscription(audioId: string) {
+  const result = await transcribeAudioRecord(audioId);
+  revalidatePath('/audios');
+  revalidatePath('/database');
+  revalidatePath('/');
+  return result;
 }
 
 /**
