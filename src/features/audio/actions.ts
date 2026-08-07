@@ -99,8 +99,10 @@ export async function transcribeAudioRecord(audioId: string) {
         transcription: `⚠️ Erro Gemini AI: ${errorMsg}`,
       })
       .where(eq(audioRecords.id, audioId));
-    revalidatePath('/audios');
-    revalidatePath('/');
+    try {
+      revalidatePath('/audios');
+      revalidatePath('/');
+    } catch {}
     throw error;
   }
 }
@@ -110,9 +112,11 @@ export async function transcribeAudioRecord(audioId: string) {
  */
 export async function retryAudioTranscription(audioId: string) {
   const result = await transcribeAudioRecord(audioId);
-  revalidatePath('/audios');
-  revalidatePath('/database');
-  revalidatePath('/');
+  try {
+    revalidatePath('/audios');
+    revalidatePath('/database');
+    revalidatePath('/');
+  } catch {}
   return result;
 }
 

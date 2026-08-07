@@ -2,7 +2,24 @@ import { GoogleGenAI } from '@google/genai';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const API_KEY = process.env.GEMINI_API_KEY!;
+function getApiKey(): string {
+  if (process.env.GEMINI_API_KEY) {
+    return process.env.GEMINI_API_KEY;
+  }
+  try {
+    const envPath = path.join(process.cwd(), '.env.local');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      const match = content.match(/GEMINI_API_KEY=(.+)/);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch {}
+  return '';
+}
+
+const API_KEY = getApiKey();
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 const INLINE_MAX_BYTES = 14 * 1024 * 1024; // 14 MB
@@ -51,7 +68,7 @@ const MIME_MAP: Record<string, string> = {
 };
 
 /**
- * Transcreve um arquivo de áudio usando Gemini API
+ * Transcreve um arquivo de áudio usando Gemini 2.5 Flash
  */
 export async function transcribeAudio(filePath: string): Promise<{
   transcription: string;
@@ -90,54 +107,39 @@ export async function transcribeAudio(filePath: string): Promise<{
     audioPart = { fileData: { fileUri: file.uri!, mimeType } };
   }
 
-  // Restaurado modelo padrão gemini-2.5-flash com fallbacks (gemini-2.0-flash, gemini-1.5-flash)
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-  let lastError: any = null;
-
-  for (const modelName of modelsToTry) {
-    try {
-      console.log(`[Gemini] Tentando modelo ${modelName}...`);
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: TRANSCRIPTION_PROMPT },
-              audioPart,
-            ],
-          },
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: TRANSCRIPTION_PROMPT },
+          audioPart,
         ],
-        config: {
-          temperature: 0.2,
-        },
-      });
+      },
+    ],
+    config: {
+      temperature: 0.2,
+    },
+  });
 
-      const text = response.text ?? '';
-      console.log(`[Gemini] Sucesso com o modelo ${modelName}!`);
+  const text = response.text ?? '';
 
-      try {
-        const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        const parsed = JSON.parse(cleaned);
-        return {
-          transcription: parsed.transcription || text,
-          insights: JSON.stringify({
-            trades: parsed.trades_mentioned || [],
-            emotion: parsed.emotional_state || '',
-            observations: parsed.key_observations || [],
-          }),
-        };
-      } catch {
-        return {
-          transcription: text,
-          insights: '{}',
-        };
-      }
-    } catch (err: any) {
-      console.warn(`[Gemini] Falha no modelo ${modelName}:`, err.message || err);
-      lastError = err;
-    }
+  try {
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    return {
+      transcription: parsed.transcription || text,
+      insights: JSON.stringify({
+        trades: parsed.trades_mentioned || [],
+        emotion: parsed.emotional_state || '',
+        observations: parsed.key_observations || [],
+      }),
+    };
+  } catch {
+    return {
+      transcription: text,
+      insights: '{}',
+    };
   }
-
-  throw lastError || new Error('Falha na autenticação ou modelos Gemini.');
 }
