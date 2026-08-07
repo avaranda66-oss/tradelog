@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updatePreMarket } from '@/features/trades/actions';
 import type { TradingDay } from '@/lib/db/schema';
 import { IconClock, IconCheck, IconArrowUp, IconArrowDown, IconDash } from '@/components/ui/icons';
@@ -28,7 +28,7 @@ const TRADING_PSYCHOLOGY_STATES = [
 
 export function PreMarketForm({ day }: { day: TradingDay }) {
   const [form, setForm] = useState({
-    sleepTime: day.sleepTime || '', // Horário que dormiu na noite anterior (persistido no banco)
+    sleepTime: day.sleepTime || '',
     wakeUpTime: day.wakeUpTime || '',
     sleepQuality: day.sleepQuality || 3,
     mentalState: day.mentalState || '',
@@ -39,6 +39,20 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Resincroniza o formulário automaticamente quando o usuário troca de dia (sem F5)
+  useEffect(() => {
+    setForm({
+      sleepTime: day.sleepTime || '',
+      wakeUpTime: day.wakeUpTime || '',
+      sleepQuality: day.sleepQuality || 3,
+      mentalState: day.mentalState || '',
+      personalNote: day.personalNote || '',
+      macroCalendar: day.macroCalendar || '',
+      overnightNote: day.overnightNote || '',
+      generalBias: day.generalBias || 'indefinido',
+    });
+  }, [day.id, day.date, day.updatedAt, day.sleepTime, day.wakeUpTime, day.personalNote]);
 
   async function handleSave() {
     setSaving(true);

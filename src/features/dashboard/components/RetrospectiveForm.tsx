@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updateDayRetrospective } from '@/features/trades/actions';
 import type { TradingDay } from '@/lib/db/schema';
 import { IconScale, IconCheck } from '@/components/ui/icons';
@@ -37,6 +37,26 @@ export function RetrospectiveForm({ day }: { day: TradingDay }) {
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Resincroniza os campos quando a data do pregão mudar (sem necessidade de F5)
+  useEffect(() => {
+    const freshGrade = day.retrospective?.match(/\[GRADE: ([A-C])\]/)?.[1] || null;
+    const freshText = day.retrospective
+      ? day.retrospective
+          .replace(/\[GRADE:.*?\]/g, '')
+          .replace(/\[DISCIPLINA:.*?\]/g, '')
+          .replace(/ERROS:.*?/g, '')
+          .replace(/GATILHO:.*?/g, '')
+          .replace(/AÇÃO:.*?/g, '')
+          .replace(/HINDSIGHT:.*?/g, '')
+          .trim()
+      : '';
+
+    setExecutionGrade(freshGrade);
+    setDominantEmotion(day.emotionalPost || '');
+    setJournalText(freshText);
+    setHonestPhrase(day.honestPhrase || '');
+  }, [day.id, day.date, day.updatedAt, day.retrospective, day.honestPhrase, day.emotionalPost]);
 
   async function handleSave() {
     setSaving(true);

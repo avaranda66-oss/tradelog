@@ -125,14 +125,14 @@ export function StudioView({
       {/* Seção 3: Split View — Pré-Market + Retrospectiva */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
         <div className="space-y-5">
-          <PreMarketForm day={day} />
-          <FarolMarketCard day={day} />
-          <KeyLevelsTable day={day} initialLevels={dayLevels} />
+          <PreMarketForm key={day.id} day={day} />
+          <FarolMarketCard key={day.id} day={day} />
+          <KeyLevelsTable key={day.id} day={day} initialLevels={dayLevels} />
         </div>
 
         <div className="space-y-5">
-          <RetrospectiveForm day={day} />
-          {dayAudios.length > 0 && <TranscriptionPanel audios={dayAudios} date={date} />}
+          <RetrospectiveForm key={day.id} day={day} />
+          {dayAudios.length > 0 && <TranscriptionPanel key={day.id} audios={dayAudios} date={date} />}
 
           {/* Resumo da Sessão */}
           <div className="bg-[#0d131f] border border-slate-800/80 rounded-2xl p-4 space-y-2 shadow-xl">
