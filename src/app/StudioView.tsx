@@ -48,7 +48,7 @@ export function StudioView({
   const winRate = day.tradesRight && tradeCount > 0 ? ((day.tradesRight / tradeCount) * 100).toFixed(0) : '0';
 
   return (
-    <div className="max-w-[1440px] mx-auto space-y-5 pb-16 animate-in fade-in">
+    <div key={day.id} className="max-w-[1440px] mx-auto space-y-5 pb-16 animate-in fade-in">
       {/* Widget de Gamificação & Foguinho */}
       <JournalProgressWidget
         day={day}
@@ -123,16 +123,16 @@ export function StudioView({
       </div>
 
       {/* Seção 3: Split View — Pré-Market + Retrospectiva */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+      <div key={day.id} className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
         <div className="space-y-5">
-          <PreMarketForm key={day.id} day={day} />
-          <FarolMarketCard key={day.id} day={day} />
-          <KeyLevelsTable key={day.id} day={day} initialLevels={dayLevels} />
+          <PreMarketForm day={day} />
+          <FarolMarketCard day={day} />
+          <KeyLevelsTable day={day} initialLevels={dayLevels} />
         </div>
 
         <div className="space-y-5">
-          <RetrospectiveForm key={day.id} day={day} />
-          {dayAudios.length > 0 && <TranscriptionPanel key={day.id} audios={dayAudios} date={date} />}
+          <RetrospectiveForm day={day} />
+          {dayAudios.length > 0 && <TranscriptionPanel audios={dayAudios} date={date} />}
 
           {/* Resumo da Sessão */}
           <div className="bg-[#0d131f] border border-slate-800/80 rounded-2xl p-4 space-y-2 shadow-xl">

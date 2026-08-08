@@ -119,9 +119,23 @@ export function TranscriptionPanel({ audios: initialAudios, date }: { audios: Au
 
         if (segments.length === 0 && audio.transcription) {
           try {
-            const parsed = JSON.parse(audio.transcription);
+            const firstBrace = audio.transcription.indexOf('{');
+            const lastBrace = audio.transcription.lastIndexOf('}');
+            const jsonText = (firstBrace !== -1 && lastBrace > firstBrace)
+              ? audio.transcription.substring(firstBrace, lastBrace + 1)
+              : audio.transcription;
+            const parsed = JSON.parse(jsonText);
             if (Array.isArray(parsed.segments)) {
               segments = parsed.segments;
+            }
+            if (parsed.ai_summary && !insights.aiSummary) {
+              insights.aiSummary = parsed.ai_summary;
+            }
+            if (parsed.trades_mentioned && (!insights.trades || insights.trades.length === 0)) {
+              insights.trades = parsed.trades_mentioned;
+            }
+            if (parsed.emotional_state && !insights.emotion) {
+              insights.emotion = parsed.emotional_state;
             }
           } catch {
             // Formato texto livre

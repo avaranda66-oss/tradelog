@@ -163,14 +163,22 @@ Responda EXATAMENTE neste formato JSON válido (sem markdown extra fora do JSON)
     ],
     config: {
       temperature: 0.0,
+      responseMimeType: 'application/json',
     },
   });
 
   const text = response.text ?? '';
 
   try {
-    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    let jsonStr = text;
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      jsonStr = text.substring(firstBrace, lastBrace + 1);
+    } else {
+      jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    }
+    const parsed = JSON.parse(jsonStr);
 
     // Recalcula MATEMATICAMENTE o horário de pregão para cada segmento a partir de startMarketTime
     if (parsed.segments && Array.isArray(parsed.segments)) {
