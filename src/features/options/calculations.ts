@@ -23,7 +23,7 @@ import {
   type RealizedDiResult,
   type ProjectedDiResult,
 } from './cdi-engine';
-import type { OptionPosition } from '@/lib/db/schema';
+import type { OptionPosition, OptionPositionExecution } from '@/lib/db/schema';
 
 // ─── 1. DOMÍNIO DE LEGS (DISCRIMINATED UNIONS STRICT) ───
 export type InstrumentType = 'OPTION' | 'STOCK' | 'CASH';
@@ -902,11 +902,12 @@ export interface PositionCalculatedMetrics {
   realizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
   realizedGrossPnlReais: number | null;
   realizedNetPnlReais: number | null;
+  feesReais: number;
   unrealizedPnlReais: number;
   totalGrossPnlReais: number | null;
   totalNetPnlReais: number | null;
-  realizedPnlReais: number; // Alias para compatibilidade
-  totalPnlReais: number; // Alias para compatibilidade
+  realizedPnlReais: number | null; // Alias canônico (null se LEGACY_INCOMPLETE)
+  totalPnlReais: number | null; // Alias canônico (null se LEGACY_INCOMPLETE)
 
   // Capitais Segregados
   originalCapitalAllocated: number;
@@ -976,7 +977,8 @@ export type EnrichedOptionPosition = OptionPosition & {
 export function enrichOptionPosition(
   pos: OptionPosition,
   marketSnapshot?: OptionMarketSnapshot,
-  valuationDateStr: BusinessDate = getBrazilTodayDate()
+  valuationDateStr: BusinessDate = getBrazilTodayDate(),
+  executions?: OptionPositionExecution[]
 ): EnrichedOptionPosition {
   const openDate = parseBusinessDate(pos.entryDate);
   const expiryDate = parseBusinessDate(pos.expirationDate);
@@ -1014,14 +1016,27 @@ export function enrichOptionPosition(
   let realizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE' = 'FULL';
   let realizedGrossPnlReais: number | null = null;
   let realizedNetPnlReais: number | null = null;
+  let feesReais = 0;
 
   if (isLegacyIncomplete) {
     realizedPnlQuality = 'LEGACY_INCOMPLETE';
     realizedGrossPnlReais = null;
     realizedNetPnlReais = null;
+  } else if (executions && executions.length > 0) {
+    realizedGrossPnlReais = Math.round(executions.reduce((acc, x) => acc + x.grossRealizedPnlReais, 0) * 100) / 100;
+    feesReais = Math.round(executions.reduce((acc, x) => acc + (x.feesReais || 0), 0) * 100) / 100;
+    realizedNetPnlReais = Math.round(executions.reduce((acc, x) => acc + x.netRealizedPnlReais, 0) * 100) / 100;
+    realizedPnlQuality = 'FULL';
+  } else if (closedQuantity === 0) {
+    realizedGrossPnlReais = 0;
+    realizedNetPnlReais = 0;
+    feesReais = 0;
+    realizedPnlQuality = 'FULL';
   } else {
     realizedGrossPnlReais = pos.realizedPnlReais ?? 0;
     realizedNetPnlReais = pos.realizedPnlReais ?? 0;
+    feesReais = 0;
+    realizedPnlQuality = 'FULL';
   }
 
   const currentPrice = isClosed && pos.exitPrice !== null ? pos.exitPrice : pos.currentPrice;
@@ -1062,8 +1077,8 @@ export function enrichOptionPosition(
   const totalNetPnlReais = realizedNetPnlReais !== null
     ? Math.round((realizedNetPnlReais + unrealizedPnlReais) * 100) / 100
     : null;
-  const realizedPnlReais = realizedGrossPnlReais ?? 0;
-  const totalPnlReais = totalGrossPnlReais ?? unrealizedPnlReais;
+  const realizedPnlReais = realizedGrossPnlReais;
+  const totalPnlReais = totalGrossPnlReais;
 
   // 5. % Capturado e ROI (sobre contratos abertos vigentes)
   let premiumCapturedPct = 0;
@@ -1200,6 +1215,7 @@ export function enrichOptionPosition(
       realizedPnlQuality,
       realizedGrossPnlReais,
       realizedNetPnlReais,
+      feesReais,
       unrealizedPnlReais,
       totalGrossPnlReais,
       totalNetPnlReais,
@@ -1600,10 +1616,18 @@ export function detectStrategyRiskAndPayoff(params: {
 }
 
 /**
- * Helper puro que calcula o Capital de Referência do Benchmark / Capital Reservado
+ * Helper puro que calcula o Risco Residual Canônico da Estrutura e Benchmark Capital
  * consumindo exatamente o motor detectStrategyRiskAndPayoff sem heurísticas paralelas.
  */
-export function calculateStrategyCanonicalBenchmarkCapital(legs: Array<{
+export interface StrategyCanonicalResidualRisk {
+  benchmarkCapitalReais: number;
+  riskRecognitionQuality: 'EXACT' | 'APPROXIMATE' | 'UNKNOWN';
+  maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
+  maxLossEconomicReais: number | null;
+  riskProfile: StrategyRiskProfile;
+}
+
+export function calculateStrategyCanonicalResidualRisk(legs: Array<{
   allocatedQuantity: number;
   economicRole?: string;
   position: {
@@ -1614,8 +1638,26 @@ export function calculateStrategyCanonicalBenchmarkCapital(legs: Array<{
     underlyingCurrentSpot?: number | null;
     expirationDate?: string;
   };
-}>): number {
-  if (!legs || legs.length === 0) return 0;
+}>): StrategyCanonicalResidualRisk {
+  if (!legs || legs.length === 0) {
+    return {
+      benchmarkCapitalReais: 0,
+      riskRecognitionQuality: 'UNKNOWN',
+      maxLossType: 'UNKNOWN',
+      maxLossEconomicReais: null,
+      riskProfile: {
+        riskRecognitionQuality: 'UNKNOWN',
+        maxLossEconomicReais: null,
+        maxLossType: 'UNKNOWN',
+        capitalReservedReais: 0,
+        breakEvenInferior: null,
+        breakEvenSuperior: null,
+        downsideExposureUnits: 0,
+        upsideParticipationUnits: 0,
+        putToCallRatio: null,
+      },
+    };
+  }
 
   let netInitialCreditDebit = 0;
   for (const leg of legs) {
@@ -1626,6 +1668,7 @@ export function calculateStrategyCanonicalBenchmarkCapital(legs: Array<{
 
   const enrichedMockLegs = legs.map((leg) => ({
     allocatedQuantity: leg.allocatedQuantity,
+    openAllocatedQuantity: leg.allocatedQuantity,
     economicRole: leg.economicRole || 'CUSTOM',
     position: {
       optionType: leg.position.optionType,
@@ -1643,7 +1686,17 @@ export function calculateStrategyCanonicalBenchmarkCapital(legs: Array<{
     netInitialCreditDebitReais: netInitialCreditDebit,
   });
 
-  return risk.capitalReservedReais;
+  return {
+    benchmarkCapitalReais: risk.capitalReservedReais,
+    riskRecognitionQuality: risk.riskRecognitionQuality,
+    maxLossType: risk.maxLossType,
+    maxLossEconomicReais: risk.maxLossEconomicReais,
+    riskProfile: risk,
+  };
+}
+
+export function calculateStrategyCanonicalBenchmarkCapital(legs: Parameters<typeof calculateStrategyCanonicalResidualRisk>[0]): number {
+  return calculateStrategyCanonicalResidualRisk(legs).benchmarkCapitalReais;
 }
 
 export interface EnrichedOptionStrategy {
@@ -1665,16 +1718,19 @@ export interface EnrichedOptionStrategy {
 
   // Métricas Consolidadas da Estrutura
   metrics: {
-    netInitialCreditDebitReais: number; // ex: +180.00
+    netInitialCreditDebitReais: number; // Fluxo inicial histórico total (ex: +180.00)
+    residualInitialCreditDebitReais: number; // Fluxo inicial atribuível aos contratos residuais abertos (ex: +90.00)
     isNetCredit: boolean;
 
     // Decomposição Tripla de P&L da Estrutura (Gross & Net)
+    strategyRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
     strategyGrossRealizedPnlReais: number;
     strategyFeesReais: number;
     strategyNetRealizedPnlReais: number;
+    strategyOptionPnlGrossReais: number;
     strategyUnrealizedPnlReais: number;
-    strategyTotalGrossPnlReais: number;
-    strategyTotalNetPnlReais: number;
+    strategyTotalGrossPnlReais: number | null;
+    strategyTotalNetPnlReais: number | null;
 
     netPnlMtmReais: number; // ex: +478.00 (alias compatível com telas)
     netEstimatedExitReais: number;
@@ -1745,10 +1801,12 @@ export function enrichOptionStrategy(params: {
   const strategyNetRealizedPnlReais = (params.executions || []).reduce((acc, x) => acc + x.netRealizedPnlReais, 0);
 
   let netInitialCreditDebitReais = 0;
+  let residualInitialCreditDebitReais = 0;
   let strategyUnrealizedPnlReais = 0;
   let netEstimatedExitReais = 0;
   let maxElapsedDU = 0;
   let minRemainingDU = 999;
+  let hasLegacyIncomplete = false;
 
   const normalizedLegs: EnrichedStrategyLeg[] = params.legs.map((leg) => {
     const orig = leg.originalAllocatedQuantity ?? leg.allocatedQuantity;
@@ -1772,7 +1830,7 @@ export function enrichOptionStrategy(params: {
     const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
     const isLong = !isShort;
 
-    // Fluxo Inicial com a quantidade original histórica
+    // Fluxo Inicial com a quantidade original histórica (ex: ITUB +180)
     const origQty = leg.originalAllocatedQuantity;
     if (isShort) {
       netInitialCreditDebitReais += pos.entryPrice * origQty;
@@ -1780,8 +1838,19 @@ export function enrichOptionStrategy(params: {
       netInitialCreditDebitReais -= pos.entryPrice * origQty;
     }
 
-    // P&L MTM Proporcional sobre contratos abertos residuais
+    // Fluxo Inicial Atribuível aos contratos abertos residuais (ex: ITUB +90)
     const openQty = leg.openAllocatedQuantity;
+    if (isShort) {
+      residualInitialCreditDebitReais += pos.entryPrice * openQty;
+    } else {
+      residualInitialCreditDebitReais -= pos.entryPrice * openQty;
+    }
+
+    if (pos.metrics.realizedPnlQuality === 'LEGACY_INCOMPLETE') {
+      hasLegacyIncomplete = true;
+    }
+
+    // P&L MTM Proporcional sobre contratos abertos residuais
     const pnlMtmLeg = calculateSignedPnL({
       entryPrice: pos.entryPrice,
       currentPrice: pos.metrics.markPrice,
@@ -1808,15 +1877,29 @@ export function enrichOptionStrategy(params: {
 
   if (minRemainingDU === 999) minRemainingDU = 0;
 
+  netInitialCreditDebitReais = Math.round(netInitialCreditDebitReais * 100) / 100;
+  residualInitialCreditDebitReais = Math.round(residualInitialCreditDebitReais * 100) / 100;
+  strategyUnrealizedPnlReais = Math.round(strategyUnrealizedPnlReais * 100) / 100;
+  netEstimatedExitReais = Math.round(netEstimatedExitReais * 100) / 100;
+
+  const strategyRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE' =
+    hasLegacyIncomplete ? 'LEGACY_INCOMPLETE' : 'FULL';
+
+  // Total Gross P&L Canônico da Estrutura (Realizado + MTM Residual)
+  const strategyOptionPnlGrossReais = Math.round((strategyGrossRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
   const netPnlMtmReais = strategyUnrealizedPnlReais;
-  const strategyTotalGrossPnlReais = Math.round((strategyGrossRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
-  const strategyTotalNetPnlReais = Math.round((strategyNetRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
+  const strategyTotalGrossPnlReais = strategyRealizedPnlQuality === 'LEGACY_INCOMPLETE'
+    ? null
+    : strategyOptionPnlGrossReais;
+  const strategyTotalNetPnlReais = strategyRealizedPnlQuality === 'LEGACY_INCOMPLETE'
+    ? null
+    : Math.round((strategyNetRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
   const isNetCredit = netInitialCreditDebitReais >= 0;
 
-  // Reconhecimento de Risco e Payoff com Fail-Safe Institucional sobre pernas abertas
+  // Reconhecimento de Risco e Payoff com Fail-Safe Institucional consome estritamente o crédito residual!
   const riskProfile = detectStrategyRiskAndPayoff({
     legs: normalizedLegs,
-    netInitialCreditDebitReais,
+    netInitialCreditDebitReais: residualInitialCreditDebitReais,
   });
 
   const totalCapitalReserved = riskProfile.capitalReservedReais;
@@ -1880,7 +1963,7 @@ export function enrichOptionStrategy(params: {
       capitalReservedReais: totalCapitalReserved,
       capitalRemuneratedReais: 0,
       benchmarkCapitalReais: totalCapitalReserved,
-      optionPnlReais: netPnlMtmReais,
+      optionPnlReais: strategyOptionPnlGrossReais,
 
       collateralMode: params.collateralMode,
       collateralPctCdi: params.collateralYieldPctCDI ?? 0,
@@ -1898,14 +1981,14 @@ export function enrichOptionStrategy(params: {
       collateralYieldDecimal: null,
       collateralCarryReais: 0,
 
-      totalEconomicReturnReais: netPnlMtmReais,
-      excessReturnVsCdiReais: netPnlMtmReais,
+      totalEconomicReturnReais: strategyOptionPnlGrossReais,
+      excessReturnVsCdiReais: strategyOptionPnlGrossReais,
 
       optionPnlToCdiMultiple: null,
       totalReturnToCdiMultiple: null,
 
-      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
-      totalEconomicReturnPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (strategyOptionPnlGrossReais / totalCapitalReserved) * 100 : null,
+      totalEconomicReturnPct: totalCapitalReserved > 0 ? (strategyOptionPnlGrossReais / totalCapitalReserved) * 100 : null,
       cdiPeriodReturnPct: null,
       excessPeriodPctPoints: null,
 
@@ -1940,7 +2023,7 @@ export function enrichOptionStrategy(params: {
       capitalReservedReais: totalCapitalReserved,
       capitalRemuneratedReais: 0,
       benchmarkCapitalReais: totalCapitalReserved,
-      optionPnlReais: netPnlMtmReais,
+      optionPnlReais: strategyOptionPnlGrossReais,
 
       collateralMode: params.collateralMode,
       collateralPctCdi: params.collateralYieldPctCDI ?? 0,
@@ -1958,14 +2041,14 @@ export function enrichOptionStrategy(params: {
       collateralYieldDecimal: null,
       collateralCarryReais: 0,
 
-      totalEconomicReturnReais: netPnlMtmReais,
-      excessReturnVsCdiReais: netPnlMtmReais,
+      totalEconomicReturnReais: strategyOptionPnlGrossReais,
+      excessReturnVsCdiReais: strategyOptionPnlGrossReais,
 
       optionPnlToCdiMultiple: null,
       totalReturnToCdiMultiple: null,
 
-      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
-      totalEconomicReturnPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (strategyOptionPnlGrossReais / totalCapitalReserved) * 100 : null,
+      totalEconomicReturnPct: totalCapitalReserved > 0 ? (strategyOptionPnlGrossReais / totalCapitalReserved) * 100 : null,
       cdiPeriodReturnPct: null,
       excessPeriodPctPoints: null,
 
@@ -1994,7 +2077,7 @@ export function enrichOptionStrategy(params: {
       capitalReservedReais: totalCapitalReserved,
       capitalRemuneratedReais,
       benchmarkCapitalReais: totalCapitalReserved,
-      optionPnlReais: netPnlMtmReais,
+      optionPnlReais: strategyOptionPnlGrossReais, // Consome Total Gross P&L Canônico!
       collateralMode: params.collateralMode,
       collateralPctCdi: params.collateralYieldPctCDI,
       maxLossEconomicReais,
@@ -2030,10 +2113,13 @@ export function enrichOptionStrategy(params: {
     economicPerformance,
     metrics: {
       netInitialCreditDebitReais,
+      residualInitialCreditDebitReais,
       isNetCredit,
+      strategyRealizedPnlQuality,
       strategyGrossRealizedPnlReais,
       strategyFeesReais,
       strategyNetRealizedPnlReais,
+      strategyOptionPnlGrossReais,
       strategyUnrealizedPnlReais,
       strategyTotalGrossPnlReais,
       strategyTotalNetPnlReais,
@@ -2058,4 +2144,3 @@ export function enrichOptionStrategy(params: {
     },
   };
 }
-

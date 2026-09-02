@@ -23,6 +23,7 @@ import {
   enrichOptionStrategy,
   detectStrategyRiskAndPayoff,
   calculateStrategyCanonicalBenchmarkCapital,
+  calculateStrategyCanonicalResidualRisk,
   isActionFeedEligible,
   type PositionCalculatedMetrics,
   type EnrichedOptionPosition,
@@ -72,13 +73,16 @@ export interface OptionsPortfolioSummary {
   openStrategiesCount: number;
 
   // Decomposição Tripla de P&L da Carteira (Gross & Net)
-  portfolioGrossRealizedPnlReais: number;
-  portfolioNetRealizedPnlReais: number;
+  portfolioRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
+  portfolioKnownGrossRealizedPnlReais: number;
+  portfolioKnownNetRealizedPnlReais: number;
+  portfolioGrossRealizedPnlReais: number | null;
+  portfolioNetRealizedPnlReais: number | null;
   portfolioUnrealizedPnlReais: number;
-  portfolioTotalGrossPnlReais: number;
-  portfolioTotalNetPnlReais: number;
-  realizedPnlReais: number; // Alias para compatibilidade
-  totalPnlReais: number; // Alias para compatibilidade
+  portfolioTotalGrossPnlReais: number | null;
+  portfolioTotalNetPnlReais: number | null;
+  realizedPnlReais: number | null; // Alias para compatibilidade
+  totalPnlReais: number | null; // Alias para compatibilidade
 
   // Gregas Totais Consolidadas
   totalThetaReaisPerDay: number;
@@ -262,20 +266,32 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       filteredPositions = rawPositions.filter((p) => p.status !== 'OPEN');
     }
 
-    const valuationDate = getBrazilTodayDate();
-    const enrichedPosMap = new Map<string, EnrichedOptionPosition>();
-    for (const p of filteredPositions) {
-      enrichedPosMap.set(p.id, enrichOptionPosition(p, undefined, valuationDate));
-    }
-
     // Índices em Memória para Performance O(1) sem N+1 queries
+    const executionsByPositionId = new Map<string, typeof rawExecutions>();
     const executionsByStrategyId = new Map<string, typeof rawExecutions>();
+    const executionsByStrategyLegId = new Map<string, typeof rawExecutions>();
     for (const exec of rawExecutions) {
+      if (exec.positionId) {
+        const list = executionsByPositionId.get(exec.positionId) || [];
+        list.push(exec);
+        executionsByPositionId.set(exec.positionId, list);
+      }
       if (exec.strategyId) {
         const list = executionsByStrategyId.get(exec.strategyId) || [];
         list.push(exec);
         executionsByStrategyId.set(exec.strategyId, list);
       }
+      if (exec.strategyLegId) {
+        const list = executionsByStrategyLegId.get(exec.strategyLegId) || [];
+        list.push(exec);
+        executionsByStrategyLegId.set(exec.strategyLegId, list);
+      }
+    }
+
+    const valuationDate = getBrazilTodayDate();
+    const enrichedPosMap = new Map<string, EnrichedOptionPosition>();
+    for (const p of filteredPositions) {
+      enrichedPosMap.set(p.id, enrichOptionPosition(p, undefined, valuationDate, executionsByPositionId.get(p.id)));
     }
 
     const fundingSegmentsByStrategyId = new Map<string, typeof rawFundingSegments>();
@@ -553,17 +569,42 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     const overallRoicPct = totalCapitalAllocated > 0 ? (totalPnlMtmReais / totalCapitalAllocated) * 100 : 0;
 
     // Realized P&L Canônico da Carteira (Cada execução canônica entra EXATAMENTE UMA VEZ)
-    let portfolioGrossRealizedPnlReais = 0;
-    let portfolioNetRealizedPnlReais = 0;
+    let portfolioKnownGrossRealizedPnlReais = 0;
+    let portfolioKnownNetRealizedPnlReais = 0;
     for (const exec of rawExecutions) {
-      portfolioGrossRealizedPnlReais += exec.grossRealizedPnlReais;
-      portfolioNetRealizedPnlReais += exec.netRealizedPnlReais;
+      portfolioKnownGrossRealizedPnlReais += exec.grossRealizedPnlReais;
+      portfolioKnownNetRealizedPnlReais += exec.netRealizedPnlReais;
     }
-    portfolioGrossRealizedPnlReais = Math.round(portfolioGrossRealizedPnlReais * 100) / 100;
-    portfolioNetRealizedPnlReais = Math.round(portfolioNetRealizedPnlReais * 100) / 100;
+    portfolioKnownGrossRealizedPnlReais = Math.round(portfolioKnownGrossRealizedPnlReais * 100) / 100;
+    portfolioKnownNetRealizedPnlReais = Math.round(portfolioKnownNetRealizedPnlReais * 100) / 100;
+
+    let hasIncompleteLegacyPnl = false;
+    for (const pos of finalPositions) {
+      if (pos.metrics.realizedPnlQuality === 'LEGACY_INCOMPLETE') {
+        hasIncompleteLegacyPnl = true;
+        break;
+      }
+    }
+    for (const st of enrichedStrategies) {
+      if (st.metrics.strategyRealizedPnlQuality === 'LEGACY_INCOMPLETE') {
+        hasIncompleteLegacyPnl = true;
+        break;
+      }
+    }
+
+    const portfolioRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' = hasIncompleteLegacyPnl
+      ? 'LEGACY_INCOMPLETE'
+      : 'FULL';
+
+    const portfolioGrossRealizedPnlReais = hasIncompleteLegacyPnl ? null : portfolioKnownGrossRealizedPnlReais;
+    const portfolioNetRealizedPnlReais = hasIncompleteLegacyPnl ? null : portfolioKnownNetRealizedPnlReais;
     const portfolioUnrealizedPnlReais = Math.round(totalPnlMtmReais * 100) / 100;
-    const portfolioTotalGrossPnlReais = Math.round((portfolioGrossRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100;
-    const portfolioTotalNetPnlReais = Math.round((portfolioNetRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100;
+    const portfolioTotalGrossPnlReais = portfolioGrossRealizedPnlReais !== null
+      ? Math.round((portfolioGrossRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100
+      : null;
+    const portfolioTotalNetPnlReais = portfolioNetRealizedPnlReais !== null
+      ? Math.round((portfolioNetRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100
+      : null;
 
     // Métricas Canônicas Derivadas do Double Yield Consolidado
     const totalAlphaReais = portfolioExcessReturnVsCdiReais;
@@ -633,6 +674,9 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         openStrategiesCount: enrichedStrategies.filter((s) => s.status === 'OPEN').length,
 
         // Decomposição Tripla de P&L da Carteira (Gross & Net)
+        portfolioRealizedPnlQuality,
+        portfolioKnownGrossRealizedPnlReais,
+        portfolioKnownNetRealizedPnlReais,
         portfolioGrossRealizedPnlReais,
         portfolioNetRealizedPnlReais,
         portfolioUnrealizedPnlReais,
@@ -1797,7 +1841,15 @@ export async function partialCloseStrategyLegAction(
           };
         });
 
-        const newBenchmarkCapital = calculateStrategyCanonicalBenchmarkCapital(remainingLegsForBenchmark);
+        const residualRisk = calculateStrategyCanonicalResidualRisk(remainingLegsForBenchmark);
+        const newBenchmarkCapital = residualRisk.benchmarkCapitalReais;
+        let newSegmentQuality = openSegment ? openSegment.quality : 'FULL';
+
+        // Fail-safe institucional para risco residual desconhecido ou ilimitado
+        if (residualRisk.riskRecognitionQuality === 'UNKNOWN' || residualRisk.maxLossType === 'UNBOUNDED') {
+          newSegmentQuality = 'INSUFFICIENT_DATA';
+        }
+
         let newCapitalRemunerated = 0;
         const currentMode = openSegment ? openSegment.collateralMode : (strategy.collateralMode || 'IDLE_CASH');
         const currentCoveragePct = strategy.collateralCoveragePct;
@@ -1823,9 +1875,16 @@ export async function partialCloseStrategyLegAction(
           collateralPctCdi: openSegment ? openSegment.collateralPctCdi : strategy.collateralYieldPctCDI,
           sourceType: 'MANEUVER',
           maneuverEventId,
-          quality: openSegment ? openSegment.quality : 'FULL',
+          quality: newSegmentQuality,
           createdAt: now,
         }).run();
+
+        // RECONCILIAÇÃO ATÔMICA DA STRATEGY ROW: atualiza o snapshot corrente no banco
+        tx.update(optionStrategies).set({
+          capitalRemuneratedReais: newCapitalRemunerated,
+          collateralMode: currentMode,
+          updatedAt: now,
+        }).where(eq(optionStrategies.id, params.strategyId)).run();
       }
     });
 
@@ -2099,7 +2158,15 @@ export async function scaleDownOptionStrategyAction(
         };
       });
 
-      const newBenchmarkCapital = calculateStrategyCanonicalBenchmarkCapital(remainingLegsForBenchmark);
+      const residualRisk = calculateStrategyCanonicalResidualRisk(remainingLegsForBenchmark);
+      const newBenchmarkCapital = residualRisk.benchmarkCapitalReais;
+      let newSegmentQuality = openSegment ? openSegment.quality : 'FULL';
+
+      // Fail-safe institucional para risco residual desconhecido ou ilimitado
+      if (residualRisk.riskRecognitionQuality === 'UNKNOWN' || residualRisk.maxLossType === 'UNBOUNDED') {
+        newSegmentQuality = 'INSUFFICIENT_DATA';
+      }
+
       let newCapitalRemunerated = 0;
       const currentMode = openSegment ? openSegment.collateralMode : (strategy.collateralMode || 'IDLE_CASH');
       const currentCoveragePct = strategy.collateralCoveragePct;
@@ -2125,9 +2192,16 @@ export async function scaleDownOptionStrategyAction(
         collateralPctCdi: openSegment ? openSegment.collateralPctCdi : strategy.collateralYieldPctCDI,
         sourceType: 'MANEUVER',
         maneuverEventId,
-        quality: openSegment ? openSegment.quality : 'FULL',
+        quality: newSegmentQuality,
         createdAt: now,
       }).run();
+
+      // RECONCILIAÇÃO ATÔMICA DA STRATEGY ROW: atualiza o snapshot corrente no banco
+      tx.update(optionStrategies).set({
+        capitalRemuneratedReais: newCapitalRemunerated,
+        collateralMode: currentMode,
+        updatedAt: now,
+      }).where(eq(optionStrategies.id, params.strategyId)).run();
     });
 
     safeRevalidate('/opcoes');

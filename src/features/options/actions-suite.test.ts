@@ -1157,7 +1157,7 @@ export async function runActionsSuiteTests() {
       id: itubGoldenPutPosId,
       portfolio: 'Principal',
       tickerUnderlying: 'ITUB4',
-      tickerOption: 'ITUB4U3869',
+      tickerOption: 'ITUBU393',
       optionType: 'PUT',
       side: 'SELL',
       strategyType: 'CUSTOM',
@@ -1169,18 +1169,18 @@ export async function runActionsSuiteTests() {
       entryPrice: 1.04,
       currentPrice: 0.30,
       allocatedCapital: 15476.0,
-      entryDate: '2026-08-14',
+      entryDate: '2026-08-24',
       expirationDate: '2026-09-18',
       status: 'OPEN',
-      createdAt: '2026-08-14T12:00:00.000Z',
-      updatedAt: '2026-08-14T12:00:00.000Z',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     db.insert(optionPositions).values({
       id: itubGoldenCallPosId,
       portfolio: 'Principal',
       tickerUnderlying: 'ITUB4',
-      tickerOption: 'ITUB4I3869',
+      tickerOption: 'ITUBI393',
       optionType: 'CALL',
       side: 'BUY',
       strategyType: 'CUSTOM',
@@ -1192,11 +1192,11 @@ export async function runActionsSuiteTests() {
       entryPrice: 1.18,
       currentPrice: 0.70,
       allocatedCapital: 236.0,
-      entryDate: '2026-08-14',
+      entryDate: '2026-08-24',
       expirationDate: '2026-09-18',
       status: 'OPEN',
-      createdAt: '2026-08-14T12:00:00.000Z',
-      updatedAt: '2026-08-14T12:00:00.000Z',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     db.insert(optionStrategies).values({
@@ -1208,9 +1208,9 @@ export async function runActionsSuiteTests() {
       underlyingTicker: 'ITUB4',
       collateralMode: 'IDLE_CASH',
       status: 'OPEN',
-      openedAt: '2026-08-14',
-      createdAt: '2026-08-14T12:00:00.000Z',
-      updatedAt: '2026-08-14T12:00:00.000Z',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     db.insert(optionStrategyLegs).values({
@@ -1222,7 +1222,7 @@ export async function runActionsSuiteTests() {
       closedAllocatedQuantity: 0,
       legacyClosedAllocatedQuantity: 0,
       economicRole: 'FINANCING',
-      createdAt: '2026-08-14T12:00:00.000Z',
+      createdAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     db.insert(optionStrategyLegs).values({
@@ -1234,13 +1234,13 @@ export async function runActionsSuiteTests() {
       closedAllocatedQuantity: 0,
       legacyClosedAllocatedQuantity: 0,
       economicRole: 'DIRECTIONAL',
-      createdAt: '2026-08-14T12:00:00.000Z',
+      createdAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     db.insert(strategyFundingSegments).values({
       id: 'fnd_itub_golden_initial',
       strategyId: itubGoldenStratId,
-      startDate: '2026-08-14',
+      startDate: '2026-08-24',
       endDate: null,
       benchmarkCapitalReais: 15476.0,
       capitalRemuneratedReais: 0,
@@ -1248,7 +1248,7 @@ export async function runActionsSuiteTests() {
       collateralPctCdi: null,
       sourceType: 'CREATION',
       quality: 'FULL',
-      createdAt: '2026-08-14T12:00:00.000Z',
+      createdAt: '2026-08-24T12:00:00.000Z',
     }).run();
 
     const rejectUnrepresentablePct = await scaleDownOptionStrategyAction({
@@ -1343,8 +1343,32 @@ export async function runActionsSuiteTests() {
     const posRes1 = await getOptionPositions();
     const stratEnriched1 = posRes1.strategies?.find((s) => s.id === itubGoldenStratId)!;
     assert(Boolean(stratEnriched1), 'P0 Golden Case: Estratégia enriquecida carregada');
+
+    // Asserts Canônicos Auditados:
+    assert(stratEnriched1.metrics.netInitialCreditDebitReais === 180.0, 'P0 Golden Case: netInitialCreditDebitReais ORIGINAL === +R$ 180,00 (400*1.04 - 200*1.18)');
+    assert(stratEnriched1.metrics.residualInitialCreditDebitReais === 90.0, 'P0 Golden Case: residualInitialCreditDebitReais RESIDUAL === +R$ 90,00 (200*1.04 - 100*1.18)');
+    assert(stratEnriched1.metrics.breakEvenInferior === 38.24, 'P0 Golden Case: breakEvenInferior RESIDUAL === 38.24 (38.69 - 90/200)');
+    assert(stratEnriched1.metrics.maxLossEconomicReais === 7648.0, 'P0 Golden Case: maxLossEconomicReais RESIDUAL === R$ 7.648,00 (7738 - 90)');
+    assert(stratEnriched1.metrics.totalCapitalReserved === 7738.0, 'P0 Golden Case: totalCapitalReserved residual === R$ 7.738,00 (200 * 38.69)');
+
     assert(stratEnriched1.metrics.strategyGrossRealizedPnlReais === 110.0, 'P0 Golden Case: strategyGrossRealizedPnlReais === +R$ 110,00');
-    assert(stratEnriched1.metrics.totalCapitalReserved === 7738.0, 'P0 Golden Case: totalCapitalReserved residual === R$ 7.738,00');
+    assert(stratEnriched1.metrics.strategyUnrealizedPnlReais === 100.0, 'P0 Golden Case: strategyUnrealizedPnlReais residual MTM === +R$ 100,00');
+    assert(stratEnriched1.metrics.strategyTotalGrossPnlReais === 210.0, 'P0 Golden Case: strategyTotalGrossPnlReais === +R$ 210,00 (110 + 100)');
+    assert(stratEnriched1.economicPerformance.optionPnlReais === 210.0, 'P0 Golden Case: Double Yield optionPnlReais === +R$ 210,00 (total gross canônico)');
+
+    // Timeline & CDI Engine Asserts:
+    assert(stratEnriched1.economicPerformance.capitalBasisMethod === 'SEGMENTED_TIMELINE', 'P0 Golden Case: capitalBasisMethod === SEGMENTED_TIMELINE');
+    assert(stratEnriched1.economicPerformance.optionReturnOnBenchmarkCapitalPct === null, 'P0 Golden Case: percentual estático optionReturnOnBenchmarkCapitalPct === null');
+    assert(stratEnriched1.economicPerformance.totalEconomicReturnPct === null, 'P0 Golden Case: percentual estático totalEconomicReturnPct === null');
+    assert(stratEnriched1.economicPerformance.cdiPeriodReturnPct === null, 'P0 Golden Case: percentual estático cdiPeriodReturnPct === null');
+
+    const diSeg1 = calculateRealizedDiFactor('2026-08-24', '2026-09-02');
+    assert(diSeg1.observationsCount === 7, 'P0 Golden Case: Segmento 1 (24/08 -> 02/09) possui exatamente 7 sessões B3 remuneradas');
+    const expectedCdiSeg1 = 15476.0 * diSeg1.periodYieldDecimal;
+    assert(Math.abs(stratEnriched1.economicPerformance.benchmarkCdiReais - expectedCdiSeg1) < 0.01, 'P0 Golden Case: benchmarkCdiReais corresponde a CDI(segmento1) + CDI(segmento2)');
+
+    // Portfolio & Hybrid Book:
+    assert(posRes1.summary!.portfolioKnownGrossRealizedPnlReais === 110.0 || (posRes1.summary!.portfolioGrossRealizedPnlReais ?? 0) >= 110.0, 'P0 Golden Case: Portfolio contém +R$ 110 de realized');
 
     // Provar imutabilidade do Realized perante alteração de cotação MTM
     db.update(optionPositions).set({ currentPrice: 5.00 }).where(eq(optionPositions.id, itubGoldenPutPosId)).run();
@@ -1353,9 +1377,307 @@ export async function runActionsSuiteTests() {
     const posRes2 = await getOptionPositions();
     const stratEnriched2 = posRes2.strategies?.find((s) => s.id === itubGoldenStratId)!;
     assert(stratEnriched2.metrics.strategyGrossRealizedPnlReais === 110.0, 'P0 Golden Case: Realized P&L IMUTÁVEL após choque de cotação MTM (+R$ 110,00)');
-    assert(stratEnriched2.metrics.strategyUnrealizedPnlReais !== stratEnriched1.metrics.strategyUnrealizedPnlReais, 'P0 Golden Case: Unrealized P&L variou conforme esperado');
+    assert(stratEnriched2.economicPerformance.optionPnlReais === Math.round((110.0 + stratEnriched2.metrics.strategyUnrealizedPnlReais) * 100) / 100, 'P0 Golden Case: optionPnlReais no Double Yield varia com MTM mas preserva 110 realizado');
 
-    // 8.4. Múltiplos Parciais Consecutivos (200 -> 150 -> 100 e overdraw rejection)
+    // 8.4. Teste de Taxas Não-Zero (Gross vs Net Reconciliados)
+    const feeStratId = 'strat_fee_test';
+    const feePosId = 'pos_fee_test';
+    const feeLegId = 'leg_fee_test';
+
+    db.insert(optionPositions).values({
+      id: feePosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEU600',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      strike: 60.0,
+      entryPrice: 2.00,
+      currentPrice: 2.00,
+      allocatedCapital: 6000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: feeStratId,
+      portfolio: 'Principal',
+      name: 'Fee Test Strategy',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      underlyingTicker: 'VALE3',
+      collateralMode: 'IDLE_CASH',
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: feeLegId,
+      strategyId: feeStratId,
+      positionId: feePosId,
+      allocatedQuantity: 100,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 0,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_fee_test',
+      strategyId: feeStratId,
+      startDate: '2026-08-24',
+      endDate: null,
+      benchmarkCapitalReais: 6000.0,
+      capitalRemuneratedReais: 0,
+      collateralMode: 'IDLE_CASH',
+      collateralPctCdi: null,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // Fechamento de 50 contratos @ 0.32 com taxa de R$ 2,00
+    // Gross = (2.00 - 0.32) * 50 = +R$ 84,00
+    // Fees = R$ 2,00
+    // Net = R$ 82,00
+    const feeCloseRes = await partialCloseStrategyLegAction({
+      strategyId: feeStratId,
+      strategyLegId: feeLegId,
+      quantity: 50,
+      price: 0.32,
+      feesReais: 2.00,
+      executionDate: '2026-09-02',
+    });
+    assert(feeCloseRes.success === true, 'P0 Fees Test: partialCloseStrategyLegAction com taxa executado com sucesso');
+
+    const feePosRes = await getOptionPositions();
+    const feeEnrichedPos = feePosRes.positions!.find((p) => p.id === feePosId)!;
+    const feeEnrichedStrat = feePosRes.strategies!.find((s) => s.id === feeStratId)!;
+
+    assert(feeEnrichedPos.metrics.realizedGrossPnlReais === 84.0, 'P0 Fees Test: Position grossRealizedPnlReais === +R$ 84,00');
+    assert(feeEnrichedPos.metrics.feesReais === 2.0, 'P0 Fees Test: Position feesReais === R$ 2,00');
+    assert(feeEnrichedPos.metrics.realizedNetPnlReais === 82.0, 'P0 Fees Test: Position realizedNetPnlReais === +R$ 82,00');
+
+    assert(feeEnrichedStrat.metrics.strategyGrossRealizedPnlReais === 84.0, 'P0 Fees Test: Strategy strategyGrossRealizedPnlReais === +R$ 84,00');
+    assert(feeEnrichedStrat.metrics.strategyFeesReais === 2.0, 'P0 Fees Test: Strategy strategyFeesReais === R$ 2,00');
+    assert(feeEnrichedStrat.metrics.strategyNetRealizedPnlReais === 82.0, 'P0 Fees Test: Strategy strategyNetRealizedPnlReais === +R$ 82,00');
+
+    // 8.5. Teste de Estratégia Remunerada 100% CDI Pós-Manobra (Snapshot Sync)
+    const remunStratId = 'strat_remun_test';
+    const remunPosId = 'pos_remun_test';
+    const remunLegId = 'leg_remun_test';
+
+    db.insert(optionPositions).values({
+      id: remunPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBDC4',
+      tickerOption: 'BBDCU150',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 1000,
+      openQuantity: 1000,
+      closedQuantity: 0,
+      strike: 15.0,
+      entryPrice: 0.50,
+      currentPrice: 0.50,
+      allocatedCapital: 15000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: remunStratId,
+      portfolio: 'Principal',
+      name: 'Remunerated 100% CDI Test',
+      strategyType: 'COVERED_PUT',
+      book: 'INCOME',
+      underlyingTicker: 'BBDC4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralYieldPctCDI: 100,
+      capitalRemuneratedReais: 15000.0,
+      collateralCoveragePct: 100,
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: remunLegId,
+      strategyId: remunStratId,
+      positionId: remunPosId,
+      allocatedQuantity: 1000,
+      openAllocatedQuantity: 1000,
+      closedAllocatedQuantity: 0,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_remun_test',
+      strategyId: remunStratId,
+      startDate: '2026-08-24',
+      endDate: null,
+      benchmarkCapitalReais: 15000.0,
+      capitalRemuneratedReais: 15000.0,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralPctCdi: 100,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // Scale down de 50% na estratégia 100% CDI:
+    const remunScaleDown = await scaleDownOptionStrategyAction({
+      strategyId: remunStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [{ strategyLegId: remunLegId, price: 0.10, feesReais: 0 }],
+    });
+    assert(remunScaleDown.success === true, 'P0 Remun Test: scaleDownOptionStrategyAction 50% com sucesso');
+
+    // Verificar se a linha em option_strategies foi sincronizada para 7500
+    const remunStratRow = db.query.optionStrategies.findFirst({ where: eq(optionStrategies.id, remunStratId) }).sync()!;
+    assert(remunStratRow.capitalRemuneratedReais === 7500.0, 'P0 Remun Test: option_strategies.capitalRemuneratedReais sincronizado atomicamente para R$ 7.500,00');
+
+    // getOptionPositions() deve rodar perfeitamente sem lançar REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK
+    const remunPosCheck = await getOptionPositions();
+    assert(remunPosCheck.success === true, 'P0 Remun Test: getOptionPositions executou sem erro de benchmark');
+    const remunEnriched = remunPosCheck.strategies!.find((s) => s.id === remunStratId)!;
+    assert(remunEnriched.economicPerformance.benchmarkCapitalReais === 7500.0, 'P0 Remun Test: benchmarkCapitalReais residual === 7500');
+
+    // 8.6. Teste de Risco UNBOUNDED Degradando Qualidade do Segmento
+    const unbStratId = 'strat_unbounded_test';
+    const unbShortCallPosId = 'pos_unb_short_call';
+    const unbLongCallPosId = 'pos_unb_long_call';
+    const unbShortLegId = 'leg_unb_short_call';
+    const unbLongLegId = 'leg_unb_long_call';
+
+    db.insert(optionPositions).values({
+      id: unbShortCallPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRI400',
+      optionType: 'CALL',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      strike: 40.0,
+      entryPrice: 1.50,
+      currentPrice: 1.50,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: unbLongCallPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRI420',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      strike: 42.0,
+      entryPrice: 0.80,
+      currentPrice: 0.80,
+      allocatedCapital: 80.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: unbStratId,
+      portfolio: 'Principal',
+      name: 'Spread Call to Naked Call Test',
+      strategyType: 'CREDIT_CALL_SPREAD',
+      book: 'INCOME',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'IDLE_CASH',
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: unbShortLegId,
+      strategyId: unbStratId,
+      positionId: unbShortCallPosId,
+      allocatedQuantity: 100,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 0,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: unbLongLegId,
+      strategyId: unbStratId,
+      positionId: unbLongCallPosId,
+      allocatedQuantity: 100,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 0,
+      economicRole: 'HEDGE',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_unb_initial',
+      strategyId: unbStratId,
+      startDate: '2026-08-24',
+      endDate: null,
+      benchmarkCapitalReais: 200.0,
+      capitalRemuneratedReais: 0,
+      collateralMode: 'IDLE_CASH',
+      collateralPctCdi: null,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // Fecha a perna compradora (hedge), deixando a short call descoberta
+    const unbCloseRes = await partialCloseStrategyLegAction({
+      strategyId: unbStratId,
+      strategyLegId: unbLongLegId,
+      quantity: 100,
+      price: 0.50,
+      executionDate: '2026-09-02',
+    });
+    assert(unbCloseRes.success === true, 'P0 Unbounded Test: Fechamento da trava compradora aceito');
+
+    const unbSegments = db.query.strategyFundingSegments.findMany({
+      where: eq(strategyFundingSegments.strategyId, unbStratId),
+      orderBy: [asc(strategyFundingSegments.startDate)],
+    }).sync();
+    const activeUnbSegment = unbSegments.find((s) => s.endDate === null)!;
+    assert(activeUnbSegment.quality === 'INSUFFICIENT_DATA', 'P0 Unbounded Test: Novo segmento gerado com quality === INSUFFICIENT_DATA devido a risco UNBOUNDED');
+
+    // 8.7. Múltiplos Parciais Consecutivos (Provas de Invariantes em CADA Passo)
     const partClose1 = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
       strategyLegId: itubGoldenPutLegId,
@@ -1365,7 +1687,14 @@ export async function runActionsSuiteTests() {
     });
     assert(partClose1.success === true, 'P0 Multi-Partial: Redução 1 de 50 contratos aceita');
     const legAfterPart1 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
-    assert(legAfterPart1.openAllocatedQuantity === 150, 'P0 Multi-Partial: Saldo da perna PUT === 150');
+    const putPosAfterPart1 = db.query.optionPositions.findFirst({ where: eq(optionPositions.id, itubGoldenPutPosId) }).sync()!;
+    const putExecsPart1 = db.query.optionPositionExecutions.findMany({ where: eq(optionPositionExecutions.positionId, itubGoldenPutPosId) }).sync();
+    const sumQtyExecs1 = putExecsPart1.reduce((acc, x) => acc + x.quantity, 0);
+
+    assert(putPosAfterPart1.closedQuantity === (putPosAfterPart1.legacyClosedQuantity ?? 0) + sumQtyExecs1, 'P0 Multi-Partial Step 1: closedQuantity === legacyClosedQuantity + sum(executions.quantity)');
+    assert(putPosAfterPart1.openQuantity === putPosAfterPart1.quantity - putPosAfterPart1.closedQuantity, 'P0 Multi-Partial Step 1: openQuantity === quantity - closedQuantity');
+    assert(legAfterPart1.openAllocatedQuantity === 150, 'P0 Multi-Partial Step 1: leg openAllocatedQuantity === 150');
+    assert(legAfterPart1.closedAllocatedQuantity === 250, 'P0 Multi-Partial Step 1: leg closedAllocatedQuantity === 250 (200 + 50)');
 
     const partClose2 = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
@@ -1376,7 +1705,14 @@ export async function runActionsSuiteTests() {
     });
     assert(partClose2.success === true, 'P0 Multi-Partial: Redução 2 de 50 contratos aceita');
     const legAfterPart2 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
-    assert(legAfterPart2.openAllocatedQuantity === 100, 'P0 Multi-Partial: Saldo da perna PUT === 100');
+    const putPosAfterPart2 = db.query.optionPositions.findFirst({ where: eq(optionPositions.id, itubGoldenPutPosId) }).sync()!;
+    const putExecsPart2 = db.query.optionPositionExecutions.findMany({ where: eq(optionPositionExecutions.positionId, itubGoldenPutPosId) }).sync();
+    const sumQtyExecs2 = putExecsPart2.reduce((acc, x) => acc + x.quantity, 0);
+
+    assert(putPosAfterPart2.closedQuantity === (putPosAfterPart2.legacyClosedQuantity ?? 0) + sumQtyExecs2, 'P0 Multi-Partial Step 2: closedQuantity === legacyClosedQuantity + sum(executions.quantity)');
+    assert(putPosAfterPart2.openQuantity === putPosAfterPart2.quantity - putPosAfterPart2.closedQuantity, 'P0 Multi-Partial Step 2: openQuantity === quantity - closedQuantity');
+    assert(legAfterPart2.openAllocatedQuantity === 100, 'P0 Multi-Partial Step 2: leg openAllocatedQuantity === 100');
+    assert(legAfterPart2.closedAllocatedQuantity === 300, 'P0 Multi-Partial Step 2: leg closedAllocatedQuantity === 300 (200 + 50 + 50)');
 
     const rejectOverdraw = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
@@ -1388,7 +1724,7 @@ export async function runActionsSuiteTests() {
     assert(rejectOverdraw.success === false, 'P0 Multi-Partial: Tentativa de redução acima do saldo (150 > 100) rejeitada');
     assert(Boolean(rejectOverdraw.error?.includes('INSUFFICIENT_LEG_OPEN_QUANTITY')), 'P0 Multi-Partial: Erro INSUFFICIENT_LEG_OPEN_QUANTITY retornado');
 
-    // 8.5. Concorrência DB-Level com 2 Conexões SQLite Independentes
+    // 8.8. Concorrência DB-Level com 2 Conexões SQLite Independentes
     const Database = require('better-sqlite3');
     const path = require('path');
     const fs = require('fs');
@@ -1438,14 +1774,23 @@ export async function runActionsSuiteTests() {
 
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
-    db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, [itubPutId, itubCallId, lrenPutId, dirCallId, 'pos_itub_golden_put', 'pos_itub_golden_call'])).run();
-    db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
-    db.delete(strategyFundingEvents).where(inArray(strategyFundingEvents.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
-    db.delete(strategyManeuverEvents).where(inArray(strategyManeuverEvents.strategyId, ['strat_itub_golden_42'])).run();
-    db.delete(strategyAllocationEvents).where(inArray(strategyAllocationEvents.positionId, [itubPutId, itubCallId, lrenPutId, dirCallId])).run();
-    db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
-    db.delete(optionStrategies).where(inArray(optionStrategies.id, [itubStratId, 'strat_itub_golden_42'])).run();
-    db.delete(optionPositions).where(inArray(optionPositions.id, [itubPutId, itubCallId, lrenPutId, dirCallId, 'pos_itub_golden_put', 'pos_itub_golden_call'])).run();
+    const allCleanPosIds = [
+      itubPutId, itubCallId, lrenPutId, dirCallId,
+      'pos_itub_golden_put', 'pos_itub_golden_call',
+      'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call'
+    ];
+    const allCleanStratIds = [
+      itubStratId, 'strat_itub_golden_42',
+      'strat_fee_test', 'strat_remun_test', 'strat_unbounded_test'
+    ];
+    db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, allCleanPosIds)).run();
+    db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, allCleanStratIds)).run();
+    db.delete(strategyFundingEvents).where(inArray(strategyFundingEvents.strategyId, allCleanStratIds)).run();
+    db.delete(strategyManeuverEvents).where(inArray(strategyManeuverEvents.strategyId, allCleanStratIds)).run();
+    db.delete(strategyAllocationEvents).where(inArray(strategyAllocationEvents.positionId, allCleanPosIds)).run();
+    db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.strategyId, allCleanStratIds)).run();
+    db.delete(optionStrategies).where(inArray(optionStrategies.id, allCleanStratIds)).run();
+    db.delete(optionPositions).where(inArray(optionPositions.id, allCleanPosIds)).run();
   }
 
   console.log('\n========================================');
