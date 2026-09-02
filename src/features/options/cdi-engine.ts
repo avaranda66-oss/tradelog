@@ -9,7 +9,6 @@ import {
   getB3TradingDays,
   getDiObservationDates,
   getPreviousOrSameB3TradingDay,
-  getNextOrSameB3TradingDay,
 } from './b3-calendar';
 
 export type AnnualRateDecimal = number; // Sempre em decimal: 0.14 = 14% a.a.
@@ -141,12 +140,10 @@ export function calculateRealizedDiFactor(
   const safeFallback = toAnnualRateDecimal(fallbackAnnualRate);
   const series = customSeries ?? CANONICAL_DI_RATES;
 
-  // Normalização de openDate para o pregão B3 inicial (caso ordem aberta em fim de semana ou feriado)
-  const normalizedOpenDate = getNextOrSameB3TradingDay(openDate);
   // Normalização de valuationDate para o pregão B3 mais recente (evita inflar DU em fins de semana e feriados)
   const accrualValuationDate = getPreviousOrSameB3TradingDay(valDate);
 
-  if (normalizedOpenDate >= accrualValuationDate || pctCdi <= 0) {
+  if (openDate >= accrualValuationDate || pctCdi <= 0) {
     return {
       accumulatedFactor: 1.0,
       periodYieldDecimal: 0.0,
@@ -158,14 +155,14 @@ export function calculateRealizedDiFactor(
     };
   }
 
-  // Rate observation dates: [normalizedOpenDate, accrualValuationDate)
-  const rateDates = getDiObservationDates(normalizedOpenDate, accrualValuationDate);
-  // Accrual dates: (normalizedOpenDate, accrualValuationDate]
-  const accrualDates = getB3TradingDays(normalizedOpenDate, accrualValuationDate, 'EXCLUDE_START_INCLUDE_END');
+  // Rate observation dates: [openDate, accrualValuationDate)
+  const rateDates = getDiObservationDates(openDate, accrualValuationDate);
+  // Accrual dates: (openDate, accrualValuationDate]
+  const accrualDates = getB3TradingDays(openDate, accrualValuationDate, 'EXCLUDE_START_INCLUDE_END');
 
   if (rateDates.length !== accrualDates.length) {
     throw new Error(
-      `[CDI Engine Invariant Violation] Inconsistência de datas B3: rateDates (${rateDates.length}) != accrualDates (${accrualDates.length}) entre ${normalizedOpenDate} e ${accrualValuationDate}`
+      `[CDI Engine Invariant Violation] Inconsistência de datas B3: rateDates (${rateDates.length}) != accrualDates (${accrualDates.length}) entre ${openDate} e ${accrualValuationDate}`
     );
   }
 

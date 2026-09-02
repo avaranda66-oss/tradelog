@@ -340,10 +340,20 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
 }
 
 /**
- * P0.1 (Fase 4.1.2): Reconstrução não-destrutiva de strategy_funding_segments para bancos
+ * P0.1 (Fase 4.1.2): Reconstrução atômica não-destrutiva de strategy_funding_segments para bancos
  * que já executaram a Fase 4.1 (037ac1e) sem o CHECK de coerência de source_type.
+ *
+ * Protocolo de Segurança:
+ * 1. Desliga foreign_keys antes da transação (permitindo DROP/RENAME de tabelas).
+ * 2. Executa CREATE/COPY/DROP/RENAME/INDEX estritamente dentro de uma transação SQLite atômica.
+ * 3. Em bloco finally, religa foreign_keys incondicionalmente.
+ * 4. Executa PRAGMA foreign_key_check para certificar integridade relacional.
+ * 5. Se qualquer etapa falhar, o rollback automático reverte 100% das alterações, preservando a tabela original.
  */
-function upgradeStrategyFundingSegmentsCoherenceCheck(sqliteInstance: Database.Database): void {
+export function upgradeStrategyFundingSegmentsCoherenceCheck(
+  sqliteInstance: Database.Database,
+  failureInjection?: () => void
+): void {
   const tableInfo = sqliteInstance
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments'")
     .get() as { sql: string } | undefined;
@@ -355,53 +365,72 @@ function upgradeStrategyFundingSegmentsCoherenceCheck(sqliteInstance: Database.D
     return;
   }
 
-  // Reconstrução não-destrutiva transacional preservando FKs, IDs e dados
-  sqliteInstance.exec(`
-    PRAGMA foreign_keys = OFF;
+  // 1. Desligar foreign_keys antes da transação
+  sqliteInstance.pragma('foreign_keys = OFF');
 
-    CREATE TABLE strategy_funding_segments_upgrade (
-      id TEXT PRIMARY KEY,
-      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
-      start_date TEXT NOT NULL,
-      end_date TEXT,
-      benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
-      capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
-      collateral_mode TEXT NOT NULL,
-      collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
-      source_type TEXT NOT NULL,
-      maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
-      funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
-      quality TEXT NOT NULL DEFAULT 'FULL',
-      created_at TEXT NOT NULL,
-      CHECK(end_date IS NULL OR end_date >= start_date),
-      CHECK(
-        (source_type = 'CREATION' AND maneuver_event_id IS NULL AND funding_event_id IS NULL) OR
-        (source_type = 'MANEUVER' AND maneuver_event_id IS NOT NULL AND funding_event_id IS NULL) OR
-        (source_type = 'FUNDING_CHANGE' AND maneuver_event_id IS NULL AND funding_event_id IS NOT NULL)
-      )
-    );
+  try {
+    // 2. Executar operações estruturais dentro de transação atômica do SQLite
+    const performUpgradeTransaction = sqliteInstance.transaction(() => {
+      sqliteInstance.exec(`
+        CREATE TABLE strategy_funding_segments_upgrade (
+          id TEXT PRIMARY KEY,
+          strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+          capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+          collateral_mode TEXT NOT NULL,
+          collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+          source_type TEXT NOT NULL,
+          maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
+          funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
+          quality TEXT NOT NULL DEFAULT 'FULL',
+          created_at TEXT NOT NULL,
+          CHECK(end_date IS NULL OR end_date >= start_date),
+          CHECK(
+            (source_type = 'CREATION' AND maneuver_event_id IS NULL AND funding_event_id IS NULL) OR
+            (source_type = 'MANEUVER' AND maneuver_event_id IS NOT NULL AND funding_event_id IS NULL) OR
+            (source_type = 'FUNDING_CHANGE' AND maneuver_event_id IS NULL AND funding_event_id IS NOT NULL)
+          )
+        );
 
-    INSERT INTO strategy_funding_segments_upgrade (
-      id, strategy_id, start_date, end_date, benchmark_capital_reais,
-      capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
-      source_type, maneuver_event_id, funding_event_id, quality, created_at
-    )
-    SELECT
-      id, strategy_id, start_date, end_date, benchmark_capital_reais,
-      capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
-      source_type, maneuver_event_id, funding_event_id, quality, created_at
-    FROM strategy_funding_segments;
+        INSERT INTO strategy_funding_segments_upgrade (
+          id, strategy_id, start_date, end_date, benchmark_capital_reais,
+          capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
+          source_type, maneuver_event_id, funding_event_id, quality, created_at
+        )
+        SELECT
+          id, strategy_id, start_date, end_date, benchmark_capital_reais,
+          capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
+          source_type, maneuver_event_id, funding_event_id, quality, created_at
+        FROM strategy_funding_segments;
 
-    DROP TABLE strategy_funding_segments;
+        DROP TABLE strategy_funding_segments;
 
-    ALTER TABLE strategy_funding_segments_upgrade RENAME TO strategy_funding_segments;
+        ALTER TABLE strategy_funding_segments_upgrade RENAME TO strategy_funding_segments;
 
-    CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy
-    ON strategy_funding_segments(strategy_id)
-    WHERE end_date IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy
+        ON strategy_funding_segments(strategy_id)
+        WHERE end_date IS NULL;
+      `);
 
-    PRAGMA foreign_keys = ON;
-  `);
+      // Gancho para teste de failure injection: simula erro no meio do processo antes do COMMIT
+      if (failureInjection) {
+        failureInjection();
+      }
+    });
+
+    performUpgradeTransaction();
+  } finally {
+    // 3. Em bloco finally, religar foreign_keys incondicionalmente
+    sqliteInstance.pragma('foreign_keys = ON');
+  }
+
+  // 4. Executar verificação estrita de chaves estrangeiras
+  const fkViolations = sqliteInstance.prepare('PRAGMA foreign_key_check').all();
+  if (fkViolations.length > 0) {
+    throw new Error(`FOREIGN_KEY_VIOLATION_AFTER_UPGRADE: ${JSON.stringify(fkViolations)}`);
+  }
 }
 
 /**

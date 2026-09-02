@@ -9,6 +9,7 @@ import {
   countB3TradingDays,
   getBrazilTodayDate,
   getPreviousOrSameB3TradingDay,
+  isB3TradingDay,
 } from './b3-calendar';
 import {
   type AnnualRateDecimal,
@@ -792,6 +793,8 @@ export interface PositionCalculatedMetrics {
   netCdiBenchmarkReais: number;
   netAlphaReais: number;
   netOptionPnlToCdiMultiple: number | null;
+  entryDateQuality?: 'VALID_B3_TRADING_DAY' | 'INVALID_ENTRY_DATE_NON_TRADING_DAY';
+  qualityNotes?: string[];
 }
 
 export type EnrichedOptionPosition = OptionPosition & {
@@ -896,7 +899,30 @@ export function enrichOptionPosition(
 
   // 7. CDI Realizado Diário vs Projetado (com normalização estrita de unidade decimal)
   const cdiRateAnnual = toAnnualRateDecimal(pos.cdiRateAnnual);
-  const realizedDi = calculateRealizedDiFactor(openDate, effectiveValDate, cdiRateAnnual);
+  const isValidTradingDay = isB3TradingDay(openDate);
+
+  let realizedDi: RealizedDiResult;
+  let entryDateQuality: 'VALID_B3_TRADING_DAY' | 'INVALID_ENTRY_DATE_NON_TRADING_DAY' = 'VALID_B3_TRADING_DAY';
+  let qualityNotes: string[] = [];
+
+  if (!isValidTradingDay) {
+    entryDateQuality = 'INVALID_ENTRY_DATE_NON_TRADING_DAY';
+    qualityNotes.push(
+      'INVALID_ENTRY_DATE_NON_TRADING_DAY: A data de entrada desta posição legada não corresponde a um pregão válido da B3. Não alterado silenciosamente; correção explícita necessária.'
+    );
+    realizedDi = {
+      accumulatedFactor: 1.0,
+      periodYieldDecimal: 0.0,
+      isEstimated: true,
+      observationsCount: 0,
+      datesUsed: [],
+      observations: [],
+      pctCdi: 100,
+    };
+  } else {
+    realizedDi = calculateRealizedDiFactor(openDate, effectiveValDate, cdiRateAnnual);
+  }
+
   const projectedDi = calculateProjectedDiFactor(remainingTradingDays, cdiRateAnnual);
 
   const cdiRealizedReais = capitalAllocated * realizedDi.periodYieldDecimal;
@@ -988,6 +1014,8 @@ export function enrichOptionPosition(
       netCdiBenchmarkReais,
       netAlphaReais,
       netOptionPnlToCdiMultiple,
+      entryDateQuality,
+      qualityNotes,
     },
   };
 }

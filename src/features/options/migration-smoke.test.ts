@@ -8,7 +8,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { ensureColumn, ensureTable, ensureIndex, applyMigrations } from '../../lib/db/migrations';
+import { ensureColumn, ensureTable, ensureIndex, applyMigrations, upgradeStrategyFundingSegmentsCoherenceCheck } from '../../lib/db/migrations';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -579,6 +579,76 @@ export function runMigrationSmokeTest() {
   assert(segCountTwoHop.c === 1, 'P0.1: Idempotência do upgrade confirmada (1 segmento)');
 
   sqliteTwoHop.close();
+
+  // 8. Teste de Failure Injection: Prova que falha no meio da reconstrução faz rollback e preserva o banco
+  console.log('\n  -> Testando Atomicidade e Failure Injection na Reconstrução...');
+  const sqliteFailDb = new Database(':memory:');
+  sqliteFailDb.pragma('foreign_keys = ON');
+
+  sqliteFailDb.exec(`
+    CREATE TABLE option_strategies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      strategy_type TEXT NOT NULL,
+      book TEXT NOT NULL,
+      underlying_ticker TEXT NOT NULL,
+      collateral_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      opened_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE strategy_funding_segments (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+      capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+      collateral_mode TEXT NOT NULL,
+      collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+      source_type TEXT NOT NULL,
+      maneuver_event_id TEXT,
+      funding_event_id TEXT,
+      quality TEXT NOT NULL DEFAULT 'FULL',
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  sqliteFailDb.prepare(`
+    INSERT INTO option_strategies (id, name, strategy_type, book, underlying_ticker, collateral_mode, status, opened_at, created_at)
+    VALUES ('strat_fail_test', 'Estratégia Failure Injection', 'CUSTOM', 'HYBRID', 'PETR4', 'IDLE_CASH', 'OPEN', '2026-08-01', '2026-08-01');
+  `).run();
+
+  sqliteFailDb.prepare(`
+    INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, quality, created_at)
+    VALUES ('seg_fail_before', 'strat_fail_test', '2026-08-01', NULL, 10000.0, 0, 'IDLE_CASH', 'CREATION', 'FULL', '2026-08-01');
+  `).run();
+
+  let failureInjected = false;
+  try {
+    upgradeStrategyFundingSegmentsCoherenceCheck(sqliteFailDb, () => {
+      throw new Error('SIMULATED_FAILURE_MID_REBUILD');
+    });
+  } catch (err: any) {
+    failureInjected = err.message === 'SIMULATED_FAILURE_MID_REBUILD';
+  }
+  assert(failureInjected, 'Failure Injection: Exceção simulada interceptada durante reconstrução');
+
+  // Verificar que o rollback preservou a tabela original intacta
+  const originalSeg = sqliteFailDb.prepare("SELECT * FROM strategy_funding_segments WHERE id = 'seg_fail_before'").get() as any;
+  assert(Boolean(originalSeg), 'Failure Injection: Tabela original preservada intacta após rollback');
+  assert(originalSeg.benchmark_capital_reais === 10000.0, 'Failure Injection: Dados originais preservados (R$ 10.000,00)');
+
+  // Verificar que a tabela temporária de upgrade foi descartada pelo rollback
+  const tempTableExists = sqliteFailDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments_upgrade'").get();
+  assert(!tempTableExists, 'Failure Injection: Tabela temporária _upgrade não existe após rollback');
+
+  // Verificar que foreign_keys foi religado pelo bloco finally
+  const fkStatus = sqliteFailDb.pragma('foreign_keys', { simple: true });
+  assert(fkStatus === 1, 'Failure Injection: foreign_keys religado com sucesso pelo bloco finally (1 = ON)');
+
+  sqliteFailDb.close();
 
   console.log('\n========================================');
   console.log('✅ ALL SQLITE MIGRATION SMOKE TESTS PASSED SUCCESSFULLY!');

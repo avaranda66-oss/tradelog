@@ -11,7 +11,11 @@
     "farol:login": "tsx src/scripts/login_farol.ts",
     "farol:vision": "tsx src/scripts/test_farol_vision.ts",
     "transcribe:day25": "tsx src/scripts/retranscribe_day25.ts",
-    "transcribe:day24": "tsx src/scripts/retranscribe_day24.ts"
+    "transcribe:day24": "tsx src/scripts/retranscribe_day24.ts",
+    "test:smoke": "tsx src/features/options/migration-smoke.test.ts",
+    "test:quant": "tsx src/features/options/options-suite.test.ts",
+    "test:actions": "tsx src/features/options/actions-suite.runner.ts",
+    "test": "npm run test:smoke && npm run test:quant && npm run test:actions"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

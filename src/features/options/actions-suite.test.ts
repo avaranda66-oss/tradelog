@@ -27,6 +27,13 @@ import {
   optionPositionExecutions,
 } from '../../lib/db/schema';
 import { eq, inArray, and, isNull } from 'drizzle-orm';
+import { calculateRealizedDiFactor } from './cdi-engine';
+
+if (process.env.TRADELOG_DB_PATH !== ':memory:') {
+  throw new Error(
+    'FAIL-FAST VIOLATION: actions-suite must ONLY be run against an in-memory database (:memory:) to prevent polluting local development database. Please run via: npx tsx src/features/options/actions-suite.runner.ts'
+  );
+}
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -37,7 +44,7 @@ function assert(condition: boolean, msg: string) {
 
 export async function runActionsSuiteTests() {
   console.log('\n========================================');
-  console.log('🧪 RUNNING SERVER ACTIONS & INTEGRATION TEST SUITE');
+  console.log('🧪 RUNNING SERVER ACTIONS & INTEGRATION TEST SUITE (:memory:)');
   console.log('========================================\n');
 
   console.log('1. Error Contract & DB Failure Tests:');
@@ -553,6 +560,69 @@ export async function runActionsSuiteTests() {
     assert(rejectClosedRes.success === false, 'P0.4: Criação direta como CLOSED rejeitada');
     assert(Boolean(rejectClosedRes.error?.includes('DIRECT_CLOSED_CREATION_NOT_SUPPORTED')), 'P0.4: Erro DIRECT_CLOSED_CREATION_NOT_SUPPORTED retornado');
 
+    // 6.1b. Boundary: Rejeição de criação com data não útil (fim de semana ou feriado) e aceite de dia útil
+    const rejectSaturdayRes = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 100,
+      strike: 30.00,
+      entryPrice: 1.00,
+      entryDate: '2026-08-15', // Sábado
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+    });
+    assert(rejectSaturdayRes.success === false, 'Boundary: Criação com sábado rejeitada');
+    assert(Boolean(rejectSaturdayRes.error?.includes('INVALID_ENTRY_DATE_NON_TRADING_DAY')), 'Boundary: Erro INVALID_ENTRY_DATE_NON_TRADING_DAY para sábado');
+
+    const rejectHolidayRes = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 100,
+      strike: 30.00,
+      entryPrice: 1.00,
+      entryDate: '2026-09-07', // Feriado Independência do Brasil
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+    });
+    assert(rejectHolidayRes.success === false, 'Boundary: Criação com feriado B3 rejeitada');
+    assert(Boolean(rejectHolidayRes.error?.includes('INVALID_ENTRY_DATE_NON_TRADING_DAY')), 'Boundary: Erro INVALID_ENTRY_DATE_NON_TRADING_DAY para feriado');
+
+    const validTradingDayRes = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 100,
+      strike: 30.00,
+      entryPrice: 1.00,
+      entryDate: '2026-08-24', // Segunda-feira útil de pregão B3
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+    });
+    assert(validTradingDayRes.success === true, 'Boundary: Criação com pregão B3 válido aceita');
+    if (validTradingDayRes.id) {
+      db.delete(optionPositions).where(eq(optionPositions.id, validTradingDayRes.id)).run();
+    }
+
+    // Validação de Fail-Safe no CDI Engine: disparar erro ao calcular com intervalo inconsistente
+    let cdiThrewOnWeekend = false;
+    try {
+      calculateRealizedDiFactor('2026-08-15', '2026-09-02', 0.14);
+    } catch (err: any) {
+      cdiThrewOnWeekend = err.message.includes('CDI Engine Invariant Violation');
+    }
+    assert(cdiThrewOnWeekend, 'CDI Engine: Fail-safe preservado (dispara Invariant Violation se chamado com data inconsistente)');
+
     // 6.2. P1.5: Rejeição de groupOptionPositionsAction em modo remunerado sem split explícito
     const createPosA = await createOptionPosition({
       portfolio: 'Principal',
@@ -870,7 +940,7 @@ export async function runActionsSuiteTests() {
   console.log('========================================\n');
 }
 
-if (require.main === module || typeof process !== 'undefined') {
+if (require.main === module) {
   runActionsSuiteTests().then(() => process.exit(0)).catch((err) => {
     console.error(err);
     process.exit(1);

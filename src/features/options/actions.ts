@@ -33,7 +33,7 @@ import {
   type CollateralMode,
   type StrategyEconomicPerformance,
 } from './calculations';
-import { getBrazilTodayDate } from './b3-calendar';
+import { getBrazilTodayDate, isB3TradingDay, type BusinessDate } from './b3-calendar';
 import { toAnnualRateDecimal } from './cdi-engine';
 
 function safeRevalidate(path: string = '/opcoes') {
@@ -1160,6 +1160,14 @@ export async function createOptionPosition(data: {
       };
     }
 
+    // Boundary Validation: entryDate deve ser dia útil de pregão B3
+    if (!isB3TradingDay(data.entryDate as BusinessDate)) {
+      return {
+        success: false,
+        error: 'INVALID_ENTRY_DATE_NON_TRADING_DAY: A data de entrada deve corresponder a um pregão válido da B3.',
+      };
+    }
+
     const id = generateId('opt_pos');
     const now = new Date().toISOString();
 
@@ -1259,6 +1267,14 @@ export async function updateOptionPosition(
       where: eq(optionPositions.id, id),
     });
     if (!current) throw new Error('Posição não encontrada');
+
+    // Boundary Validation: entryDate deve ser dia útil de pregão B3 se fornecida
+    if (data.entryDate !== undefined && !isB3TradingDay(data.entryDate as BusinessDate)) {
+      return {
+        success: false,
+        error: 'INVALID_ENTRY_DATE_NON_TRADING_DAY: A data de entrada deve corresponder a um pregão válido da B3.',
+      };
+    }
 
     let openQuantity = current.openQuantity ?? current.quantity;
     let closedQuantity = current.closedQuantity ?? 0;
