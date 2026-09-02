@@ -20,10 +20,10 @@ export function StrategyEconomicStorytellingCard({
   const ep = strategy.economicPerformance;
   const sm = strategy.metrics;
 
-  const canCompareToCdi = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA';
+  const canCompareToCdi = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA' && ep.benchmarkCdiReais !== null && ep.excessReturnVsCdiReais !== null;
   const isMtm = ep.resultNature === 'MTM';
   const isPositivePnl = ep.optionPnlReais >= 0;
-  const isPositiveExcess = ep.excessReturnVsCdiReais >= 0;
+  const isPositiveExcess = ep.excessReturnVsCdiReais !== null && ep.excessReturnVsCdiReais >= 0;
   const isAssumedFunding = hasQualityNote(ep.qualityNotes, 'ASSUMED_FULL_COLLATERAL_COVERAGE');
   const isMissingClosedAt = hasQualityNote(ep.qualityNotes, 'CLOSED_AT_REQUIRED');
 
@@ -193,7 +193,7 @@ export function StrategyEconomicStorytellingCard({
             SE FOSSE SÓ CDI
           </div>
           <div className="text-base font-bold text-slate-300">
-            {!canCompareToCdi ? (
+            {!canCompareToCdi || ep.benchmarkCdiReais === null ? (
               <span className="text-slate-500 text-sm">N/A</span>
             ) : (
               `+R$ ${ep.benchmarkCdiReais.toFixed(2)}`
@@ -218,13 +218,13 @@ export function StrategyEconomicStorytellingCard({
               : 'VALOR GERADO ACIMA CDI'}
           </div>
           <div className={`text-base font-bold ${
-            !canCompareToCdi
+            !canCompareToCdi || ep.excessReturnVsCdiReais === null
               ? 'text-slate-500'
               : isPositiveExcess
               ? 'text-emerald-400'
               : 'text-rose-400'
           }`}>
-            {!canCompareToCdi ? (
+            {!canCompareToCdi || ep.excessReturnVsCdiReais === null ? (
               <span className="text-slate-500 text-sm">N/A</span>
             ) : (
               `${isPositiveExcess ? '+' : ''}R$ ${ep.excessReturnVsCdiReais.toFixed(2)}`

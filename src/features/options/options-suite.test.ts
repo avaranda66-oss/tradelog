@@ -420,10 +420,10 @@ export function runAllTests() {
     maxLossEconomicReais: 15476.0,
     maxLossType: 'FINITE',
   });
-  assert(Math.abs(perfA.benchmarkCdiReais - 48.031468) < 0.01, 'Cenário A: Benchmark CDI 6 DU é rigorosamente R$ 48,03');
+  assert(Math.abs(perfA.benchmarkCdiReais! - 48.031468) < 0.01, 'Cenário A: Benchmark CDI 6 DU é rigorosamente R$ 48,03');
   assert(perfA.collateralCarryReais === 0.0, 'Cenário A: IDLE_CASH gera rigorosamente R$ 0 de carrego de caixa');
   assert(perfA.totalEconomicReturnReais === 300.0, 'Cenário A: Retorno Econômico Total é igual ao P&L das opções (+R$ 300,00)');
-  assert(Math.abs(perfA.excessReturnVsCdiReais - (300.0 - 48.031468)) < 0.01, 'Cenário A: Excesso vs CDI = P&L Opção - Custo de Oportunidade (+R$ 251,97)');
+  assert(Math.abs(perfA.excessReturnVsCdiReais! - (300.0 - 48.031468)) < 0.01, 'Cenário A: Excesso vs CDI = P&L Opção - Custo de Oportunidade (+R$ 251,97)');
 
   // B. Cash-Secured Put + 100% CDI
   const perfB = calculateStrategyEconomicPerformance({
@@ -437,7 +437,7 @@ export function runAllTests() {
   });
   assert(Math.abs(perfB.collateralCarryReais - 48.031468) < 0.01, 'Cenário B: Carrego do Caixa a 100% CDI é rigorosamente R$ 48,03');
   assert(Math.abs(perfB.totalEconomicReturnReais - 348.031468) < 0.01, 'Cenário B: Retorno Total com Double Yield é +R$ 348,03');
-  assert(Math.abs(perfB.excessReturnVsCdiReais - 300.0) < 0.00001, 'Cenário B Invariant: Em 100% CDI, excessReturnVsCdiReais === optionPnlReais (+R$ 300,00)');
+  assert(Math.abs(perfB.excessReturnVsCdiReais! - 300.0) < 0.00001, 'Cenário B Invariant: Em 100% CDI, excessReturnVsCdiReais === optionPnlReais (+R$ 300,00)');
 
   // C. Cash-Secured Put + 110% CDI (Indexação diária oficial B3)
   const perfC = calculateStrategyEconomicPerformance({
@@ -451,7 +451,7 @@ export function runAllTests() {
     maxLossType: 'FINITE',
   });
   assert(Math.abs(perfC.collateralCarryReais - 52.841409) < 0.01, 'Cenário C: Carrego a 110% CDI com composição diária oficial é R$ 52,84');
-  assert(Math.abs(perfC.excessReturnVsCdiReais - 304.80994) < 0.01, 'Cenário C: Excesso vs CDI = Opções (+300) + Alpha do Caixa (+4.81) = +R$ 304,81');
+  assert(Math.abs(perfC.excessReturnVsCdiReais! - 304.80994) < 0.01, 'Cenário C: Excesso vs CDI = Opções (+300) + Alpha do Caixa (+4.81) = +R$ 304,81');
 
   // D. Estrutura Financiada ITUB4 2:1 (Reconciliação Completa do Storytelling)
   const perfD = calculateStrategyEconomicPerformance({
@@ -468,7 +468,7 @@ export function runAllTests() {
     resultNature: 'MTM',
   });
   assert(Math.abs(perfD.totalEconomicReturnReais - 526.031468) < 0.01, 'Cenário D: Retorno Econômico Total ITUB 2:1 é rigorosamente +R$ 526,03 (+3,40%)');
-  assert(Math.abs(perfD.excessReturnVsCdiReais - 478.0) < 0.0001, 'Cenário D: Valor Gerado Acima do CDI é rigorosamente +R$ 478,00 (+3,09 p.p.)');
+  assert(Math.abs(perfD.excessReturnVsCdiReais! - 478.0) < 0.0001, 'Cenário D: Valor Gerado Acima do CDI é rigorosamente +R$ 478,00 (+3,09 p.p.)');
   assert(Math.abs(perfD.optionPnlToCdiMultiple! - 9.9518) < 0.01, 'Cenário D: Múltiplo Opções / CDI é rigorosamente 9,95x');
   assert(Math.abs(perfD.totalReturnToCdiMultiple! - 10.9518) < 0.01, 'Cenário D: Múltiplo Retorno Total / CDI é rigorosamente 10,95x');
   assert(Math.abs(perfD.extraProfitPer1000RiskReais! - 31.25) < 0.01, 'Cenário D: Lucro Extra por R$ 1.000 de risco máximo é R$ 31,25');
@@ -496,8 +496,8 @@ export function runAllTests() {
     optionPnlReais: 150.0,
     collateralMode: 'REMUNERATED_100_CDI',
   });
-  assert(Math.abs(perfF.benchmarkCdiReais - (7738.0 * 0.00310356)) < 0.001, 'Cenário F: Alocação parcial escala benchmark linearmente');
-  assert(Math.abs(perfF.excessReturnVsCdiReais - 150.0) < 0.001, 'Cenário F: Excesso de retorno proporcional preservado');
+  assert(Math.abs(perfF.benchmarkCdiReais! - (7738.0 * 0.00310356)) < 0.001, 'Cenário F: Alocação parcial escala benchmark linearmente');
+  assert(Math.abs(perfF.excessReturnVsCdiReais! - 150.0) < 0.001, 'Cenário F: Excesso de retorno proporcional preservado');
 
   // G. Pernas com Datas de Abertura Diferentes
   const perfG = calculateStrategyEconomicPerformance({
@@ -582,7 +582,7 @@ export function runAllTests() {
     collateralMode: 'REMUNERATED_100_CDI',
   });
   assert(Math.abs(perfN.totalEconomicReturnReais - (-200.0 + 48.03069456)) < 0.001, 'Cenário N: Double Yield amortece P&L negativo com carrego do CDI (-R$ 151,97)');
-  assert(Math.abs(perfN.excessReturnVsCdiReais - (-200.0)) < 0.001, 'Cenário N: Excesso vs CDI negativo reflete perda estrita das opções');
+  assert(Math.abs(perfN.excessReturnVsCdiReais! - (-200.0)) < 0.001, 'Cenário N: Excesso vs CDI negativo reflete perda estrita das opções');
 
   // O. P&L Zero das Opções
   const perfO = calculateStrategyEconomicPerformance({
@@ -593,7 +593,7 @@ export function runAllTests() {
     collateralMode: 'REMUNERATED_100_CDI',
   });
   assert(Math.abs(perfO.totalEconomicReturnReais - 48.03069456) < 0.001, 'Cenário O: Com P&L zero, retorno econômico total é exatamente o CDI do caixa');
-  assert(perfO.excessReturnVsCdiReais === 0.0, 'Cenário O: Valor gerado acima do CDI é rigorosamente R$ 0,00');
+  assert(perfO.excessReturnVsCdiReais! === 0.0, 'Cenário O: Valor gerado acima do CDI é rigorosamente R$ 0,00');
 
   // ─── 8. PHASE 2.1 REAL STRATEGY INTEGRATION & RISK RECOGNIZER TESTS ───
   console.log('\n8. Phase 2.1 Real Strategy Integration & Risk Recognizer Tests:');
@@ -757,8 +757,8 @@ export function runAllTests() {
     collateralMode: 'REMUNERATED_100_CDI',
   });
   assert(Math.abs(perfSplitCollateral.collateralCarryReais - (7738.0 * 0.00310361)) < 0.01, 'Split Capital: Carrego do caixa é calculado sobre os R$ 7.738 remunerados');
-  assert(Math.abs(perfSplitCollateral.benchmarkCdiReais - (15476.0 * 0.00310361)) < 0.01, 'Split Capital: Benchmark CDI é calculado sobre os R$ 15.476 de custo de oportunidade');
-  assert(Math.abs(perfSplitCollateral.excessReturnVsCdiReais - (300.0 + 7738.0 * 0.00310361 - 15476.0 * 0.00310361)) < 0.01, 'Split Capital: Excesso vs CDI desconta o custo de oportunidade não remunerado');
+  assert(Math.abs(perfSplitCollateral.benchmarkCdiReais! - (15476.0 * 0.00310361)) < 0.01, 'Split Capital: Benchmark CDI é calculado sobre os R$ 15.476 de custo de oportunidade');
+  assert(Math.abs(perfSplitCollateral.excessReturnVsCdiReais! - (300.0 + 7738.0 * 0.00310361 - 15476.0 * 0.00310361)) < 0.01, 'Split Capital: Excesso vs CDI desconta o custo de oportunidade não remunerado');
 
   // 8.8. Bull Call Spread de Débito Real (Integrado)
   const bcsLongCall: any = {
@@ -908,7 +908,7 @@ export function runAllTests() {
     ],
   });
   assert(closedWithoutDateStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'CLOSED sem data: Marca economicPerformanceQuality INSUFFICIENT_DATA');
-  assert(closedWithoutDateStrat.economicPerformance.benchmarkCdiReais === 0, 'CLOSED sem data: Falha fechado com benchmarkCdiReais zerado (0)');
+  assert(closedWithoutDateStrat.economicPerformance.benchmarkCdiReais === null, 'CLOSED sem data: Falha fechado com benchmarkCdiReais nulo (null)');
   assert(closedWithoutDateStrat.economicPerformance.qualityNotes.some((n) => n.includes('CLOSED_AT_REQUIRED')), 'CLOSED sem data: Registra erro de domínio CLOSED_AT_REQUIRED');
 
   // 8.12. ROLLED Result Nature e Split Capital Integrado no enrichOptionStrategy()
@@ -1035,7 +1035,7 @@ export function runAllTests() {
     legs: [{ id: 'l1', strategyId: 'strat_rolled_missing_date', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
   });
   assert(rolledWithoutDateStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'ROLLED sem data: Marca economicPerformanceQuality INSUFFICIENT_DATA');
-  assert(rolledWithoutDateStrat.economicPerformance.benchmarkCdiReais === 0, 'ROLLED sem data: Falha fechado com benchmarkCdiReais zerado (0)');
+  assert(rolledWithoutDateStrat.economicPerformance.benchmarkCdiReais === null, 'ROLLED sem data: Falha fechado com benchmarkCdiReais nulo (null)');
 
   // 8.18. Trava de Alta com Put (BPS) com Inconsistência Econômica (Débito Pago) => UNKNOWN
   const bpsInconsistentStrat = enrichOptionStrategy({

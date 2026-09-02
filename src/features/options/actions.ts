@@ -434,60 +434,74 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
 
     const actionFeedItems: ActionFeedItem[] = [];
 
-    // 1. Soma das Estruturas Abertas
+    // 1. Agregação das Estruturas (CURRENT EXPOSURE vs PERFORMANCE SINCE INCEPTION)
     for (const st of enrichedStrategies) {
+      const ep = st.economicPerformance;
+
+      // CURRENT EXPOSURE: apenas estruturas com status === 'OPEN'
       if (st.status === 'OPEN') {
         totalCapitalAllocated += st.metrics.totalCapitalReserved;
         totalPnlMtmReais += st.metrics.netPnlMtmReais;
 
-        const ep = st.economicPerformance;
-
-        // Estruturas com capital definido são benchmark-eligible
-        if (st.book === 'HYBRID' || st.book === 'INCOME') {
-          portfolioBenchmarkEligibleCount++;
-          portfolioBenchmarkEligibleCapital += ep.benchmarkCapitalReais;
-
-          if (ep.economicPerformanceQuality === 'PARTIAL' && portfolioEconomicPerformanceQuality !== 'INSUFFICIENT_DATA') {
-            portfolioEconomicPerformanceQuality = 'PARTIAL';
-          } else if (ep.economicPerformanceQuality === 'INSUFFICIENT_DATA') {
-            portfolioEconomicPerformanceQuality = 'INSUFFICIENT_DATA';
-          }
-
-          if (ep.benchmarkQuality === 'ESTIMATED') hasEstimatedBenchmark = true;
-          else if (ep.benchmarkQuality === 'PARTIAL_ESTIMATE') hasPartialEstimateBenchmark = true;
-          else if (ep.benchmarkQuality === 'OFFICIAL_DI') hasOfficialBenchmark = true;
-
-          portfolioOptionPnlReais += ep.optionPnlReais;
-          portfolioBenchmarkCdiReais += ep.benchmarkCdiReais;
-          portfolioCollateralCarryReais += ep.collateralCarryReais;
-          portfolioTotalEconomicReturnReais += ep.totalEconomicReturnReais;
-          portfolioExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
-        } else {
-          portfolioExcludedFromBenchmarkCount++;
-        }
-
         if (st.book === 'HYBRID') {
           hybridCapital += st.metrics.totalCapitalReserved;
-          hybridOptionPnlReais += ep.optionPnlReais;
-          hybridNetCredit += st.metrics.netInitialCreditDebitReais;
-          hybridBenchmarkCdiReais += ep.benchmarkCdiReais;
-          hybridCollateralCarryReais += ep.collateralCarryReais;
-          hybridTotalEconomicReturnReais += ep.totalEconomicReturnReais;
-          hybridExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
-          hybridNetCdi += ep.benchmarkCdiReais * 0.775;
+          hybridNetCredit += st.metrics.residualInitialCreditDebitReais ?? st.metrics.netInitialCreditDebitReais;
         } else if (st.book === 'INCOME') {
           incomeCapital += st.metrics.totalCapitalReserved;
-          incomeOptionPnlReais += ep.optionPnlReais;
-          incomeBenchmarkCdiReais += ep.benchmarkCdiReais;
-          incomeCollateralCarryReais += ep.collateralCarryReais;
-          incomeTotalEconomicReturnReais += ep.totalEconomicReturnReais;
-          incomeExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
-          incomeNetPnl += ep.optionPnlReais * 0.85;
-          incomeNetCdi += ep.benchmarkCdiReais * 0.775;
         } else {
           directionalCapital += st.metrics.totalCapitalReserved;
-          directionalPnl += ep.optionPnlReais;
         }
+      }
+
+      // PERFORMANCE SINCE INCEPTION (OPEN, CLOSED e ROLLED)
+      // Estruturas com benchmark válido (HYBRID ou INCOME que não sejam INSUFFICIENT_DATA / NOT_AVAILABLE)
+      const isBenchmarkComparable =
+        (st.book === 'HYBRID' || st.book === 'INCOME') &&
+        ep.benchmarkQuality !== 'NOT_AVAILABLE' &&
+        ep.benchmarkCdiReais !== null &&
+        st.metrics.strategyRealizedPnlQuality === 'FULL';
+
+      if (isBenchmarkComparable) {
+        portfolioBenchmarkEligibleCount++;
+        portfolioBenchmarkEligibleCapital += ep.benchmarkCapitalReais;
+
+        if (ep.economicPerformanceQuality === 'PARTIAL' && portfolioEconomicPerformanceQuality !== 'INSUFFICIENT_DATA') {
+          portfolioEconomicPerformanceQuality = 'PARTIAL';
+        } else if (ep.economicPerformanceQuality === 'INSUFFICIENT_DATA') {
+          portfolioEconomicPerformanceQuality = 'INSUFFICIENT_DATA';
+        }
+
+        if (ep.benchmarkQuality === 'ESTIMATED') hasEstimatedBenchmark = true;
+        else if (ep.benchmarkQuality === 'PARTIAL_ESTIMATE') hasPartialEstimateBenchmark = true;
+        else if (ep.benchmarkQuality === 'OFFICIAL_DI') hasOfficialBenchmark = true;
+
+        portfolioOptionPnlReais += ep.optionPnlReais;
+        portfolioBenchmarkCdiReais += ep.benchmarkCdiReais!;
+        portfolioCollateralCarryReais += ep.collateralCarryReais;
+        portfolioTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+        portfolioExcessReturnVsCdiReais += ep.excessReturnVsCdiReais ?? 0;
+      } else {
+        portfolioExcludedFromBenchmarkCount++;
+      }
+
+      // Livros Históricos (Acumulam performance since inception de todas as estratégias)
+      if (st.book === 'HYBRID') {
+        hybridOptionPnlReais += ep.optionPnlReais;
+        hybridBenchmarkCdiReais += ep.benchmarkCdiReais ?? 0;
+        hybridCollateralCarryReais += ep.collateralCarryReais;
+        hybridTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+        hybridExcessReturnVsCdiReais += ep.excessReturnVsCdiReais ?? 0;
+        hybridNetCdi += (ep.benchmarkCdiReais ?? 0) * 0.775;
+      } else if (st.book === 'INCOME') {
+        incomeOptionPnlReais += ep.optionPnlReais;
+        incomeBenchmarkCdiReais += ep.benchmarkCdiReais ?? 0;
+        incomeCollateralCarryReais += ep.collateralCarryReais;
+        incomeTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+        incomeExcessReturnVsCdiReais += ep.excessReturnVsCdiReais ?? 0;
+        incomeNetPnl += ep.optionPnlReais * 0.85;
+        incomeNetCdi += (ep.benchmarkCdiReais ?? 0) * 0.775;
+      } else {
+        directionalPnl += ep.optionPnlReais;
       }
     }
 
@@ -507,8 +521,6 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
           totalPnlMtmReais += unallocPnl;
 
           if (m.book === 'INCOME') {
-            // Posição avulsa de renda (ex: Short Put LREN3 não agrupada em strategy)
-            // Possui garantia, mas sem funding explícito (tratado como IDLE_CASH / PARTIAL)
             portfolioBenchmarkEligibleCount++;
             portfolioBenchmarkEligibleCapital += unallocCapital;
             if (portfolioEconomicPerformanceQuality === 'FULL') {
@@ -609,9 +621,9 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     // Métricas Canônicas Derivadas do Double Yield Consolidado
     const totalAlphaReais = portfolioExcessReturnVsCdiReais;
     const totalCdiRealizedReais = portfolioBenchmarkCdiReais;
-    const totalCdiMultiple = Math.abs(portfolioBenchmarkCdiReais) >= 0.05 ? portfolioTotalEconomicReturnReais / portfolioBenchmarkCdiReais : null;
+    const totalCdiMultiple = portfolioBenchmarkEligibleCount > 0 && Math.abs(portfolioBenchmarkCdiReais) >= 0.05 ? portfolioTotalEconomicReturnReais / portfolioBenchmarkCdiReais : null;
     const portfolioTotalReturnToCdiMultiple = totalCdiMultiple;
-    const portfolioExcessToCdiMultiple = Math.abs(portfolioBenchmarkCdiReais) >= 0.05 ? portfolioExcessReturnVsCdiReais / portfolioBenchmarkCdiReais : null;
+    const portfolioExcessToCdiMultiple = portfolioBenchmarkEligibleCount > 0 && Math.abs(portfolioBenchmarkCdiReais) >= 0.05 ? portfolioExcessReturnVsCdiReais / portfolioBenchmarkCdiReais : null;
 
     const incomeTotalReturnToCdiMultiple = Math.abs(incomeBenchmarkCdiReais) >= 0.05 ? incomeTotalEconomicReturnReais / incomeBenchmarkCdiReais : null;
     const incomeExcessToCdiMultiple = Math.abs(incomeBenchmarkCdiReais) >= 0.05 ? incomeExcessReturnVsCdiReais / incomeBenchmarkCdiReais : null;

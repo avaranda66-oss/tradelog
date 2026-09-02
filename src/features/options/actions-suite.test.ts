@@ -24,6 +24,7 @@ import {
 } from '../../lib/db/schema';
 import { eq, inArray, and, isNull, asc } from 'drizzle-orm';
 import { calculateRealizedDiFactor } from './cdi-engine';
+import { calculateStrategyEconomicPerformance } from './calculations';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -1078,7 +1079,7 @@ export async function runActionsSuiteTests() {
     assert(Boolean(weekendStrat), 'P0/P1 Golden Test: Estrutura com data de sábado encontrada');
     assert(weekendStrat?.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'P0/P1 Golden Test: economicPerformanceQuality === INSUFFICIENT_DATA');
     assert(weekendStrat?.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0/P1 Golden Test: benchmarkQuality === NOT_AVAILABLE');
-    assert(weekendStrat?.economicPerformance.benchmarkCdiReais === 0, 'P0/P1 Golden Test: benchmarkCdiReais === 0');
+    assert(weekendStrat?.economicPerformance.benchmarkCdiReais === null, 'P0/P1 Golden Test: benchmarkCdiReais === null');
     assert(weekendStrat?.economicPerformance.collateralCarryReais === 0, 'P0/P1 Golden Test: collateralCarryReais === 0');
     assert(
       Boolean(weekendStrat?.economicPerformance.qualityNotes.some((n) => n.includes('INVALID_STRATEGY_OPENED_AT_NON_TRADING_DAY'))),
@@ -1263,6 +1264,9 @@ export async function runActionsSuiteTests() {
     assert(rejectUnrepresentablePct.success === false, 'P0.7: Porcentagem não representável em contratos inteiros rejeitada');
     assert(Boolean(rejectUnrepresentablePct.error?.includes('SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE')), 'P0.7: Erro SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE retornado');
 
+    const posResBefore = await getOptionPositions();
+    const realizedBefore = posResBefore.summary!.portfolioKnownGrossRealizedPnlReais;
+
     const scaleDownRes = await scaleDownOptionStrategyAction({
       strategyId: itubGoldenStratId,
       percentageReduced: 50,
@@ -1365,10 +1369,31 @@ export async function runActionsSuiteTests() {
     const diSeg1 = calculateRealizedDiFactor('2026-08-24', '2026-09-02');
     assert(diSeg1.observationsCount === 7, 'P0 Golden Case: Segmento 1 (24/08 -> 02/09) possui exatamente 7 sessões B3 remuneradas');
     const expectedCdiSeg1 = 15476.0 * diSeg1.periodYieldDecimal;
-    assert(Math.abs(stratEnriched1.economicPerformance.benchmarkCdiReais - expectedCdiSeg1) < 0.01, 'P0 Golden Case: benchmarkCdiReais corresponde a CDI(segmento1) + CDI(segmento2)');
+    assert(Math.abs((stratEnriched1.economicPerformance.benchmarkCdiReais ?? 0) - expectedCdiSeg1) < 0.01, 'P0 Golden Case: benchmarkCdiReais corresponde a CDI(segmento1) + CDI(segmento2)');
 
-    // Portfolio & Hybrid Book:
-    assert(posRes1.summary!.portfolioKnownGrossRealizedPnlReais === 110.0 || (posRes1.summary!.portfolioGrossRealizedPnlReais ?? 0) >= 110.0, 'P0 Golden Case: Portfolio contém +R$ 110 de realized');
+    // Prova Exact-Once por Delta de Realized no Portfólio (P1.6)
+    const realizedAfter = posRes1.summary!.portfolioKnownGrossRealizedPnlReais;
+    assert(realizedAfter - realizedBefore === 110.0, 'P1.6 Prova Exact-Once: Delta exato no portfólio === +R$ 110,00');
+    const sumManeuverExecs = executions.reduce((acc, x) => acc + x.grossRealizedPnlReais, 0);
+    assert(sumManeuverExecs === 110.0, 'P1.6 Prova Exact-Once: Soma das execuções do evento de manobra === +R$ 110,00');
+
+    // Prova do Segundo Segmento Temporal de Verdade após 02/09 (P1.5)
+    const perfValuationNextDay = calculateStrategyEconomicPerformance({
+      startDate: '2026-08-24',
+      valuationDate: '2026-09-03',
+      capitalReservedReais: 7738.0,
+      capitalRemuneratedReais: 0,
+      benchmarkCapitalReais: 7738.0,
+      optionPnlReais: 210.0,
+      collateralMode: 'IDLE_CASH',
+      fundingSegments: segmentsAfter,
+    });
+    const diSeg1Full = calculateRealizedDiFactor('2026-08-24', '2026-09-02');
+    const diSeg2Next = calculateRealizedDiFactor('2026-09-02', '2026-09-03');
+    assert(diSeg1Full.observationsCount === 7, 'P1.5 Segmento 2 Test: Segmento 1 possui 7 sessões');
+    assert(diSeg2Next.observationsCount === 1, 'P1.5 Segmento 2 Test: Segmento 2 avaliado até 03/09 possui 1 sessão');
+    const expectedBenchmarkSeg2 = (15476.0 * diSeg1Full.periodYieldDecimal) + (7738.0 * diSeg2Next.periodYieldDecimal);
+    assert(Math.abs((perfValuationNextDay.benchmarkCdiReais ?? 0) - expectedBenchmarkSeg2) < 0.01, 'P1.5 Segmento 2 Test: Sessão 03/09 remunera capital residual de R$ 7.738');
 
     // Provar imutabilidade do Realized perante alteração de cotação MTM
     db.update(optionPositions).set({ currentPrice: 5.00 }).where(eq(optionPositions.id, itubGoldenPutPosId)).run();
@@ -1559,7 +1584,7 @@ export async function runActionsSuiteTests() {
     const remunEnriched = remunPosCheck.strategies!.find((s) => s.id === remunStratId)!;
     assert(remunEnriched.economicPerformance.benchmarkCapitalReais === 7500.0, 'P0 Remun Test: benchmarkCapitalReais residual === 7500');
 
-    // 8.6. Teste de Risco UNBOUNDED Degradando Qualidade do Segmento
+    // 8.6. Teste de Risco UNBOUNDED Degradando Qualidade do Segmento e Benchmark Nullification (P0.2)
     const unbStratId = 'strat_unbounded_test';
     const unbShortCallPosId = 'pos_unb_short_call';
     const unbLongCallPosId = 'pos_unb_long_call';
@@ -1677,6 +1702,15 @@ export async function runActionsSuiteTests() {
     const activeUnbSegment = unbSegments.find((s) => s.endDate === null)!;
     assert(activeUnbSegment.quality === 'INSUFFICIENT_DATA', 'P0 Unbounded Test: Novo segmento gerado com quality === INSUFFICIENT_DATA devido a risco UNBOUNDED');
 
+    const unbPosCheck = await getOptionPositions();
+    const unbStratEnriched = unbPosCheck.strategies!.find((s) => s.id === unbStratId)!;
+    assert(unbStratEnriched.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0.2 Unbounded Test: benchmarkQuality === NOT_AVAILABLE');
+    assert(unbStratEnriched.economicPerformance.benchmarkCdiReais === null, 'P0.2 Unbounded Test: benchmarkCdiReais === null');
+    assert(unbStratEnriched.economicPerformance.excessReturnVsCdiReais === null, 'P0.2 Unbounded Test: excessReturnVsCdiReais === null');
+    assert(unbStratEnriched.economicPerformance.optionPnlToCdiMultiple === null, 'P0.2 Unbounded Test: optionPnlToCdiMultiple === null');
+    assert(unbStratEnriched.economicPerformance.totalReturnToCdiMultiple === null, 'P0.2 Unbounded Test: totalReturnToCdiMultiple === null');
+    assert(unbPosCheck.summary!.portfolioExcludedFromBenchmarkCount >= 1, 'P0.2 Unbounded Test: portfolioExcludedFromBenchmarkCount incrementado');
+
     // 8.7. Múltiplos Parciais Consecutivos (Provas de Invariantes em CADA Passo)
     const partClose1 = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
@@ -1772,16 +1806,165 @@ export async function runActionsSuiteTests() {
       if (fs.existsSync(tempDbFile)) fs.unlinkSync(tempDbFile);
     }
 
+    // 8.9. Terminal Close da Estrutura Residual (Status CLOSED preserva Performance Since Inception) (P0.3)
+    const summaryBeforeTerminal = (await getOptionPositions()).summary!;
+    const capitalBeforeTerminal = summaryBeforeTerminal.totalCapitalAllocated;
+    const realizedBeforeTerminal = summaryBeforeTerminal.portfolioKnownGrossRealizedPnlReais;
+    const optionPnlBeforeTerminal = summaryBeforeTerminal.portfolioOptionPnlReais;
+
+    const termCloseCall = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenCallLegId,
+      quantity: 100,
+      price: 0.80,
+      executionDate: '2026-09-02',
+    });
+    assert(termCloseCall.success === true, 'P0.3 Terminal Close: CALL fechada totalmente');
+
+    const termClosePut = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 100,
+      price: 0.05,
+      executionDate: '2026-09-02',
+    });
+    assert(termClosePut.success === true, 'P0.3 Terminal Close: PUT fechada totalmente');
+
+    const itubStratAfterTerminal = db.query.optionStrategies.findFirst({ where: eq(optionStrategies.id, itubGoldenStratId) }).sync()!;
+    assert(itubStratAfterTerminal.status === 'CLOSED', 'P0.3 Terminal Close: Status da estratégia evolui para CLOSED');
+
+    const summaryAfterTerminal = (await getOptionPositions()).summary!;
+    assert(summaryAfterTerminal.totalCapitalAllocated < capitalBeforeTerminal, 'P0.3 Terminal Close: Capital alocado (Current Exposure) cai com o fechamento');
+    assert(summaryAfterTerminal.portfolioKnownGrossRealizedPnlReais >= realizedBeforeTerminal, 'P0.3 Terminal Close: Realized da carteira preservado e acumulado');
+
+    const itubStratEnrichedClosed = (await getOptionPositions()).strategies!.find((s) => s.id === itubGoldenStratId)!;
+    assert(itubStratEnrichedClosed.status === 'CLOSED', 'P0.3 Terminal Close: Estratégia enriquecida com status CLOSED');
+    assert(itubStratEnrichedClosed.metrics.totalCapitalReserved === 0, 'P0.3 Terminal Close: Capital reservado cai para 0');
+    assert(itubStratEnrichedClosed.economicPerformance.optionPnlReais === itubStratEnrichedClosed.metrics.strategyGrossRealizedPnlReais, 'P0.3 Terminal Close: Performance since inception de estratégia CLOSED preserva rigorosamente o P&L realizado');
+    assert(summaryAfterTerminal.portfolioBenchmarkEligibleCount >= 1, 'P0.3 Terminal Close: Estratégia CLOSED com histórico completo permanece benchmark eligible');
+
+    // 8.10. Teste de Legacy Incomplete Degradando Double Yield (P0.1)
+    const legacyIncStratId = 'strat_legacy_inc_test';
+    const legacyIncPosId = 'pos_legacy_inc_test';
+    const legacyIncLegId = 'leg_legacy_inc_test';
+
+    db.insert(optionPositions).values({
+      id: legacyIncPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 100,
+      closedQuantity: 100,
+      legacyClosedQuantity: 100,
+      legacyQuality: 'LEGACY_INCOMPLETE',
+      strike: 30.0,
+      entryPrice: 1.00,
+      currentPrice: 0.50,
+      allocatedCapital: 3000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: legacyIncStratId,
+      portfolio: 'Principal',
+      name: 'Legacy Incomplete Strategy Test',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'IDLE_CASH',
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: legacyIncLegId,
+      strategyId: legacyIncStratId,
+      positionId: legacyIncPosId,
+      allocatedQuantity: 200,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 100,
+      legacyClosedAllocatedQuantity: 100,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_legacy_inc_test',
+      strategyId: legacyIncStratId,
+      startDate: '2026-08-24',
+      endDate: null,
+      benchmarkCapitalReais: 3000.0,
+      capitalRemuneratedReais: 0,
+      collateralMode: 'IDLE_CASH',
+      collateralPctCdi: null,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const legacyCheckRes = await getOptionPositions();
+    const legacyEnrichedStrat = legacyCheckRes.strategies!.find((s) => s.id === legacyIncStratId)!;
+    assert(legacyEnrichedStrat.metrics.strategyRealizedPnlQuality === 'LEGACY_INCOMPLETE', 'P0.1 Legacy Incomplete: strategyRealizedPnlQuality === LEGACY_INCOMPLETE');
+    assert(legacyEnrichedStrat.metrics.strategyGrossRealizedPnlReais === null, 'P0.1 Legacy Incomplete: strategyGrossRealizedPnlReais === null');
+    assert(legacyEnrichedStrat.metrics.strategyTotalGrossPnlReais === null, 'P0.1 Legacy Incomplete: strategyTotalGrossPnlReais === null');
+    assert(legacyEnrichedStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'P0.1 Legacy Incomplete: Double Yield degradado para INSUFFICIENT_DATA');
+    assert(legacyEnrichedStrat.economicPerformance.excessReturnVsCdiReais === null, 'P0.1 Legacy Incomplete: excessReturnVsCdiReais === null');
+    assert(legacyEnrichedStrat.economicPerformance.totalReturnToCdiMultiple === null, 'P0.1 Legacy Incomplete: totalReturnToCdiMultiple === null');
+
+    // 8.11. Teste de Posição com Quantidade Fechada sem Execuções Canônicas (P1.4)
+    const missingExecPosId = 'pos_missing_exec_test';
+    db.insert(optionPositions).values({
+      id: missingExecPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'MGLU3',
+      tickerOption: 'MGLUU100',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 50,
+      closedQuantity: 50,
+      legacyClosedQuantity: 0,
+      strike: 10.0,
+      entryPrice: 1.00,
+      currentPrice: 0.50,
+      allocatedCapital: 500.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const missingExecPosRes = await getOptionPositions();
+    const missingExecPos = missingExecPosRes.positions!.find((p) => p.id === missingExecPosId)!;
+    assert(missingExecPos.metrics.realizedPnlQuality === 'NOT_AVAILABLE', 'P1.4 Missing Execs: realizedPnlQuality === NOT_AVAILABLE');
+    assert(missingExecPos.metrics.realizedGrossPnlReais === null, 'P1.4 Missing Execs: realizedGrossPnlReais === null');
+    assert(missingExecPos.metrics.realizedNetPnlReais === null, 'P1.4 Missing Execs: realizedNetPnlReais === null');
+    assert(Boolean(missingExecPos.metrics.qualityNotes?.includes('MISSING_CANONICAL_EXECUTION_HISTORY')), 'P1.4 Missing Execs: qualityNotes contém MISSING_CANONICAL_EXECUTION_HISTORY');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
       itubPutId, itubCallId, lrenPutId, dirCallId,
       'pos_itub_golden_put', 'pos_itub_golden_call',
-      'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call'
+      'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call',
+      'pos_legacy_inc_test', 'pos_missing_exec_test'
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',
-      'strat_fee_test', 'strat_remun_test', 'strat_unbounded_test'
+      'strat_fee_test', 'strat_remun_test', 'strat_unbounded_test',
+      'strat_legacy_inc_test'
     ];
     db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, allCleanPosIds)).run();
     db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, allCleanStratIds)).run();

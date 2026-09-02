@@ -343,7 +343,7 @@ export function OptionsPositionsTable({
                       </div>
                       {preset === 'RENDA_CDI' ? (() => {
                         const ep = strat.economicPerformance;
-                        const canCompare = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA';
+                        const canCompare = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA' && ep.benchmarkCdiReais !== null && ep.excessReturnVsCdiReais !== null;
                         return (
                           <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-300">
                             <span>Cap. Benchmark: <strong className="text-slate-100 font-bold">R$ {ep.benchmarkCapitalReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
@@ -352,10 +352,10 @@ export function OptionsPositionsTable({
                             <span className="text-slate-600">·</span>
                             <span>Carry Caixa: <strong className="text-purple-300 font-bold">{canCompare ? `+R$ ${ep.collateralCarryReais.toFixed(2)}` : 'N/A'}</strong></span>
                             <span className="text-slate-600">·</span>
-                            <span>Benchmark CDI: <strong className="text-slate-300 font-bold">{canCompare ? `+R$ ${ep.benchmarkCdiReais.toFixed(2)}` : 'N/A'}</strong></span>
+                            <span>Benchmark CDI: <strong className="text-slate-300 font-bold">{canCompare && ep.benchmarkCdiReais !== null ? `+R$ ${ep.benchmarkCdiReais.toFixed(2)}` : 'N/A'}</strong></span>
                             <span className="text-slate-600">·</span>
-                            <span>Excesso: <strong className={canCompare ? (ep.excessReturnVsCdiReais >= 0 ? "text-emerald-300 font-bold" : "text-rose-300 font-bold") : "text-slate-500"}>
-                              {canCompare ? `${ep.excessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${ep.excessReturnVsCdiReais.toFixed(2)}` : 'N/A'}
+                            <span>Excesso: <strong className={canCompare && ep.excessReturnVsCdiReais !== null ? (ep.excessReturnVsCdiReais >= 0 ? "text-emerald-300 font-bold" : "text-rose-300 font-bold") : "text-slate-500"}>
+                              {canCompare && ep.excessReturnVsCdiReais !== null ? `${ep.excessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${ep.excessReturnVsCdiReais.toFixed(2)}` : 'N/A'}
                             </strong></span>
                             {canCompare && ep.totalReturnToCdiMultiple !== null && (
                               <>
