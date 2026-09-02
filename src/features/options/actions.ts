@@ -337,7 +337,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             if (m.cdiIsEstimated) incomeCdiIsEstimated = true;
 
             const eff = m.efficiencyExecutable;
-            if (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA') {
+            if (eff.decisionEligible && (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA')) {
               actionFeedItems.push({
                 positionId: pos.id,
                 tickerOption: pos.tickerOption,
@@ -535,70 +535,67 @@ export async function groupOptionPositionsAction(params: {
     }
 
     const posIds = params.legs.map((l) => l.positionId);
-    const rawPositions = await db.query.optionPositions.findMany({
-      where: inArray(optionPositions.id, posIds),
-    });
-
-    if (rawPositions.length !== posIds.length) {
-      return { success: false, error: 'Uma ou mais posições selecionadas não foram encontradas.' };
-    }
-
-    // Verifica se pertencem ao mesmo ativo subjacente (Validação Estrita)
-    const underlyingTickers = new Set(rawPositions.map((p) => p.tickerUnderlying.toUpperCase()));
-    if (underlyingTickers.size > 1) {
-      return {
-        success: false,
-        error: `Todas as pernas selecionadas devem pertencer ao mesmo ativo subjacente (Encontrados: ${Array.from(underlyingTickers).join(', ')}).`,
-      };
-    }
-    const underlyingTicker = Array.from(underlyingTickers)[0] || 'MULTI';
-
-    // Checagem de Alocação Disponível
-    const existingLegs = await db.query.optionStrategyLegs.findMany({
-      where: inArray(optionStrategyLegs.positionId, posIds),
-    });
-
-    const allocatedSum = new Map<string, number>();
-    for (const el of existingLegs) {
-      allocatedSum.set(el.positionId, (allocatedSum.get(el.positionId) || 0) + el.allocatedQuantity);
-    }
-
-    for (const legParam of params.legs) {
-      const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
-      const alreadyAllocated = allocatedSum.get(pos.id) || 0;
-      const desiredQty = legParam.allocatedQuantity ?? pos.quantity;
-
-      if (desiredQty <= 0) {
-        return { success: false, error: `Quantidade alocada deve ser maior que zero para ${pos.tickerOption}.` };
-      }
-
-      if (alreadyAllocated + desiredQty > pos.quantity) {
-        return {
-          success: false,
-          error: `Quantidade insuficiente em ${pos.tickerOption}. Disponível: ${pos.quantity - alreadyAllocated}, Solicitado: ${desiredQty}.`,
-        };
-      }
-    }
-
-    const strategyId = generateId('opt_strat');
-    const now = new Date().toISOString();
-    const openedAt = rawPositions.reduce((min, p) => (p.entryDate < min ? p.entryDate : min), rawPositions[0].entryDate);
-
-    // Detecção Automática de Tipo e Livro
-    let detectedType = params.strategyType || 'CUSTOM_MULTI_LEG';
-    let detectedBook: StrategyBook = params.book || 'HYBRID';
-
-    const hasShortPut = rawPositions.some((p) => (p.side === 'SELL' || p.side === 'SHORT') && p.optionType === 'PUT');
-    const hasLongCall = rawPositions.some((p) => (p.side === 'BUY' || p.side === 'LONG') && p.optionType === 'CALL');
-    if (hasShortPut && hasLongCall) {
-      detectedType = 'CUSTOM_MULTI_LEG';
-      detectedBook = 'HYBRID';
-    }
-
-    // Execução em Transação ACID
-    const strategyName = params.name || `${underlyingTicker} — Estrutura Financiada 2:1`;
+    let strategyIdResult = '';
 
     await db.transaction(async (tx) => {
+      // 1. Leitura das posições dentro da transação
+      const rawPositions = await tx.query.optionPositions.findMany({
+        where: inArray(optionPositions.id, posIds),
+      });
+
+      if (rawPositions.length !== posIds.length) {
+        throw new Error('Uma ou mais posições selecionadas não foram encontradas no banco.');
+      }
+
+      // 2. Verifica se pertencem ao mesmo ativo subjacente (Validação Estrita)
+      const underlyingTickers = new Set(rawPositions.map((p) => p.tickerUnderlying.toUpperCase()));
+      if (underlyingTickers.size > 1) {
+        throw new Error(`Todas as pernas selecionadas devem pertencer ao mesmo ativo subjacente (Encontrados: ${Array.from(underlyingTickers).join(', ')}).`);
+      }
+      const underlyingTicker = Array.from(underlyingTickers)[0] || 'MULTI';
+
+      // 3. Checagem de Alocação Disponível com lock transacional
+      const existingLegs = await tx.query.optionStrategyLegs.findMany({
+        where: inArray(optionStrategyLegs.positionId, posIds),
+      });
+
+      const allocatedSum = new Map<string, number>();
+      for (const el of existingLegs) {
+        allocatedSum.set(el.positionId, (allocatedSum.get(el.positionId) || 0) + el.allocatedQuantity);
+      }
+
+      for (const legParam of params.legs) {
+        const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
+        const alreadyAllocated = allocatedSum.get(pos.id) || 0;
+        const desiredQty = legParam.allocatedQuantity ?? pos.quantity;
+
+        if (desiredQty <= 0) {
+          throw new Error(`Quantidade alocada deve ser maior que zero para ${pos.tickerOption}.`);
+        }
+
+        if (alreadyAllocated + desiredQty > pos.quantity) {
+          throw new Error(`Quantidade insuficiente em ${pos.tickerOption}. Disponível: ${pos.quantity - alreadyAllocated}, Solicitado: ${desiredQty}.`);
+        }
+      }
+
+      const strategyId = generateId('opt_strat');
+      strategyIdResult = strategyId;
+      const now = new Date().toISOString();
+      const openedAt = rawPositions.reduce((min, p) => (p.entryDate < min ? p.entryDate : min), rawPositions[0].entryDate);
+
+      // Detecção Automática de Tipo e Livro
+      let detectedType = params.strategyType || 'CUSTOM_MULTI_LEG';
+      let detectedBook: StrategyBook = params.book || 'HYBRID';
+
+      const hasShortPut = rawPositions.some((p) => (p.side === 'SELL' || p.side === 'SHORT') && p.optionType === 'PUT');
+      const hasLongCall = rawPositions.some((p) => (p.side === 'BUY' || p.side === 'LONG') && p.optionType === 'CALL');
+      if (hasShortPut && hasLongCall) {
+        detectedType = 'CUSTOM_MULTI_LEG';
+        detectedBook = 'HYBRID';
+      }
+
+      const strategyName = params.name || `${underlyingTicker} — Estrutura Financiada 2:1`;
+
       await tx.insert(optionStrategies).values({
         id: strategyId,
         portfolio: params.portfolio || rawPositions[0].portfolio || 'Principal',
@@ -606,7 +603,7 @@ export async function groupOptionPositionsAction(params: {
         strategyType: detectedType,
         book: detectedBook,
         underlyingTicker,
-        collateralMode: params.collateralMode || 'REMUNERATED_100_CDI',
+        collateralMode: params.collateralMode || 'IDLE_CASH',
         status: 'OPEN',
         openedAt,
         notes: params.notes,
@@ -650,7 +647,7 @@ export async function groupOptionPositionsAction(params: {
     });
 
     revalidatePath('/opcoes');
-    return { success: true, strategyId };
+    return { success: true, strategyId: strategyIdResult };
   } catch (err: any) {
     console.error('[Options Actions] Erro ao agrupar posições:', err);
     return { success: false, error: err.message || 'Erro ao agrupar posições' };

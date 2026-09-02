@@ -210,16 +210,35 @@ export interface EfficiencyAnalysis {
 
 export function calculateEfficiencyScore(
   params: EfficiencyParams,
-  priceBasis: ExitQuoteBasis,
-  isExecutableQuote: boolean
+  quoteOrBasis: ExitQuote | { basis: ExitQuoteBasis; isExecutable: boolean; marketDataStatus?: MarketDataFreshness } | ExitQuoteBasis,
+  isExecutableFallback?: boolean
 ): EfficiencyAnalysis {
   const missingInputs: string[] = [];
 
-  const executionQuality: ExecutionQuality = !isExecutableQuote
-    ? priceBasis === 'UNAVAILABLE'
-      ? 'UNAVAILABLE'
-      : 'INDICATIVE'
-    : 'EXECUTABLE';
+  let basis: ExitQuoteBasis;
+  let isExecutable: boolean;
+  let marketStatus: MarketDataFreshness;
+
+  if (typeof quoteOrBasis === 'string') {
+    basis = quoteOrBasis;
+    isExecutable = !!isExecutableFallback;
+    marketStatus = isExecutable ? 'LIVE' : 'MANUAL';
+  } else {
+    basis = quoteOrBasis.basis;
+    isExecutable = quoteOrBasis.isExecutable;
+    marketStatus = quoteOrBasis.marketDataStatus ?? (isExecutable ? 'LIVE' : 'MANUAL');
+  }
+
+  let executionQuality: ExecutionQuality = 'INDICATIVE';
+  if (basis === 'UNAVAILABLE') {
+    executionQuality = 'UNAVAILABLE';
+  } else if (marketStatus === 'STALE') {
+    executionQuality = 'STALE';
+  } else if (isExecutable && marketStatus === 'LIVE') {
+    executionQuality = 'EXECUTABLE';
+  } else {
+    executionQuality = 'INDICATIVE';
+  }
 
   if (params.totalDU <= 0 || params.entryPrice <= 0 || params.quantityUnderlyingUnits <= 0) {
     return {
@@ -299,8 +318,8 @@ export function calculateEfficiencyScore(
     tier = 'INSUFFICIENT_DATA';
   }
 
-  // Elegibilidade de Decisão: Apenas cotações executáveis (Bid/Ask LIVE) com score completo podem disparar ações operacionais automáticas
-  const decisionEligible = isExecutableQuote && scoreDisplay !== null && completeness === 'FULL';
+  // Elegibilidade de Decisão Estrita: Apenas cotações executáveis (Bid/Ask LIVE, frescas e não-stale) com score completo podem disparar ações operacionais automáticas
+  const decisionEligible = executionQuality === 'EXECUTABLE' && scoreDisplay !== null && completeness === 'FULL';
 
   return {
     harvestRatio,
@@ -309,7 +328,7 @@ export function calculateEfficiencyScore(
     efficiencyScoreRaw: scoreRaw,
     efficiencyScoreDisplay: scoreDisplay,
     tier,
-    scoreBasis: priceBasis,
+    scoreBasis: basis,
     scoreCompleteness: completeness,
     missingInputs,
     executionQuality,
@@ -546,8 +565,7 @@ export function enrichOptionPosition(
       capitalReserved: capitalAllocated,
       projectedCdiFactor: projectedDi.periodYieldDecimal,
     },
-    'MARK',
-    false
+    { price: currentPrice, basis: 'MARK', isExecutable: false, marketDataStatus: 'MANUAL' }
   );
 
   const efficiencyExecutable = calculateEfficiencyScore(
@@ -560,8 +578,7 @@ export function enrichOptionPosition(
       capitalReserved: capitalAllocated,
       projectedCdiFactor: projectedDi.periodYieldDecimal,
     },
-    exitQuote.basis,
-    exitQuote.isExecutable
+    exitQuote
   );
 
   // 10. Visão Líquida Estimada (15% Opções / 22.5% CDI)

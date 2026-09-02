@@ -136,6 +136,16 @@ export function getB3TradingDays(
   const start = parseBusinessDate(startStr);
   const end = parseBusinessDate(endStr);
 
+  const startYear = parseInt(start.split('-')[0], 10);
+  const endYear = parseInt(end.split('-')[0], 10);
+
+  if (!SUPPORTED_YEARS.includes(startYear as (typeof SUPPORTED_YEARS)[number])) {
+    throw new UnsupportedB3CalendarYearError(startYear);
+  }
+  if (!SUPPORTED_YEARS.includes(endYear as (typeof SUPPORTED_YEARS)[number])) {
+    throw new UnsupportedB3CalendarYearError(endYear);
+  }
+
   if (start > end) return [];
 
   const [sy, sm, sd] = start.split('-').map((v) => parseInt(v, 10));

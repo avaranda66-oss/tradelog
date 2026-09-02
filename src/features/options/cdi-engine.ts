@@ -31,10 +31,12 @@ export function normalizeAnnualRate(raw: number, unit: 'PERCENT' | 'DECIMAL'): A
 
 /**
  * Calcula o Fator Diário oficial da Taxa DI da B3 em base 252 dias úteis
- * Fórmula oficial B3: (1 + TaxaAnualDecimal)^(1/252)
+ * Fórmula oficial B3: FDI_k = (1 + TaxaAnualDecimal)^(1/252), arredondado para 8 casas decimais.
  */
 export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): number {
-  return Math.pow(1 + annualRateDecimal, 1.0 / 252.0);
+  const safeRate = toAnnualRateDecimal(annualRateDecimal);
+  const rawFactor = Math.pow(1 + safeRate, 1.0 / 252.0);
+  return Math.round(rawFactor * 100000000) / 100000000;
 }
 
 export interface DIDailyObservation {
@@ -47,7 +49,7 @@ export interface DIDailyObservation {
 /**
  * Série canônica de taxas da Taxa DI da B3 (13.90% a.a. / 14.00% a.a.)
  */
-const CANONICAL_DI_RATES = new Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>([
+export const CANONICAL_DI_RATES = new Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>([
   ['2026-08-24', { annualRateDecimal: 0.1390, source: 'B3_OFFICIAL' }],
   ['2026-08-25', { annualRateDecimal: 0.1390, source: 'B3_OFFICIAL' }],
   ['2026-08-26', { annualRateDecimal: 0.1390, source: 'B3_OFFICIAL' }],
@@ -68,15 +70,18 @@ export interface RealizedDiResult {
 
 /**
  * Calcula a acumulação diária realizada do CDI entre duas datas de negócio (openDate, valuationDate]
+ * Aplica a convenção canônica B3: o primeiro dia (openDate) não acumula; acumula-se de openDate + 1 DU até valuationDate.
  */
 export function calculateRealizedDiFactor(
   openDateStr: BusinessDate,
   valuationDateStr: BusinessDate,
-  fallbackAnnualRate: AnnualRateDecimal = 0.14
+  fallbackAnnualRate: AnnualRateDecimal = 0.14,
+  customSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>
 ): RealizedDiResult {
   const openDate = parseBusinessDate(openDateStr);
   const valDate = parseBusinessDate(valuationDateStr);
   const safeFallback = toAnnualRateDecimal(fallbackAnnualRate);
+  const series = customSeries ?? CANONICAL_DI_RATES;
 
   const tradingDays = getB3TradingDays(openDate, valDate, 'EXCLUDE_START_INCLUDE_END');
 
@@ -96,7 +101,7 @@ export function calculateRealizedDiFactor(
   const datesUsed: BusinessDate[] = [];
 
   for (const day of tradingDays) {
-    const obs = CANONICAL_DI_RATES.get(day);
+    const obs = series.get(day);
     if (obs) {
       accumulatedFactor *= calculateB3DailyFactor(obs.annualRateDecimal);
       count++;

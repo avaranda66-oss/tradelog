@@ -59,7 +59,14 @@ export function runAllTests() {
     assert(true, 'isB3TradingDay lança UnsupportedB3CalendarYearError para ano 2027');
   }
 
-  // ─── 2. CDI ACCRUAL TESTS ───
+  try {
+    countB3TradingDays('2027-01-05', '2027-01-05');
+    assert(false, 'countB3TradingDays deveria rejeitar ano não suportado 2027 no boundary');
+  } catch {
+    assert(true, 'countB3TradingDays valida boundary imediatamente e lança UnsupportedB3CalendarYearError');
+  }
+
+  // ─── 2. CDI ACCRUAL TESTS (COM PRECISÃO B3 E CONVENÇÃO TEMPORAL) ───
   console.log('\n2. CDI Accrual Engine Tests:');
   const di6du = calculateRealizedDiFactor('2026-08-24', '2026-09-01');
   assert(di6du.observationsCount === 6, 'DI acumulou exatamente 6 observações');
@@ -71,6 +78,21 @@ export function runAllTests() {
 
   assert(normalizeAnnualRate(14.0, 'PERCENT') === 0.14, 'normalizeAnnualRate normaliza PERCENT para decimal');
   assert(normalizeAnnualRate(0.14, 'DECIMAL') === 0.14, 'normalizeAnnualRate preserva DECIMAL');
+
+  // Teste de Convenção Temporal com Taxas Heterogêneas (D1 != D2)
+  const customSeries = new Map<string, { annualRateDecimal: number; source: string }>([
+    ['2026-08-25', { annualRateDecimal: 0.1390, source: 'TEST' }], // D1
+    ['2026-08-26', { annualRateDecimal: 0.1500, source: 'TEST' }], // D2
+  ]);
+
+  const diD1 = calculateRealizedDiFactor('2026-08-24', '2026-08-25', 0.14, customSeries as any);
+  const fdi1 = Math.round(Math.pow(1 + 0.1390, 1 / 252.0) * 100000000) / 100000000;
+  assert(Math.abs(diD1.accumulatedFactor - fdi1) < 0.00000001, 'D0->D1 acumula estritamente o FDI do D1 (13.90%)');
+
+  const diD2 = calculateRealizedDiFactor('2026-08-24', '2026-08-26', 0.14, customSeries as any);
+  const fdi2 = Math.round(Math.pow(1 + 0.1500, 1 / 252.0) * 100000000) / 100000000;
+  const expectedProd = fdi1 * fdi2;
+  assert(Math.abs(diD2.accumulatedFactor - expectedProd) < 0.00000001, 'D0->D2 acumula FDI(D1) * FDI(D2), sem shift de sessão temporal');
 
   // ─── 3. PRICING & EXIT QUOTE TESTS ───
   console.log('\n3. Pricing & Exit Quote Tests:');
@@ -120,9 +142,9 @@ export function runAllTests() {
   const pnlShort = calculateSignedPnL({ entryPrice: 1.04, currentPrice: 0.29, quantityUnderlyingUnits: 400, side: 'SHORT' });
   assert(Math.abs(pnlShort - 300.0) < 0.01, 'P&L Short Put de ITUB4 resulta rigorosamente em +R$ 300,00');
 
-  // ─── 4. EFFICIENCY ENGINE TESTS ───
-  console.log('\n4. Efficiency Engine Tests:');
-  // Executável c/ Ask 0.32
+  // ─── 4. EFFICIENCY ENGINE & ACTION FEED INTEGRATION TESTS ───
+  console.log('\n4. Efficiency Engine & ActionFeed Integration Tests:');
+  // Executável c/ Ask 0.32 LIVE
   const effExec = calculateEfficiencyScore(
     {
       entryPrice: 1.04,
@@ -133,15 +155,14 @@ export function runAllTests() {
       capitalReserved: 15476,
       projectedCdiFactor: 0.006259,
     },
-    'ASK',
-    true
+    quoteShort
   );
   assert(effExec.efficiencyScoreDisplay === 46, `Efficiency Score Executável de ITUB resulta rigorosamente em 46 (obtido: ${effExec.efficiencyScoreDisplay})`);
   assert(effExec.tier === 'ELEVADA', 'Score 46 classifica no tier ELEVADA');
   assert(effExec.executionQuality === 'EXECUTABLE', 'Cotação LIVE marca executionQuality EXECUTABLE');
   assert(effExec.decisionEligible === true, 'Cotação LIVE executável é decisionEligible=true');
 
-  // MTM c/ Mark 0.29
+  // MTM c/ Mark 0.29 (Não-Executável / Indicativo)
   const effMtm = calculateEfficiencyScore(
     {
       entryPrice: 1.04,
@@ -152,12 +173,35 @@ export function runAllTests() {
       capitalReserved: 15476,
       projectedCdiFactor: 0.006259,
     },
-    'MARK',
-    false
+    { price: 0.29, basis: 'MARK', isExecutable: false, marketDataStatus: 'MANUAL' }
   );
   assert(effMtm.efficiencyScoreDisplay === 51, `Efficiency Score MTM de ITUB resulta rigorosamente em 51 (obtido: ${effMtm.efficiencyScoreDisplay})`);
   assert(effMtm.executionQuality === 'INDICATIVE', 'Cotação MARK não-executável marca executionQuality INDICATIVE');
   assert(effMtm.decisionEligible === false, 'Cotação MARK não-executável bloqueia decisionEligible (false)');
+
+  // Stale Ask Quote (Score Alto mas Stale -> Bloqueia Decisão)
+  const effStale = calculateEfficiencyScore(
+    {
+      entryPrice: 1.04,
+      referencePrice: 0.10, // Score altíssimo
+      quantityUnderlyingUnits: 400,
+      elapsedDU: 6,
+      totalDU: 18,
+      capitalReserved: 15476,
+      projectedCdiFactor: 0.006259,
+    },
+    quoteStale
+  );
+  assert(effStale.executionQuality === 'STALE', 'Cotação stale marca executionQuality STALE');
+  assert(effStale.decisionEligible === false, 'Cotação STALE bloqueia decisionEligible mesmo com score de reciclagem forte');
+
+  // Teste de Integração com ActionFeed Filter Rule
+  function shouldEnterActionFeed(eff: any): boolean {
+    return !!(eff.decisionEligible && (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA'));
+  }
+  assert(shouldEnterActionFeed(effExec) === true, 'Cotação LIVE Executável com tier ELEVADA entra no ActionFeed');
+  assert(shouldEnterActionFeed(effMtm) === false, 'Cotação MARK Indicativa NÃO entra no ActionFeed');
+  assert(shouldEnterActionFeed(effStale) === false, 'Cotação STALE NÃO entra no ActionFeed');
 
   // Edge cases
   const effTZero = calculateEfficiencyScore(
