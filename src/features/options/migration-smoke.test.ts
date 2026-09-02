@@ -5,7 +5,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { ensureColumn } from '../../lib/db';
+import { ensureColumn, applyMigrations } from '../../lib/db/migrations';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {

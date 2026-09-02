@@ -412,16 +412,16 @@ export interface StrategyEconomicPerformance {
   riskRecognitionQuality: 'EXACT' | 'APPROXIMATE' | 'UNKNOWN';
 
   // Benchmark CDI (100% CDI Puro)
-  benchmarkCdiAccumulatedFactor: number;
-  benchmarkCdiYieldDecimal: number;
+  benchmarkCdiAccumulatedFactor: number | null;
+  benchmarkCdiYieldDecimal: number | null;
   benchmarkCdiReais: number;
   benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED';
 
   // Carrego Real do Caixa (Collateral)
   collateralMode: CollateralMode;
   collateralPctCdi: number;
-  collateralAccumulatedFactor: number;
-  collateralYieldDecimal: number;
+  collateralAccumulatedFactor: number | null;
+  collateralYieldDecimal: number | null;
   collateralCarryReais: number;
 
   // Resultado Opções
@@ -1502,34 +1502,87 @@ export function enrichOptionStrategy(params: {
   const entryDates = new Set(params.legs.map((l) => l.position.entryDate));
   const legsOpenedAtDifferentDates = entryDates.size > 1;
 
-  const economicPerformance = calculateStrategyEconomicPerformance({
-    startDate: openedAtBusinessDate,
-    valuationDate: valuationDateStr,
-    capitalReservedReais: totalCapitalReserved,
-    capitalRemuneratedReais,
-    benchmarkCapitalReais: totalCapitalReserved,
-    optionPnlReais: netPnlMtmReais,
-    collateralMode: params.collateralMode,
-    collateralPctCdi: params.collateralYieldPctCDI,
-    maxLossEconomicReais,
-    maxLossType,
-    riskRecognitionQuality: riskProfile.riskRecognitionQuality,
-    resultNature,
-    legsOpenedAtDifferentDates,
-  });
-
-  if (assumedCoverageNote && params.collateralMode !== 'IDLE_CASH') {
-    economicPerformance.economicPerformanceQuality = 'PARTIAL';
-    economicPerformance.qualityNotes.push('ASSUMED_FULL_COLLATERAL_COVERAGE: Capital remunerado não especificado; assumido 100% do capital reservado (Quality: PARTIAL).');
-  }
+  let economicPerformance: StrategyEconomicPerformance;
 
   if (isClosedOrRolledMissingDate) {
-    economicPerformance.economicPerformanceQuality = 'INSUFFICIENT_DATA';
-    economicPerformance.benchmarkCdiReais = 0;
-    economicPerformance.collateralCarryReais = 0;
-    economicPerformance.excessReturnVsCdiReais = economicPerformance.optionPnlReais;
-    economicPerformance.totalEconomicReturnReais = economicPerformance.optionPnlReais;
-    economicPerformance.qualityNotes.push('CLOSED_AT_REQUIRED: Data de encerramento/rolagem ausente; benchmark econômico indisponível.');
+    economicPerformance = {
+      startDate: openedAtBusinessDate,
+      valuationDate: openedAtBusinessDate,
+      accrualValuationDate: openedAtBusinessDate,
+      elapsedDU: 0,
+      resultNature: 'REALIZED',
+
+      capitalReservedReais: totalCapitalReserved,
+      capitalRemuneratedReais: 0,
+      benchmarkCapitalReais: totalCapitalReserved,
+      optionPnlReais: netPnlMtmReais,
+
+      collateralMode: params.collateralMode,
+      collateralPctCdi: params.collateralYieldPctCDI ?? 0,
+
+      maxLossEconomicReais,
+      maxLossType,
+      riskRecognitionQuality: riskProfile.riskRecognitionQuality,
+
+      benchmarkCdiAccumulatedFactor: null,
+      benchmarkCdiYieldDecimal: null,
+      benchmarkCdiReais: 0,
+      benchmarkQuality: 'ESTIMATED',
+
+      collateralAccumulatedFactor: null,
+      collateralYieldDecimal: null,
+      collateralCarryReais: 0,
+
+      totalEconomicReturnReais: netPnlMtmReais,
+      excessReturnVsCdiReais: netPnlMtmReais,
+
+      optionPnlToCdiMultiple: null,
+      totalReturnToCdiMultiple: null,
+
+      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      totalEconomicReturnPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      cdiPeriodReturnPct: null,
+      excessPeriodPctPoints: null,
+
+      excessReturnOnReservedCapitalPct: null,
+      excessReturnOnMaxRiskPct: null,
+      extraProfitPer1000RiskReais: null,
+
+      optionPnlEquivalentCdiDU: null,
+
+      thetaReaisPerComparableDay: null,
+      cdiCarryReaisPerComparableDay: null,
+      thetaToCdiDailyMultiple: null,
+
+      monthlyEquivalentPct: null,
+      annualizedEquivalentPct: null,
+      annualizationQuality: 'NOT_AVAILABLE',
+
+      capitalBasisMethod: 'STATIC',
+      economicPerformanceQuality: 'INSUFFICIENT_DATA',
+      qualityNotes: ['CLOSED_AT_REQUIRED: Data de encerramento/rolagem ausente; benchmark econômico e métricas temporais indisponíveis.'],
+    };
+  } else {
+    economicPerformance = calculateStrategyEconomicPerformance({
+      startDate: openedAtBusinessDate,
+      valuationDate: valuationDateStr,
+      capitalReservedReais: totalCapitalReserved,
+      capitalRemuneratedReais,
+      benchmarkCapitalReais: totalCapitalReserved,
+      optionPnlReais: netPnlMtmReais,
+      collateralMode: params.collateralMode,
+      collateralPctCdi: params.collateralYieldPctCDI,
+      maxLossEconomicReais,
+      maxLossType,
+      riskRecognitionQuality: riskProfile.riskRecognitionQuality,
+      resultNature,
+      legsOpenedAtDifferentDates,
+    });
+
+    if (assumedCoverageNote && params.collateralMode !== 'IDLE_CASH') {
+      economicPerformance.economicPerformanceQuality = 'PARTIAL';
+      economicPerformance.qualityNotes.push('ASSUMED_FULL_COLLATERAL_COVERAGE: Capital remunerado não especificado; assumido 100% do capital reservado (Quality: PARTIAL).');
+    }
   }
 
   return {

@@ -207,36 +207,11 @@ sqlite.exec(`
   );
 `);
 
-export function ensureColumn(
-  sqliteInstance: Database.Database,
-  table: string,
-  column: string,
-  ddl: string
-): boolean {
-  try {
-    const tableInfo = sqliteInstance.pragma(`table_info(${table})`) as Array<{ name: string; type: string }>;
-    const exists = tableInfo.some((col) => col.name.toLowerCase() === column.toLowerCase());
-    if (!exists) {
-      sqliteInstance.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl};`);
-      return true;
-    }
-    return false;
-  } catch (err) {
-    console.error(`[DB Migration] Falha ao verificar ou adicionar coluna ${column} na tabela ${table}:`, err);
-    throw err;
-  }
-}
+export { ensureColumn, applyMigrations } from './migrations';
+import { applyMigrations } from './migrations';
 
-// ─── Migrações Auditáveis de Schema ───
-ensureColumn(sqlite, 'option_strategies', 'capital_remunerated_reais', 'REAL');
-ensureColumn(sqlite, 'option_strategies', 'collateral_coverage_pct', 'REAL');
-ensureColumn(sqlite, 'trading_days', 'farol_bias', 'TEXT');
-ensureColumn(sqlite, 'trading_days', 'farol_key_levels', 'TEXT');
-ensureColumn(sqlite, 'trading_days', 'farol_news', 'TEXT');
-ensureColumn(sqlite, 'trading_days', 'farol_insights', 'TEXT');
-ensureColumn(sqlite, 'trading_days', 'sleep_time', 'TEXT');
-ensureColumn(sqlite, 'trading_days', 'strategy_tags', 'TEXT');
-ensureColumn(sqlite, 'trade_images', 'trading_day_id', 'TEXT');
+// ─── Execução de Migrações Auditáveis de Schema ───
+applyMigrations(sqlite);
 
 // Semeia todas as categorias padrão no SQLite se a tabela custom_tags estiver vazia
 const tagSeeds: Record<string, string[]> = {

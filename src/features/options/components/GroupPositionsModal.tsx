@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import type { EnrichedOptionPosition } from '../calculations';
+import { detectStrategyRiskAndPayoff, type EnrichedOptionPosition } from '../calculations';
 import { groupOptionPositionsAction } from '../actions';
 
 interface GroupPositionsModalProps {
@@ -11,6 +11,12 @@ interface GroupPositionsModalProps {
   onGroupCreated: () => void;
 }
 
+function parseNumericInput(val: string): number | null {
+  if (val === undefined || val === null || val.trim() === '') return null;
+  const parsed = Number(val.replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function GroupPositionsModal({
   selectedPositions,
   isOpen,
@@ -18,7 +24,7 @@ export function GroupPositionsModal({
   onGroupCreated,
 }: GroupPositionsModalProps) {
   const [strategyName, setStrategyName] = useState('');
-  const [collateralMode, setCollateralMode] = useState<'IDLE_CASH' | 'REMUNERATED_100_CDI' | 'CUSTOM'>('REMUNERATED_100_CDI');
+  const [collateralMode, setCollateralMode] = useState<'IDLE_CASH' | 'REMUNERATED_100_CDI' | 'CUSTOM'>('IDLE_CASH');
   const [collateralPctCDI, setCollateralPctCDI] = useState<string>('100');
   const [fundingType, setFundingType] = useState<'FULL' | 'SPLIT_REAIS' | 'SPLIT_PCT'>('FULL');
   const [capitalRemuneratedReaisVal, setCapitalRemuneratedReaisVal] = useState<string>('');
@@ -28,15 +34,13 @@ export function GroupPositionsModal({
   if (!isOpen || selectedPositions.length < 2) return null;
 
   const underlyingTicker = selectedPositions[0].tickerUnderlying;
-  const defaultName = `${underlyingTicker} — Call Financiada por Put 2:1`;
+  const defaultName = `${underlyingTicker} — Estrutura Multi-Pernas`;
   const nameToUse = strategyName.trim() || defaultName;
 
-  // Cálculos do Preview
+  // Cálculos do Preview usando o Recognizer Canônico de Risco
   let netInitialCreditDebit = 0;
   let netPnlMtm = 0;
-  let totalCapitalReserved = 0;
   let shortPutUnits = 0;
-  let shortPutStrike = 0;
   let longCallUnits = 0;
 
   for (const pos of selectedPositions) {
@@ -52,26 +56,29 @@ export function GroupPositionsModal({
     netPnlMtm += pos.metrics.pnlMtmReais;
 
     if (pos.optionType === 'PUT' && isShort) {
-      totalCapitalReserved += pos.strike * pos.quantity;
       shortPutUnits += pos.quantity;
-      shortPutStrike = pos.strike;
-    } else if (pos.optionType === 'CALL' && isShort) {
-      totalCapitalReserved += (pos.underlyingCurrentSpot || pos.strike) * pos.quantity;
     }
-
     if (pos.optionType === 'CALL' && isLong) {
       longCallUnits += pos.quantity;
     }
   }
 
   const isCredit = netInitialCreditDebit >= 0;
-  let maxLossEconomic = totalCapitalReserved;
-  let breakEvenInferior: number | null = null;
 
-  if (shortPutUnits > 0 && shortPutStrike > 0) {
-    maxLossEconomic = shortPutUnits * shortPutStrike - netInitialCreditDebit;
-    breakEvenInferior = shortPutStrike - netInitialCreditDebit / shortPutUnits;
-  }
+  const riskProfile = detectStrategyRiskAndPayoff({
+    legs: selectedPositions.map((p) => ({
+      position: p,
+      allocatedQuantity: p.quantity,
+      economicRole: (p.side === 'SELL' || p.side === 'SHORT') ? 'FINANCING' : 'DIRECTIONAL',
+    })),
+    netInitialCreditDebitReais: netInitialCreditDebit,
+  });
+
+  const totalCapitalReserved = riskProfile.capitalReservedReais;
+  const maxLossEconomic = riskProfile.maxLossEconomicReais;
+  const breakEvenInferior = riskProfile.breakEvenInferior;
+  const breakEvenSuperior = riskProfile.breakEvenSuperior;
+  const riskQuality = riskProfile.riskRecognitionQuality;
 
   const putToCallRatio = longCallUnits > 0 ? shortPutUnits / longCallUnits : null;
   const roicPct = totalCapitalReserved > 0 ? (netPnlMtm / totalCapitalReserved) * 100 : 0;
@@ -83,16 +90,18 @@ export function GroupPositionsModal({
       let capitalRemunerated: number | null = null;
       let coveragePct: number | null = null;
 
-      if (fundingType === 'SPLIT_REAIS' && capitalRemuneratedReaisVal) {
-        capitalRemunerated = parseFloat(capitalRemuneratedReaisVal.replace(',', '.')) || null;
-      } else if (fundingType === 'SPLIT_PCT' && collateralCoveragePctVal) {
-        coveragePct = parseFloat(collateralCoveragePctVal.replace(',', '.')) || null;
-      } else if (fundingType === 'FULL') {
-        coveragePct = 100;
+      if (collateralMode !== 'IDLE_CASH') {
+        if (fundingType === 'SPLIT_REAIS') {
+          capitalRemunerated = parseNumericInput(capitalRemuneratedReaisVal);
+        } else if (fundingType === 'SPLIT_PCT') {
+          coveragePct = parseNumericInput(collateralCoveragePctVal);
+        } else if (fundingType === 'FULL') {
+          coveragePct = 100;
+        }
       }
 
       const parsedPctCDI = collateralMode === 'CUSTOM'
-        ? (parseFloat(collateralPctCDI.replace(',', '.')) || 100)
+        ? (parseNumericInput(collateralPctCDI) ?? 100)
         : collateralMode === 'REMUNERATED_100_CDI' ? 100 : 0;
 
       const res = await groupOptionPositionsAction({
@@ -377,23 +386,30 @@ export function GroupPositionsModal({
               <div className="p-2 rounded-lg bg-slate-900/60">
                 <div className="text-[10px] text-slate-400">Perda Máxima Econômica:</div>
                 <div className="font-bold text-rose-300">
-                  R$ {maxLossEconomic.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  {maxLossEconomic !== null
+                    ? `R$ ${maxLossEconomic.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                    : (riskProfile.maxLossType === 'UNBOUNDED' ? 'ILIMITADA (Venda Descoberta)' : 'Não Determinada')}
                 </div>
               </div>
             </div>
 
-            {breakEvenInferior !== null && (
-              <div className="text-[11px] text-slate-300 space-y-1 border-t border-amber-500/20 pt-2">
+            <div className="text-[11px] text-slate-300 space-y-1 border-t border-amber-500/20 pt-2">
+              {breakEvenInferior !== null && (
                 <p>
                   • <strong>Break-Even Inferior no Vencimento:</strong> R$ {breakEvenInferior.toFixed(2)}
                 </p>
-                {putToCallRatio !== null && (
-                  <p>
-                    • <strong>Assimetria de Risco ({putToCallRatio.toFixed(1)}:1):</strong> Downside = {shortPutUnits} ações vs Upside = {longCallUnits} ações ({putToCallRatio.toFixed(1)}x mais exposição na queda).
-                  </p>
-                )}
-              </div>
-            )}
+              )}
+              {breakEvenSuperior !== null && (
+                <p>
+                  • <strong>Break-Even Superior no Vencimento:</strong> R$ {breakEvenSuperior.toFixed(2)}
+                </p>
+              )}
+              {putToCallRatio !== null && (
+                <p>
+                  • <strong>Assimetria de Risco ({putToCallRatio.toFixed(1)}:1):</strong> Downside = {shortPutUnits} ações vs Upside = {longCallUnits} ações ({putToCallRatio.toFixed(1)}x mais exposição na queda).
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Botões */}
