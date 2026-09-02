@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import type { TradingDay, Trade, AudioRecord, keyLevels } from '@/lib/db/schema';
+import { useRouter } from 'next/navigation';
+import type { TradingDay, Trade, AudioRecord, keyLevels, TradeImage } from '@/lib/db/schema';
 import { MediaUploadCenterStudio } from '@/features/dashboard/components/MediaUploadCenterStudio';
 import { PreMarketForm } from '@/features/dashboard/components/PreMarketForm';
 import { RetrospectiveForm } from '@/features/dashboard/components/RetrospectiveForm';
@@ -9,6 +10,8 @@ import { KeyLevelsTable } from '@/features/dashboard/components/KeyLevelsTable';
 import { TranscriptionPanel } from '@/features/audio/components/TranscriptionPanel';
 import { FarolMarketCard } from '@/features/dashboard/components/FarolMarketCard';
 import { JournalProgressWidget } from '@/features/dashboard/components/JournalProgressWidget';
+import { extractAndTranscribeVideoAudioAction } from '@/features/video/actions';
+import { retryAudioTranscription } from '@/features/audio/actions';
 import Link from 'next/link';
 
 interface StudioViewProps {
@@ -23,6 +26,7 @@ interface StudioViewProps {
   dayTrades?: Trade[];
   allTrades?: Trade[];
   allAudios?: AudioRecord[];
+  dayImages?: TradeImage[];
   imageCount: number;
   historyDays?: TradingDay[];
 }
@@ -39,13 +43,32 @@ export function StudioView({
   dayTrades = [],
   allTrades = [],
   allAudios = [],
+  dayImages = [],
   imageCount,
   historyDays = [],
 }: StudioViewProps) {
+  const router = useRouter();
+  const [isProcessingAudio, setIsProcessingAudio] = useState(false);
   const hasTranscription = dayAudios.some(a => a.status === 'done');
   const totalReais = day.totalReais || 0;
   const totalPoints = day.totalPoints || 0;
   const winRate = day.tradesRight && tradeCount > 0 ? ((day.tradesRight / tradeCount) * 100).toFixed(0) : '0';
+
+  async function handleHeaderProcessAudio() {
+    setIsProcessingAudio(true);
+    try {
+      if (dayAudios.length > 0) {
+        await retryAudioTranscription(dayAudios[0].id);
+      } else {
+        await extractAndTranscribeVideoAudioAction(date);
+      }
+      router.refresh();
+    } catch (err: any) {
+      alert(`Erro ao processar áudio/transcrição: ${err.message || String(err)}`);
+    } finally {
+      setIsProcessingAudio(false);
+    }
+  }
 
   return (
     <div key={day.id} className="max-w-[1440px] mx-auto space-y-5 pb-16 animate-in fade-in">
@@ -88,19 +111,54 @@ export function StudioView({
               <span>VÍDEO OBS {hasVideo ? 'Processado' : 'Pendente'}</span>
             </div>
 
-            <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 font-mono font-medium transition-all ${
-              hasAudio ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' : 'bg-slate-950/60 text-slate-500 border-slate-800'
-            }`}>
-              <span>🎙️</span>
-              <span>ÁUDIO: {hasAudio ? 'MP3 Extraído' : 'Pendente'}</span>
-            </div>
+            {hasVideo && !hasAudio ? (
+              <button
+                type="button"
+                onClick={handleHeaderProcessAudio}
+                disabled={isProcessingAudio}
+                className="px-3 py-1.5 rounded-xl border bg-purple-600 hover:bg-purple-500 text-white font-mono font-bold text-xs transition-all flex items-center gap-2 shadow-lg cursor-pointer disabled:opacity-50"
+              >
+                <span>{isProcessingAudio ? '⏳' : '🎙️'}</span>
+                <span>{isProcessingAudio ? 'EXTRAINDO ÁUDIO...' : '🎙️ EXTRAIR & TRANSCREVER ÁUDIO'}</span>
+              </button>
+            ) : (
+              <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 font-mono font-medium transition-all ${
+                hasAudio ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' : 'bg-slate-950/60 text-slate-500 border-slate-800'
+              }`}>
+                <span>🎙️</span>
+                <span>ÁUDIO: {hasAudio ? 'MP3 Extraído' : 'Pendente'}</span>
+              </div>
+            )}
 
-            <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 font-mono font-medium transition-all ${
-              hasTranscription ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' : 'bg-slate-950/60 text-slate-500 border-slate-800'
-            }`}>
-              <span>📑</span>
-              <span>TRANSCRIÇÃO {hasTranscription ? 'Concluída' : 'Pendente'}</span>
-            </div>
+            {hasAudio && !hasTranscription ? (
+              <button
+                type="button"
+                onClick={handleHeaderProcessAudio}
+                disabled={isProcessingAudio}
+                className="px-3 py-1.5 rounded-xl border bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs transition-all flex items-center gap-2 shadow-lg cursor-pointer disabled:opacity-50 animate-pulse"
+              >
+                <span>{isProcessingAudio ? '⏳' : '📑'}</span>
+                <span>{isProcessingAudio ? 'TRANSCREVENDO GEMINI...' : '📑 TRANSCREVER AGORA (GEMINI AI)'}</span>
+              </button>
+            ) : (
+              <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 font-mono font-medium transition-all ${
+                hasTranscription ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' : 'bg-slate-950/60 text-slate-500 border-slate-800'
+              }`}>
+                <span>📑</span>
+                <span>TRANSCRIÇÃO {hasTranscription ? 'Concluída' : 'Pendente'}</span>
+                {hasTranscription && (
+                  <button
+                    type="button"
+                    onClick={handleHeaderProcessAudio}
+                    disabled={isProcessingAudio}
+                    title="Re-transcrever com Gemini AI"
+                    className="ml-1 px-1.5 py-0.5 text-[10px] bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 rounded font-bold transition-all cursor-pointer"
+                  >
+                    🔄
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 font-mono font-medium transition-all ${
               imageCount > 0 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-slate-950/60 text-slate-500 border-slate-800'
@@ -126,13 +184,13 @@ export function StudioView({
       <div key={day.id} className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
         <div className="space-y-5">
           <PreMarketForm day={day} />
-          <FarolMarketCard day={day} />
+          <FarolMarketCard day={day} images={dayImages} />
           <KeyLevelsTable day={day} initialLevels={dayLevels} />
         </div>
 
         <div className="space-y-5">
           <RetrospectiveForm day={day} />
-          {dayAudios.length > 0 && <TranscriptionPanel audios={dayAudios} date={date} />}
+          <TranscriptionPanel audios={dayAudios} date={date} hasVideo={hasVideo} />
 
           {/* Resumo da Sessão */}
           <div className="bg-[#0d131f] border border-slate-800/80 rounded-2xl p-4 space-y-2 shadow-xl">

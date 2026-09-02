@@ -19,6 +19,90 @@ interface DatabaseClientViewProps {
   images: TradeImage[];
 }
 
+interface ParsedAudioData {
+  segments: Array<{
+    audio_timestamp: string;
+    market_time?: string;
+    text: string;
+    ai_analysis?: string;
+  }>;
+  aiSummary?: string;
+  trades?: Array<{
+    trade_number?: number;
+    side?: string;
+    time?: string;
+    level?: string;
+    audio_timestamp?: string;
+  }>;
+}
+
+function parseAudioDetails(audio: AudioRecord): ParsedAudioData {
+  let segments: ParsedAudioData['segments'] = [];
+  let aiSummary: string | undefined = undefined;
+  let trades: ParsedAudioData['trades'] = undefined;
+
+  // 1. Tenta extrair de insights (JSON)
+  if (audio.insights && audio.insights !== '{}') {
+    try {
+      const parsed = JSON.parse(audio.insights);
+      if (Array.isArray(parsed.segments)) {
+        segments = parsed.segments.map((s: any) => ({
+          audio_timestamp: s.audio_timestamp || s.time || '00:00',
+          market_time: s.market_time || s.pregão_timestamp,
+          text: s.raw_text || s.text || '',
+          ai_analysis: s.ai_analysis,
+        }));
+      }
+      if (parsed.aiSummary) aiSummary = parsed.aiSummary;
+      if (parsed.trades) trades = parsed.trades;
+    } catch {}
+  }
+
+  // 2. Se não tem segmentos do insights, tenta parsear JSON de transcription
+  if (segments.length === 0 && audio.transcription) {
+    try {
+      const firstBrace = audio.transcription.indexOf('{');
+      const lastBrace = audio.transcription.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const jsonText = audio.transcription.substring(firstBrace, lastBrace + 1);
+        const parsed = JSON.parse(jsonText);
+        if (Array.isArray(parsed.segments)) {
+          segments = parsed.segments.map((s: any) => ({
+            audio_timestamp: s.audio_timestamp || '00:00',
+            market_time: s.market_time,
+            text: s.raw_text || s.text || '',
+            ai_analysis: s.ai_analysis,
+          }));
+        }
+        if (parsed.ai_summary) aiSummary = parsed.ai_summary;
+        if (parsed.trades_mentioned) trades = parsed.trades_mentioned;
+      }
+    } catch {}
+  }
+
+  // 3. Se ainda não tem segmentos mas transcription é uma string formatada
+  if (segments.length === 0 && audio.transcription) {
+    const blocks = audio.transcription.split(/\n\n+/);
+    for (const block of blocks) {
+      const match = block.match(/⏱️\s*\*\*\[(.*?)\]\*\*\s*\n?([\s\S]*)/);
+      if (match) {
+        const header = match[1]; // ex: "00:00 | Pregão 09:04"
+        const text = match[2].trim();
+        const headerParts = header.split('|').map(s => s.trim());
+        const audioTime = headerParts[0] || '00:00';
+        const pregãoTime = headerParts[1] ? headerParts[1].replace(/Pregão\s*/i, '') : undefined;
+        segments.push({
+          audio_timestamp: audioTime,
+          market_time: pregãoTime,
+          text,
+        });
+      }
+    }
+  }
+
+  return { segments, aiSummary, trades };
+}
+
 export function DatabaseClientView({
   days: initialDays,
   trades: initialTrades,
@@ -508,33 +592,109 @@ export function DatabaseClientView({
 
       {/* ABA 4: ÁUDIOS */}
       {activeTab === 'audios' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           <h2 className="text-xs font-bold text-slate-300 uppercase tracking-wider">REGISTROS DE ÁUDIO & TRANSCRIÇÕES</h2>
 
-          <div className="space-y-3">
-            {audios.map((a) => (
-              <div key={a.id} className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-3.5 space-y-2 shadow-xl">
-                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-                  <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
-                    <IconMic className="text-amber-400" />
-                    {a.filePath}
-                  </span>
-                  <button
-                    onClick={() => handleDeleteAudio(a.id)}
-                    disabled={deletingId === a.id}
-                    type="button"
-                    className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[10px] font-bold"
-                  >
-                    DELETAR
-                  </button>
-                </div>
+          <div className="space-y-4">
+            {audios.map((a) => {
+              const { segments, aiSummary, trades: mentionedTrades } = parseAudioDetails(a);
+              const durationFormatted = a.durationSecs
+                ? `${Math.floor(a.durationSecs / 60)}:${(a.durationSecs % 60).toString().padStart(2, '0')}`
+                : null;
 
-                <audio src={`/api/files/${a.filePath}`} controls className="w-full h-8" />
-                <p className="text-xs text-slate-300 font-sans italic bg-[#070a10] p-2.5 rounded-md border border-slate-800/80">
-                  "{a.transcription || 'Sem transcrição'}"
-                </p>
-              </div>
-            ))}
+              return (
+                <div key={a.id} className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 space-y-3.5 shadow-xl font-mono">
+                  {/* Header do Áudio */}
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <IconMic className="text-amber-400" />
+                      <span className="text-xs font-bold text-slate-200 truncate max-w-md">{a.filePath}</span>
+                      {durationFormatted && (
+                        <span className="text-[10px] text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20 font-bold">
+                          ⏱️ {durationFormatted}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteAudio(a.id)}
+                      disabled={deletingId === a.id}
+                      type="button"
+                      className="px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded text-[10px] font-bold transition-all"
+                    >
+                      {deletingId === a.id ? 'EXCLUINDO…' : 'DELETAR'}
+                    </button>
+                  </div>
+
+                  {/* Player HTML5 */}
+                  <audio src={`/api/files/${a.filePath}`} controls className="w-full h-9 rounded" />
+
+                  {/* Resumo Executivo da IA se houver */}
+                  {aiSummary && (
+                    <div className="p-3 bg-[#070a10] border border-amber-500/30 rounded-lg space-y-1">
+                      <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">
+                        📌 RESUMO TÉCNICO EXECUTIVO DA SESSÃO
+                      </span>
+                      <p className="text-xs text-slate-300 font-sans leading-relaxed">{aiSummary}</p>
+                    </div>
+                  )}
+
+                  {/* Trades Mencionado se houver */}
+                  {mentionedTrades && mentionedTrades.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap text-xs bg-[#070a10] p-2.5 rounded-lg border border-slate-800">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold">Trades Detectados:</span>
+                      {mentionedTrades.map((t, idx) => (
+                        <span key={idx} className="bg-[#0b1018] px-2 py-0.5 rounded border border-slate-800 text-[10px] flex items-center gap-1">
+                          <span className={t.side === 'compra' ? 'text-teal-400 font-bold uppercase' : 'text-rose-400 font-bold uppercase'}>{t.side}</span>
+                          {t.time && <span className="text-amber-400">@{t.time}</span>}
+                          {t.level && <span className="text-teal-300">{t.level}</span>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Segmentos / Linha do Tempo */}
+                  {segments.length > 0 ? (
+                    <div className="bg-[#070a10] border border-slate-800/80 rounded-lg p-3 space-y-2 max-h-[450px] overflow-y-auto">
+                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-1.5 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                        <span>🗣️ LINHA DO TEMPO DA TRANSCRIÇÃO ({segments.length} trechos)</span>
+                      </div>
+
+                      <div className="space-y-2.5 pt-1">
+                        {segments.map((seg, idx) => (
+                          <div key={idx} className="p-2.5 bg-[#0b1018] rounded-md border border-slate-800/60 space-y-1.5">
+                            <div className="flex items-center gap-2 text-[10px] font-mono">
+                              <span className="text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded font-bold border border-teal-500/20">
+                                ⏱️ {seg.audio_timestamp}
+                              </span>
+                              {seg.market_time && (
+                                <span className="text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded font-bold border border-amber-400/20">
+                                  🕐 Pregão {seg.market_time}
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="text-xs text-slate-200 font-sans leading-relaxed">
+                              {seg.text}
+                            </p>
+
+                            {seg.ai_analysis && (
+                              <div className="pt-1 border-t border-slate-800/50 text-[11px] text-amber-200/90 font-sans italic bg-amber-500/5 p-2 rounded">
+                                <span className="text-[9px] text-amber-400 font-bold not-italic block uppercase">💡 Análise da IA:</span>
+                                {seg.ai_analysis}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-[#070a10] p-3 rounded-lg border border-slate-800/80 text-xs font-sans text-slate-300 whitespace-pre-wrap leading-relaxed">
+                      {a.transcription || 'Sem transcrição disponível.'}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

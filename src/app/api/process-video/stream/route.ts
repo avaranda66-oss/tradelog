@@ -80,8 +80,11 @@ export async function POST(req: Request) {
           const audioDir = path.join(process.cwd(), 'data', 'audio', dateStr);
           if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
 
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const audioFileName = `obs_narration_${timestamp}.mp3`;
+          let startTime = inputStartTime;
+          if (!startTime && parsedObs) startTime = parsedObs.startTime;
+          if (!startTime) startTime = '09:00:00';
+          const formattedStartTime = startTime.replace(/:/g, '-');
+          const audioFileName = `obs_narration_${dateStr}_${formattedStartTime}.mp3`;
           const audioPath = path.join(audioDir, audioFileName);
 
           await extractAudioFromVideo(targetVideoPath, audioPath);

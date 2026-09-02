@@ -1,7 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
-
-const API_KEY = process.env.GEMINI_API_KEY!;
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+import { getGeminiClient } from './gemini';
 
 export interface AiCoachReportData {
   disciplineScore: number;
@@ -78,7 +75,8 @@ ${data.transcriptions?.join('\n---\n') || 'Nenhuma narração gravada.'}
 `;
 
   try {
-    const response = await ai.models.generateContent({
+    const client = getGeminiClient();
+    const response = await client.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: [
         {

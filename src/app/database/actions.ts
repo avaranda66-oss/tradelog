@@ -24,6 +24,7 @@ export async function updateTradingDayCell(
     'retrospective',
     'totalReais',
     'totalPoints',
+    'strategyTags',
   ];
 
   if (!allowedFields.includes(field)) {
@@ -42,6 +43,39 @@ export async function updateTradingDayCell(
   revalidatePath('/diario');
   revalidatePath('/');
   return { success: true };
+}
+
+/**
+ * Salva as tags de estratégia/contexto do dia
+ */
+export async function saveTradingDayTags(dateStr: string, tags: string[]) {
+  const tagsJson = JSON.stringify(tags);
+
+  let day = await db.query.tradingDays.findFirst({
+    where: eq(tradingDays.date, dateStr),
+  });
+
+  if (!day) {
+    const newId = `day_${dateStr}_${Date.now()}`;
+    await db.insert(tradingDays).values({
+      id: newId,
+      date: dateStr,
+      strategyTags: tagsJson,
+    });
+  } else {
+    await db
+      .update(tradingDays)
+      .set({
+        strategyTags: tagsJson,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(tradingDays.id, day.id));
+  }
+
+  revalidatePath('/diario');
+  revalidatePath('/database');
+  revalidatePath('/');
+  return { success: true, tags };
 }
 
 /**

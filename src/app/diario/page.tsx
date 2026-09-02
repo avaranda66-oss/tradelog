@@ -50,7 +50,10 @@ export default async function DiarioPage({
     });
   }
 
-  // Busca histórico global para insígnias acumuladas
+  // Busca histórico global para insígnias acumuladas, streaks e avaliação de dias úteis
+  const historyDays = await db.query.tradingDays.findMany({
+    orderBy: desc(tradingDays.date),
+  });
   const allTrades = await db.query.trades.findMany();
   const allAudios = await db.query.audioRecords.findMany();
 
@@ -63,6 +66,7 @@ export default async function DiarioPage({
       audios={dayAudios}
       allAudios={allAudios}
       levels={dayLevels}
+      historyDays={historyDays}
     />
   );
 }

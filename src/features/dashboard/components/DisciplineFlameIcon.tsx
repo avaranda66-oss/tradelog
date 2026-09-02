@@ -25,10 +25,15 @@ import {
  *   onComplete (100%)→ anel orbital executa 1 rotação e para
  */
 
+import type { BusinessDayStatus } from '@/lib/gamification';
+
 interface DisciplineFlameIconProps {
   level: number;                    // 0–4
   size?: number;
-  complete?: boolean;               // true quando score === 100 (dispara 1 volta do anel)
+  complete?: boolean;               // true quando score === 100
+  streakDays?: number;              // Sequência de dias úteis acumulados
+  weekBusinessDays?: BusinessDayStatus[]; // Status dos 5 dias úteis da semana (Seg a Sex)
+  onOpenAchievements?: () => void;  // Callback ao clicar para abrir conquistas
   onLevelChange?: (level: number) => void;
 }
 
@@ -52,6 +57,9 @@ export function DisciplineFlameIcon({
   level,
   size = 40,
   complete = false,
+  streakDays = 0,
+  weekBusinessDays = [],
+  onOpenAchievements,
   onLevelChange,
 }: DisciplineFlameIconProps) {
   const safeLevel = Math.min(Math.max(level, 0), 4) as 0 | 1 | 2 | 3 | 4;
@@ -61,6 +69,11 @@ export function DisciplineFlameIcon({
   const prevLevel = useRef(safeLevel);
   const [igniting, setIgniting] = useState(false);
   const [extinguishing, setExtinguishing] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Anel orbital: controlado por MotionValue para fazer "1 volta e para"
   const ringRotation = useMotionValue(0);
@@ -114,9 +127,19 @@ export function DisciplineFlameIcon({
       ? { duration: 0.6, ease: [0.16, 1, 0.3, 1] }
       : idleTransition;
 
+  // Qtd de bolinhas ativas se weekBusinessDays não for passado
+  const activeDotsCount = streakDays > 0 ? (streakDays >= 5 ? 5 : streakDays % 5 || 5) : 0;
+
+  // Texto descritivo para tooltip de hover
+  const tooltipText = weekBusinessDays.length > 0
+    ? weekBusinessDays.map(d => `${d.dayLabel}: ${d.status === 'completed' ? '🟢' : d.status === 'missed' ? '🔴 FALTOU' : '⚪ PENDENTE'}`).join(' | ')
+    : `Streak: ${streakDays} dias úteis`;
+
   return (
     <div
-      className="relative flex items-center justify-center"
+      onClick={onOpenAchievements}
+      title={`${tooltipText} — Clique para abrir o Arquivo de Conquistas`}
+      className={`relative flex items-center justify-center cursor-pointer group transition-transform duration-200 hover:scale-110`}
       style={{ width: size, height: size }}
     >
       {/* Glow radial */}
@@ -132,28 +155,73 @@ export function DisciplineFlameIcon({
         transition={{ duration: igniting ? 0.6 : 0.35, ease: 'easeOut' }}
       />
 
-      {/* Anel orbital — nível 4. Estático por padrão; 1 volta no evento 100% */}
-      {safeLevel === 4 && (
-        <motion.svg
-          className="absolute inset-0 pointer-events-none"
-          width={size}
-          height={size}
-          viewBox="0 0 24 24"
-          style={{ rotate: ringRotation }}
-        >
-          <circle
-            cx="12"
-            cy="12"
-            r="10.5"
-            fill="none"
-            stroke="#2DD4BF"
-            strokeOpacity="0.35"
-            strokeWidth="0.5"
-            strokeDasharray="1.5 3"
-          />
-          <circle cx="12" cy="1.5" r="0.9" fill="#99F6E4" />
-        </motion.svg>
-      )}
+      {/* Anel Orbital de Dias Úteis — Arco Compacto Sequencial Juntos no Topo */}
+      <motion.svg
+        className="absolute inset-0 pointer-events-none overflow-visible"
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        style={{ rotate: ringRotation }}
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="10.5"
+          fill="none"
+          stroke={safeLevel > 0 ? '#2DD4BF' : '#334155'}
+          strokeOpacity={safeLevel > 0 ? '0.35' : '0.15'}
+          strokeWidth="0.5"
+          strokeDasharray="1.5 3"
+        />
+
+        {/* 5 Bolinhas em Arco Compacto Sequencial no Topo (-134° a -46°, 22° entre cada) */}
+        {Array.from({ length: 5 }).map((_, index) => {
+          const angle = -134 + index * 22; // Centrado no topo (-90deg exato na 3ª bolinha)
+          const rad = (angle * Math.PI) / 180;
+          const r = 10.5;
+          const cx = 12 + r * Math.cos(rad);
+          const cy = 12 + r * Math.sin(rad);
+
+          // Determina o status da bolinha específica
+          let dotColor = '#334155'; // ⚪ Pendente (Cinza)
+          let isGlow = false;
+
+          if (weekBusinessDays.length > index) {
+            const dayStatus = weekBusinessDays[index].status;
+            if (dayStatus === 'completed') {
+              dotColor = '#2DD4BF'; // 🟢 Concluído (Teal)
+              isGlow = true;
+            } else if (dayStatus === 'missed') {
+              dotColor = '#EF4444'; // 🔴 Faltou registro no dia útil! (Vermelho)
+            }
+          } else {
+            const isActive = index < activeDotsCount;
+            if (isActive) {
+              dotColor = '#2DD4BF';
+              isGlow = true;
+            }
+          }
+
+          return (
+            <circle
+              key={index}
+              cx={cx}
+              cy={cy}
+              r={dotColor === '#EF4444' ? 1.4 : isGlow ? 1.3 : 0.8}
+              fill={dotColor}
+              opacity={dotColor === '#334155' ? 0.4 : 1}
+              style={{
+                filter: isGlow
+                  ? 'drop-shadow(0px 0px 2.5px #2DD4BF)'
+                  : dotColor === '#EF4444'
+                  ? 'drop-shadow(0px 0px 3px #EF4444)'
+                  : 'none',
+                transition: 'all 0.3s ease',
+              }}
+            />
+          );
+        })}
+      </motion.svg>
 
       {/* Corpo da chama */}
       <motion.svg
@@ -195,8 +263,8 @@ export function DisciplineFlameIcon({
         )}
       </motion.svg>
 
-      {/* Brasas ocasionais — apenas nível 4 */}
-      {safeLevel === 4 && !reduceMotion && <Embers size={size} />}
+      {/* Brasas ocasionais — apenas nível 4 e após montagem no cliente */}
+      {mounted && safeLevel === 4 && !reduceMotion && <Embers size={size} />}
     </div>
   );
 }

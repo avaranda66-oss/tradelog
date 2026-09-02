@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { tradingDays, trades, audioRecords, keyLevels, tradeImages } from '@/lib/db/schema';
+import { tradingDays, trades, audioRecords, keyLevels, tradeImages, videoRecords } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { todayISO, generateId } from '@/lib/utils';
 import { StudioView } from './StudioView';
@@ -86,17 +86,19 @@ export default async function HomePage({
     where: eq(keyLevels.tradingDayId, day.id),
   });
 
-  // Checa existência de vídeos no disco
+  // Checa presença de vídeo (no banco ou no disco)
+  const dayVideoRecords = await db.query.videoRecords.findMany({
+    where: eq(videoRecords.tradingDayId, day.id),
+  });
   const videoDir = path.join(process.cwd(), 'data', 'videos', targetDate);
-  const hasVideo = fs.existsSync(videoDir) && fs.readdirSync(videoDir).length > 0;
+  const hasVideoOnDisk = fs.existsSync(videoDir) && fs.readdirSync(videoDir).length > 0;
+  const hasVideo = hasVideoOnDisk || dayVideoRecords.length > 0;
 
-  // Checa contagem de screenshots extraídos
-  let imageCount = 0;
-  if (dayTrades.length > 0) {
-    const allImages = await db.query.tradeImages.findMany();
-    const tradeIds = new Set(dayTrades.map(t => t.id));
-    imageCount = allImages.filter(img => tradeIds.has(img.tradeId || '')).length;
-  }
+  // Checa contagem de screenshots extraídos e prints de sessão
+  const allImages = await db.query.tradeImages.findMany();
+  const tradeIds = new Set(dayTrades.map(t => t.id));
+  const dayImages = allImages.filter(img => (img.tradeId && tradeIds.has(img.tradeId)) || img.tradingDayId === day.id || img.filePath.includes(`/${targetDate}/`));
+  const imageCount = dayImages.length;
 
   // Busca todos os dias cadastrados no histórico para cálculo de streaks e insígnias
   const historyDays = await db.query.tradingDays.findMany({
@@ -120,6 +122,7 @@ export default async function HomePage({
       dayTrades={dayTrades}
       allTrades={allTrades}
       allAudios={allAudios}
+      dayImages={dayImages}
       imageCount={imageCount}
       historyDays={historyDays}
     />

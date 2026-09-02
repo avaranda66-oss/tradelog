@@ -39,6 +39,8 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [analyzingVision, setAnalyzingVision] = useState(false);
+  const [visionStatus, setVisionStatus] = useState<string | null>(null);
 
   // Resincroniza o formulário automaticamente quando o usuário troca de dia (sem F5)
   useEffect(() => {
@@ -52,7 +54,7 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
       overnightNote: day.overnightNote || '',
       generalBias: day.generalBias || 'indefinido',
     });
-  }, [day.id, day.date, day.updatedAt, day.sleepTime, day.wakeUpTime, day.personalNote]);
+  }, [day.id, day.date, day.updatedAt, day.sleepTime, day.wakeUpTime, day.personalNote, day.macroCalendar, day.overnightNote, day.generalBias]);
 
   async function handleSave() {
     setSaving(true);
@@ -75,6 +77,41 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
     }
   }
 
+  async function handleAnalyzeVision() {
+    setAnalyzingVision(true);
+    setVisionStatus('🤖 Lendo prints do Farol do Mercado com Gemini Vision...');
+    try {
+      const res = await fetch('/api/farol/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: day.date }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        const ext = data.data;
+        setForm(f => ({
+          ...f,
+          macroCalendar: ext.macroCalendar || f.macroCalendar,
+          overnightNote: ext.overnightNote || f.overnightNote,
+          generalBias: ext.generalBias || f.generalBias,
+        }));
+        setVisionStatus('✓ Calendário Macro, Overnight e Viés preenchidos e salvos!');
+        setTimeout(() => {
+          setVisionStatus(null);
+          window.location.reload();
+        }, 1800);
+      } else {
+        setVisionStatus(`⚠️ ${data.error || 'Nenhum screenshot encontrado ou falha na IA.'}`);
+        setTimeout(() => setVisionStatus(null), 5000);
+      }
+    } catch (err: any) {
+      setVisionStatus(`❌ Erro: ${err.message || 'Falha de comunicação'}`);
+      setTimeout(() => setVisionStatus(null), 5000);
+    } finally {
+      setAnalyzingVision(false);
+    }
+  }
+
   function handleSelectState(stateText: string) {
     setForm(f => {
       const current = f.mentalState.trim();
@@ -90,7 +127,7 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
 
   return (
     <section aria-label="Checklist pré-market" className="bg-[#0b1018] border border-slate-800/80 rounded-xl p-4 shadow-xl space-y-4 font-mono">
-      <header className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
         <div className="flex items-center gap-2">
           <IconClock className="text-teal-400" />
           <h3 className="text-[10px] tracking-[0.25em] font-bold text-slate-300 uppercase">
@@ -98,12 +135,39 @@ export function PreMarketForm({ day }: { day: TradingDay }) {
           </h3>
         </div>
 
-        {day.preMarketDone && (
-          <span className="text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded uppercase">
-            ✓ CONCLUÍDO
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleAnalyzeVision}
+            disabled={analyzingVision}
+            className="px-2.5 py-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-mono font-bold text-[10px] rounded-md transition-all flex items-center gap-1.5 shadow-md shadow-indigo-500/20 disabled:opacity-50 cursor-pointer"
+            title="Lê os prints do Farol do Mercado e preenche o Calendário Macro, Overnight e Viés com IA Multimodal"
+          >
+            <span>{analyzingVision ? '⏳' : '🤖'}</span>
+            <span>{analyzingVision ? 'LENDO FAROL...' : 'PREENCHER COM FAROL (AI)'}</span>
+          </button>
+
+          {day.preMarketDone && (
+            <span className="text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded uppercase">
+              ✓ CONCLUÍDO
+            </span>
+          )}
+        </div>
       </header>
+
+      {/* Feedback de Status Vision */}
+      {visionStatus && (
+        <div className={`p-2 rounded-lg border text-[11px] font-mono flex items-center gap-2 animate-in fade-in ${
+          visionStatus.includes('✓')
+            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+            : visionStatus.includes('Erro') || visionStatus.includes('⚠️') || visionStatus.includes('❌')
+            ? 'bg-rose-500/10 text-rose-300 border-rose-500/30'
+            : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30 animate-pulse'
+        }`}>
+          <span>{visionStatus.includes('✓') ? '✅' : visionStatus.includes('Erro') || visionStatus.includes('⚠️') || visionStatus.includes('❌') ? '⚠️' : '🤖'}</span>
+          <span>{visionStatus}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
         {/* Horário que dormiu */}

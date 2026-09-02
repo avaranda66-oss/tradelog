@@ -8,6 +8,8 @@ import { ImageDropzone } from '@/features/images/components/ImageDropzone';
 import { StrategySelector } from '@/components/ui/StrategySelector';
 import { TagGroupSelector } from '@/components/ui/TagGroupSelector';
 import { IconArrowUp, IconArrowDown, IconCheck } from '@/components/ui/icons';
+import { TradeReplayModal } from '@/features/video/components/TradeReplayModal';
+
 
 const STRATEGIES = ['Rompimento', 'Pullback', 'VWAP Revert', 'Fluxo', 'Scalp', 'Momentum', 'Contra-Tendência', 'Abertura'];
 const ENTRY_TYPES = ['Breakout', 'Pullback', 'Reversão', 'Scalp', 'Momentum', 'Contra-Tendência'];
@@ -80,7 +82,9 @@ interface TradeCardProps {
 
 export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showReplay, setShowReplay] = useState(false);
   const [inlineTab, setInlineTab] = useState<'info' | 'pre' | 'durante' | 'pos'>('info');
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -226,6 +230,14 @@ export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
               title="Deletar" className="px-1.5 py-0.5 text-slate-500 hover:text-rose-400 font-mono text-[10px]">DEL</button>
           )}
 
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowReplay(true); }}
+            title="Assistir Replay de Vídeo deste Trade (30s antes até saída)"
+            className="px-2 py-0.5 rounded bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border border-teal-500/30 font-mono text-[10px] font-bold flex items-center gap-1 transition-all"
+          >
+            🎬 REPLAY
+          </button>
+
           {onOpenModal && (
             <button
               onClick={(e) => { e.stopPropagation(); onOpenModal(trade); }}
@@ -244,6 +256,14 @@ export function TradeCard({ trade, date, onOpenModal }: TradeCardProps) {
           </button>
         </div>
       </div>
+
+      {showReplay && (
+        <TradeReplayModal
+          trade={trade}
+          onClose={() => setShowReplay(false)}
+        />
+      )}
+
 
       {/* Conteúdo Expandido Inline */}
       {expanded && (

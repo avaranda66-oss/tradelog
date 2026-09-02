@@ -90,7 +90,10 @@ export function Header({
           {environment}
         </span>
 
-        <span className="hidden font-mono text-[11px] tabular-nums text-slate-400 md:inline">
+        <span
+          className="hidden font-mono text-[11px] tabular-nums text-slate-400 md:inline"
+          suppressHydrationWarning
+        >
           {formatClock(now)}
         </span>
 

@@ -7,6 +7,7 @@ import { generateId } from '@/lib/utils';
 import { eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { exportTradingDayToMarkdown } from '@/lib/markdown-sync';
+import { analyzeFarolScreenshotsVision } from '@/lib/farol-vision';
 
 /**
  * Importa CSV do Profit Pro e salva os trades no banco
@@ -36,10 +37,14 @@ export async function importTradesCSV(formData: FormData) {
 
   if (!day) throw new Error('Falha ao criar dia');
 
-  // Deleta trades existentes do dia (reimportação)
-  await db.delete(trades).where(eq(trades.tradingDayId, day.id));
+  // Busca trades existentes do dia para preservação de IDs, anotações e prints
+  const existingTrades = await db.query.trades.findMany({
+    where: eq(trades.tradingDayId, day.id),
+  });
 
-  // Insere os trades
+  const activeTradeIds = new Set<string>();
+
+  // Processa e faz upsert inteligente dos trades
   let totalPoints = 0;
   let totalReais = 0;
   let right = 0;
@@ -58,25 +63,62 @@ export async function importTradesCSV(formData: FormData) {
     if (reais > 0) right++;
     else if (reais < 0) wrong++;
 
-    await db.insert(trades).values({
-      id: generateId(),
-      tradingDayId: day.id,
-      tradeNumber: i + 1,
-      instrument: t.instrument,
-      openTime: t.openTime,
-      closeTime: t.closeTime,
-      duration: t.duration,
-      side: t.side,
-      entryPrice,
-      exitPrice,
-      contracts,
-      points: pts,
-      reais,
-      isAverage: t.isAverage,
-      mep: t.mep,
-      men: t.men,
-      drawdown: t.drawdown,
-    });
+    // Tenta casar trade existente por openTime ou pelo número do trade
+    const existing = existingTrades.find(
+      (et) => et.openTime === t.openTime || et.tradeNumber === i + 1
+    );
+
+    if (existing) {
+      activeTradeIds.add(existing.id);
+      await db.update(trades)
+        .set({
+          tradeNumber: i + 1,
+          instrument: t.instrument,
+          openTime: t.openTime,
+          closeTime: t.closeTime,
+          duration: t.duration,
+          side: t.side,
+          entryPrice,
+          exitPrice,
+          contracts,
+          points: pts,
+          reais,
+          isAverage: t.isAverage,
+          mep: t.mep,
+          men: t.men,
+          drawdown: t.drawdown,
+        })
+        .where(eq(trades.id, existing.id));
+    } else {
+      const newTradeId = generateId();
+      activeTradeIds.add(newTradeId);
+      await db.insert(trades).values({
+        id: newTradeId,
+        tradingDayId: day.id,
+        tradeNumber: i + 1,
+        instrument: t.instrument,
+        openTime: t.openTime,
+        closeTime: t.closeTime,
+        duration: t.duration,
+        side: t.side,
+        entryPrice,
+        exitPrice,
+        contracts,
+        points: pts,
+        reais,
+        isAverage: t.isAverage,
+        mep: t.mep,
+        men: t.men,
+        drawdown: t.drawdown,
+      });
+    }
+  }
+
+  // Remove apenas trades antigos que não constam mais no CSV
+  for (const et of existingTrades) {
+    if (!activeTradeIds.has(et.id)) {
+      await db.delete(trades).where(eq(trades.id, et.id));
+    }
   }
 
   // Atualiza resumo do dia
@@ -375,4 +417,15 @@ export async function deleteTradingDayAction(dayId: string) {
   revalidatePath('/operacoes');
 
   return { success: true };
+}
+
+/**
+ * Dispara a análise Gemini Vision dos screenshots do Farol do Mercado
+ */
+export async function analyzeFarolScreenshotsAction(dateStr: string) {
+  const analysis = await analyzeFarolScreenshotsVision(dateStr);
+  revalidatePath('/');
+  revalidatePath('/diario');
+  revalidatePath('/database');
+  return { success: true, data: analysis };
 }

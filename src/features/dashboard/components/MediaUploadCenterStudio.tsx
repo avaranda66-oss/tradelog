@@ -3,8 +3,9 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { importTradesCSV } from '@/features/trades/actions';
-import { processOBSVideo } from '@/features/video/actions';
+import { processOBSVideo, processVideoFromPathAction } from '@/features/video/actions';
 import { saveAudioRecording, transcribeAudioRecord } from '@/features/audio/actions';
+import { uploadFarolImage } from '@/features/images/actions';
 import { IconUpload, IconFile, IconVideo, IconMic, IconCheck } from '@/components/ui/icons';
 
 interface MediaUploadCenterStudioProps {
@@ -47,16 +48,27 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
     // 2. Vídeo do OBS (.mp4, .mkv, .avi, .mov)
     if (['mp4', 'mkv', 'avi', 'mov'].includes(ext) || file.type.startsWith('video/')) {
       setStatus('uploading');
-      setStatusMessage(`1/3 Upload do vídeo OBS (${(file.size / 1024 / 1024).toFixed(1)} MB)…`);
+      setStatusMessage(`Validando vídeo OBS (${(file.size / 1024 / 1024).toFixed(1)} MB)…`);
       try {
-        const formData = new FormData();
-        formData.append('video', file);
-        formData.append('date', date);
-
+        const filePath = (file as any).path || `d:\\estudos\\${file.name}`;
+        
         setStatus('processing');
-        setStatusMessage('2/3 Extraindo screenshots dos trades + narração de voz…');
+        setStatusMessage('Extraindo screenshots dos trades + narração de voz…');
 
-        const res = await processOBSVideo(formData);
+        let res;
+        // Tenta primeiro via caminho local (para evitar limites HTTP de uploads de arquivos gigantes > 1GB)
+        try {
+          const pathFormData = new FormData();
+          pathFormData.append('path', filePath);
+          pathFormData.append('date', date);
+          res = await processVideoFromPathAction(pathFormData);
+        } catch (pathErr) {
+          // Fallback para FormData upload
+          const formData = new FormData();
+          formData.append('video', file);
+          formData.append('date', date);
+          res = await processOBSVideo(formData);
+        }
 
         setStatus('done');
         setStatusMessage(
@@ -102,8 +114,30 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
       return;
     }
 
+    // 4. Imagens / Screenshots (.png, .jpg, .jpeg, .webp)
+    if (['png', 'jpg', 'jpeg', 'webp'].includes(ext) || file.type.startsWith('image/')) {
+      setStatus('uploading');
+      setStatusMessage(`Salvando screenshot (${file.name})…`);
+      try {
+        const formData = new FormData();
+        formData.append('image', file);
+        formData.append('date', date);
+
+        await uploadFarolImage(formData);
+
+        setStatus('done');
+        setStatusMessage(`SCREENSHOT REGISTRADO COM SUCESSO // Clique em "LER PRINTS COM AI (VISION)" para analisar.`);
+        onSuccess?.();
+        router.refresh();
+      } catch (err) {
+        setStatus('error');
+        setStatusMessage(`ERRO AO SALVAR SCREENSHOT // ${err instanceof Error ? err.message : 'Falha no upload'}`);
+      }
+      return;
+    }
+
     setStatus('error');
-    setStatusMessage('FORMATO NÃO SUPORTADO // Envie CSV do Profit, Vídeo OBS (.mp4/.mkv) ou Áudio (.mp3/.webm).');
+    setStatusMessage('FORMATO NÃO SUPORTADO // Envie CSV do Profit, Vídeo OBS (.mp4/.mkv), Áudio (.mp3) ou Prints (.png/.jpg).');
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -124,7 +158,7 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
             MEDIA INTAKE PROTOCOL · UPLOAD & PROCESSAMENTO
           </h2>
         </div>
-        <span className="font-mono text-[9px] text-slate-600">PROFIT PRO / OBS REPLAY</span>
+        <span className="font-mono text-[9px] text-slate-600">PROFIT PRO / OBS / FAROL SCREENSHOTS</span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
@@ -143,7 +177,7 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,video/*,.mp4,.mkv,.avi,.mov,audio/*,.mp3,.wav,.webm"
+            accept=".csv,video/*,.mp4,.mkv,.avi,.mov,audio/*,.mp3,.wav,.webm,image/*,.png,.jpg,.jpeg,.webp"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
             className="hidden"
           />
@@ -163,7 +197,7 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
                 DROP FILES HERE OR CLICK TO SELECT
               </p>
               <p className="font-mono text-[10px] text-slate-500 mt-1">
-                CSV DO PROFIT, VÍDEOS OBS OU ÁUDIOS <br />
+                CSV DO PROFIT, VÍDEOS OBS, ÁUDIOS OU PRINTS FAROL <br />
                 <span className="text-teal-400/90 underline">clique para procurar no sistema</span>
               </p>
             </>
@@ -205,13 +239,13 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
               </span>
             </div>
 
-            {/* Card Áudio/Voz */}
+            {/* Card Áudio/Voz & Screenshots */}
             <div className="bg-[#070a10] border border-slate-800/80 rounded-md p-2 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <IconMic className="text-purple-400" />
                 <div>
-                  <span className="text-[11px] font-bold text-slate-200 block">ÁUDIO / NARRAÇÃO DE VOZ</span>
-                  <span className="text-[9px] text-slate-500">.mp3, .wav, .webm - Voice Log</span>
+                  <span className="text-[11px] font-bold text-slate-200 block">ÁUDIO & PRINTS FAROL</span>
+                  <span className="text-[9px] text-slate-500">.mp3, .png, .jpg - Voice & Vision</span>
                 </div>
               </div>
               <span className="text-[9px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-1.5 py-0.5 rounded font-bold">
@@ -230,19 +264,19 @@ export function MediaUploadCenterStudio({ date, onSuccess }: MediaUploadCenterSt
           <div className="space-y-1 text-[10px] text-slate-300 py-1.5">
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full bg-teal-500/20 text-teal-400 flex items-center justify-center text-[9px] font-bold">1</span>
-              <span>Upload do arquivo</span>
+              <span>Upload de mídias / prints</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[9px] font-bold">2</span>
-              <span>Extração de frames</span>
+              <span>Extração de frames & áudios</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-[9px] font-bold">3</span>
-              <span>IA Visão + Transcrição</span>
+              <span>IA Visão (Farol) + Transcrição</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full bg-teal-500/20 text-teal-400 flex items-center justify-center text-[9px] font-bold">4</span>
-              <span>Sincronizado no banco</span>
+              <span>Sincronizado no SQLite e MD</span>
             </div>
           </div>
 

@@ -1,13 +1,21 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { tradingDays, trades, tradeImages, audioRecords, videoRecords } from '@/lib/db/schema';
+import { tradingDays, trades, tradeImages, audioRecords, videoRecords, tradeAnnotations, type TradeAnnotation } from '@/lib/db/schema';
 import { generateId } from '@/lib/utils';
-import { parseOBSFilename, extractTradeFrames, getVideoInfo, extractAudioFromVideo } from '@/lib/video-processor';
+
+import { parseOBSFilename, extractTradeFrames, getVideoInfo, extractAudioFromVideo, calculateVideoOffset } from '@/lib/video-processor';
 import { transcribeAudioRecord } from '@/features/audio/actions';
+import { analyzeFrameWithGeminiVision, analyzeMultiFrameSequenceWithGeminiVision } from '@/lib/gemini';
+
 import { eq } from 'drizzle-orm';
+
+
+import { revalidatePath } from 'next/cache';
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 /**
  * Função central de processamento de arquivo de vídeo no disco local
@@ -157,8 +165,8 @@ export async function processOBSVideoFromLocalPath({
       const audioDir = path.join(process.cwd(), 'data', 'audio', dateStr);
       if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const audioFileName = `obs_narration_${timestamp}.mp3`;
+      const formattedStartTime = startTime.replace(/:/g, '-');
+      const audioFileName = `obs_narration_${dateStr}_${formattedStartTime}.mp3`;
       const audioPath = path.join(audioDir, audioFileName);
 
       await extractAudioFromVideo(targetVideoPath, audioPath);
@@ -215,7 +223,7 @@ export async function processOBSVideoFromLocalPath({
 }
 
 /**
- * Processa vídeo do OBS enviado por FormData (pequenos a médios)
+ * Processa vídeo do OBS enviado por FormData (pequenos a gigantes >4GB)
  */
 export async function processOBSVideo(formData: FormData) {
   const file = formData.get('video') as File;
@@ -236,8 +244,11 @@ export async function processOBSVideo(formData: FormData) {
   if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
   const tempVideoPath = path.join(videoDir, originalName);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  fs.writeFileSync(tempVideoPath, buffer);
+
+  // Usa streaming via pipeline para suportar arquivos de qualquer tamanho (ex: vídeos OBS de 4GB+)
+  const fileStream = Readable.fromWeb(file.stream() as any);
+  const writeStream = fs.createWriteStream(tempVideoPath);
+  await pipeline(fileStream, writeStream);
 
   return processOBSVideoFromLocalPath({
     localFilePath: tempVideoPath,
@@ -259,7 +270,37 @@ export async function processVideoFromPathAction(formData: FormData) {
   if (!pathInput) throw new Error('Caminho do arquivo não informado');
 
   // Limpa aspas do caminho se coladas pelo usuário
-  const cleanPath = pathInput.trim().replace(/^["']|["']$/g, '');
+  let cleanPath = pathInput.trim().replace(/^["']|["']$/g, '');
+
+  if (!fs.existsSync(cleanPath)) {
+    const filename = path.basename(cleanPath);
+    const searchDirs = [
+      path.join(process.env.USERPROFILE || 'C:\\Users\\Usuario', 'Videos'),
+      path.join(process.env.USERPROFILE || 'C:\\Users\\Usuario', 'Videos', 'Captures'),
+      path.join(process.env.USERPROFILE || 'C:\\Users\\Usuario', 'Desktop'),
+      path.join(process.env.USERPROFILE || 'C:\\Users\\Usuario', 'Downloads'),
+      'C:\\OBS',
+      'D:\\Videos',
+      path.join(process.cwd(), 'data', 'videos'),
+      path.join(process.cwd(), 'data', 'videos', dateInput || ''),
+    ];
+
+    let foundPath = '';
+    for (const dir of searchDirs) {
+      if (fs.existsSync(dir)) {
+        const candidate = path.join(dir, filename);
+        if (fs.existsSync(candidate)) {
+          foundPath = candidate;
+          break;
+        }
+      }
+    }
+
+    if (foundPath) {
+      console.log(`[Video] Arquivo auto-localizado no disco: ${foundPath}`);
+      cleanPath = foundPath;
+    }
+  }
 
   return processOBSVideoFromLocalPath({
     localFilePath: cleanPath,
@@ -302,4 +343,514 @@ export async function getVideosByDate(dateStr: string) {
       path: `videos/${dateStr}/${f}`,
       size: fs.statSync(path.join(videoDir, f)).size,
     }));
+}
+
+/**
+ * Extrai áudio MP3 de um vídeo gravado do OBS e realiza a transcrição com Gemini AI
+ */
+export async function extractAndTranscribeVideoAudioAction(dateStr: string) {
+  const day = await db.query.tradingDays.findFirst({
+    where: eq(tradingDays.date, dateStr),
+  });
+  if (!day) throw new Error(`Dia de operação não encontrado para a data ${dateStr}`);
+
+  const video = await db.query.videoRecords.findFirst({
+    where: eq(videoRecords.tradingDayId, day.id),
+  });
+  if (!video) throw new Error(`Nenhum vídeo OBS encontrado para o dia ${dateStr}`);
+
+  const videoPath = path.join(process.cwd(), 'data', video.filePath);
+  if (!fs.existsSync(videoPath)) {
+    throw new Error(`Arquivo de vídeo não encontrado no disco: ${videoPath}`);
+  }
+
+  let audioRecord = await db.query.audioRecords.findFirst({
+    where: eq(audioRecords.tradingDayId, day.id),
+  });
+
+  if (!audioRecord || !fs.existsSync(path.join(process.cwd(), 'data', audioRecord.filePath))) {
+    const audioDir = path.join(process.cwd(), 'data', 'audio', dateStr);
+    if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir, { recursive: true });
+
+    const parsedObs = parseOBSFilename(video.filename);
+    const startTimeStr = (parsedObs?.startTime || '09-00-00').replace(/:/g, '-');
+    const audioFileName = `obs_narration_${dateStr}_${startTimeStr}.mp3`;
+    const audioPath = path.join(audioDir, audioFileName);
+
+    console.log(`[VideoAction] Extraindo áudio via ffmpeg para ${audioPath}...`);
+    await extractAudioFromVideo(videoPath, audioPath);
+
+    const videoInfo = await getVideoInfo(videoPath);
+    const audioId = generateId();
+
+    await db.insert(audioRecords).values({
+      id: audioId,
+      tradingDayId: day.id,
+      filePath: `audio/${dateStr}/${audioFileName}`,
+      durationSecs: Math.round(videoInfo.duration),
+      status: 'recorded',
+    });
+
+    audioRecord = await db.query.audioRecords.findFirst({
+      where: eq(audioRecords.id, audioId),
+    });
+  }
+
+  if (!audioRecord) throw new Error('Falha ao obter registro de áudio');
+
+  console.log(`[VideoAction] Transcrevendo áudio ${audioRecord.id} com Gemini AI...`);
+  const result = await transcribeAudioRecord(audioRecord.id, true);
+
+  try {
+    revalidatePath('/');
+    revalidatePath('/audios');
+    revalidatePath('/database');
+    revalidatePath('/operacoes');
+  } catch {}
+
+  return { success: true, audioId: audioRecord.id, transcription: result.transcription };
+}
+
+export interface TradeVideoReplayData {
+  hasVideo: boolean;
+  videoUrl?: string;
+  videoFilename?: string;
+  videoStartTime?: string;
+  durationSecs?: number;
+  entryOffsetSecs?: number;
+  beforeOffsetSecs?: number;
+  exitOffsetSecs?: number;
+  postOffsetSecs?: number;
+  trade: {
+    id: string;
+    tradeNumber: number;
+    instrument: string;
+    side: string;
+    entryPrice: number;
+    exitPrice: number;
+    openTime: string;
+    closeTime: string;
+    points: number | null;
+    reais: number | null;
+    strategy: string | null;
+  };
+}
+
+/**
+ * Obtém dados completos e offsets temporais de um trade para reprodução em vídeo
+ */
+export async function getTradeVideoReplayData(tradeId: string): Promise<TradeVideoReplayData> {
+  const trade = await db.query.trades.findFirst({
+    where: eq(trades.id, tradeId),
+  });
+
+  if (!trade) {
+    throw new Error(`Trade não encontrado: ${tradeId}`);
+  }
+
+  const tradeInfo = {
+    id: trade.id,
+    tradeNumber: trade.tradeNumber,
+    instrument: trade.instrument,
+    side: trade.side,
+    entryPrice: trade.entryPrice,
+    exitPrice: trade.exitPrice,
+    openTime: trade.openTime,
+    closeTime: trade.closeTime,
+    points: trade.points,
+    reais: trade.reais,
+    strategy: trade.strategy,
+  };
+
+  const day = await db.query.tradingDays.findFirst({
+    where: eq(tradingDays.id, trade.tradingDayId || ''),
+  });
+
+  if (!day) {
+    return { hasVideo: false, trade: tradeInfo };
+  }
+
+  // Busca o registro de vídeo do dia
+  let video = await db.query.videoRecords.findFirst({
+    where: eq(videoRecords.tradingDayId, day.id),
+  });
+
+  // Se não estiver na tabela, procura na pasta de vídeos do dia
+  if (!video) {
+    const videoDir = path.join(process.cwd(), 'data', 'videos', day.date);
+    if (fs.existsSync(videoDir)) {
+      const files = fs.readdirSync(videoDir).filter(f => ['.mp4', '.mkv', '.avi', '.mov'].includes(path.extname(f).toLowerCase()));
+      if (files.length > 0) {
+        const foundName = files[0];
+        video = {
+          id: generateId(),
+          tradingDayId: day.id,
+          filename: foundName,
+          filePath: `videos/${day.date}/${foundName}`,
+          durationSecs: 0,
+          resolution: '1920x1080',
+          createdAt: new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  if (!video) {
+    return { hasVideo: false, trade: tradeInfo };
+  }
+
+  // Detecção do horário de início da gravação
+  const parsedObs = parseOBSFilename(video.filename);
+  let startTime = parsedObs?.startTime || '09:00:00';
+
+  const entryOffset = Math.max(0, calculateVideoOffset(startTime, trade.openTime));
+  const beforeOffset = Math.max(0, entryOffset - 30); // 30s antes da entrada
+  const exitOffset = Math.max(entryOffset + 1, calculateVideoOffset(startTime, trade.closeTime));
+  const postOffset = exitOffset + 300; // +5 minutos de pós-trade para estudo de violinada
+
+  return {
+    hasVideo: true,
+    videoUrl: `/api/files/${video.filePath.replace(/\\/g, '/')}`,
+    videoFilename: video.filename,
+    videoStartTime: startTime,
+    durationSecs: video.durationSecs || undefined,
+    entryOffsetSecs: entryOffset,
+    beforeOffsetSecs: beforeOffset,
+    exitOffsetSecs: exitOffset,
+    postOffsetSecs: postOffset,
+    trade: tradeInfo,
+  };
+}
+
+/**
+ * Busca todas as anotações e insights timestamped de um trade específico
+ */
+export async function getTradeAnnotations(tradeId: string): Promise<TradeAnnotation[]> {
+  try {
+    const list = await db
+      .select()
+      .from(tradeAnnotations)
+      .where(eq(tradeAnnotations.tradeId, tradeId));
+
+    // Ordena por timestampSecs ascendente
+    return list.sort((a, b) => a.timestampSecs - b.timestampSecs);
+  } catch (err) {
+    console.error('[Annotations] Erro ao buscar anotações:', err);
+    return [];
+  }
+}
+
+/**
+ * Salva ou atualiza uma anotação em um segundo/frame exato do trade
+ */
+export async function saveTradeAnnotation(data: {
+  id?: string;
+  tradeId: string;
+  timestampSecs: number;
+  formattedTime: string;
+  clockTime?: string;
+  text: string;
+  tag?: string;
+  drawingData?: string;
+  author?: 'user' | 'ai';
+}): Promise<TradeAnnotation> {
+  const trade = await db.query.trades.findFirst({
+    where: eq(trades.id, data.tradeId),
+  });
+
+  const annotationId = data.id || generateId();
+  const now = new Date().toISOString();
+
+  const newRecord = {
+    id: annotationId,
+    tradeId: data.tradeId,
+    tradingDayId: trade?.tradingDayId || null,
+    timestampSecs: data.timestampSecs,
+    formattedTime: data.formattedTime,
+    clockTime: data.clockTime || null,
+    text: data.text,
+    tag: data.tag || 'insight',
+    drawingData: data.drawingData || null,
+    author: data.author || 'user',
+    createdAt: now,
+  };
+
+  if (data.id) {
+    await db
+      .update(tradeAnnotations)
+      .set({
+        text: data.text,
+        tag: data.tag || 'insight',
+        drawingData: data.drawingData !== undefined ? data.drawingData : undefined,
+      })
+      .where(eq(tradeAnnotations.id, data.id));
+  } else {
+    await db.insert(tradeAnnotations).values(newRecord);
+  }
+
+  revalidatePath('/diario');
+  revalidatePath('/operacoes');
+
+  return newRecord as TradeAnnotation;
+}
+
+/**
+ * Remove uma anotação pelo ID
+ */
+export async function deleteTradeAnnotation(id: string): Promise<void> {
+  await db.delete(tradeAnnotations).where(eq(tradeAnnotations.id, id));
+  revalidatePath('/diario');
+  revalidatePath('/operacoes');
+}
+
+/**
+ * Gera um insight analítico inteligente de AI sobre o trade naquele segundo/frame usando Gemini Vision
+ */
+export async function generateAIFrameInsight({
+  tradeId,
+  timestampSecs,
+  formattedTime,
+  clockTime,
+  imageBase64,
+  focusArea = 'general',
+  customPrompt,
+}: {
+  tradeId: string;
+  timestampSecs: number;
+  formattedTime: string;
+  clockTime?: string;
+  imageBase64?: string;
+  focusArea?: 'general' | 'tape' | 'book' | 'chart' | 'zoom';
+  customPrompt?: string;
+}): Promise<TradeAnnotation> {
+  const trade = await db.query.trades.findFirst({
+    where: eq(trades.id, tradeId),
+  });
+
+  if (!trade) {
+    throw new Error('Trade não encontrado');
+  }
+
+  let aiText = '';
+
+  if (imageBase64) {
+    try {
+      aiText = await analyzeFrameWithGeminiVision({
+        imageBase64,
+        tradeInfo: {
+          tradeNumber: trade.tradeNumber,
+          instrument: trade.instrument,
+          side: trade.side,
+          entryPrice: trade.entryPrice,
+          exitPrice: trade.exitPrice,
+          points: trade.points || 0,
+          openTime: trade.openTime,
+          closeTime: trade.closeTime,
+          strategy: trade.strategy,
+          marketRegime: trade.marketRegime,
+          conviction: trade.conviction,
+          execution: trade.execution,
+        },
+        frameTime: {
+          formattedTime,
+          clockTime,
+        },
+        focusArea,
+        customQuestion: customPrompt,
+      });
+    } catch (err) {
+      console.error('[Vision Action] Falha ao analisar com Gemini Vision:', err);
+      aiText = `[Leitura AI @ ${clockTime || formattedTime}]: Trade #${trade.tradeNumber} (${trade.side === 'C' ? 'Compra' : 'Venda'} ${trade.instrument}). Contexto: ${trade.strategy || 'Estratégia'} em regime de ${trade.marketRegime || 'mercado'}. Convicção: ${trade.conviction || 3}/5, Execução: ${trade.execution || 3}/5. Observação: Monitorar fluxo institucional e absorção no book de ofertas.`;
+    }
+  } else {
+    aiText = `[Leitura AI @ ${clockTime || formattedTime}]: Trade #${trade.tradeNumber} (${trade.side === 'C' ? 'Compra' : 'Venda'} ${trade.instrument}). Contexto: ${trade.strategy || 'Estratégia'} em regime de ${trade.marketRegime || 'mercado'}. Convicção: ${trade.conviction || 3}/5, Execução: ${trade.execution || 3}/5.`;
+  }
+
+  const tagMap: Record<string, string> = {
+    tape: 'tape',
+    book: 'tape',
+    chart: 'entry',
+    zoom: 'insight',
+    general: 'insight',
+  };
+
+  return saveTradeAnnotation({
+    tradeId,
+    timestampSecs,
+    formattedTime,
+    clockTime,
+    text: aiText,
+    tag: tagMap[focusArea] || 'insight',
+    author: 'ai',
+  });
+}
+
+/**
+ * Analisa uma sequência cronológica multi-segundos de frames da operação (Pré, Entrada, Durante, Saída e Pós)
+ */
+export async function generateAIMultiFrameInsight({
+  tradeId,
+  frames,
+  customPrompt,
+}: {
+  tradeId: string;
+  frames: Array<{
+    label: string;
+    clockTime: string;
+    formattedTime: string;
+    timestampSecs: number;
+    imageBase64: string;
+  }>;
+  customPrompt?: string;
+}): Promise<TradeAnnotation> {
+  const trade = await db.query.trades.findFirst({
+    where: eq(trades.id, tradeId),
+  });
+
+  if (!trade) {
+    throw new Error('Trade não encontrado');
+  }
+
+  const aiAnalysis = await analyzeMultiFrameSequenceWithGeminiVision({
+    frames,
+    tradeInfo: {
+      tradeNumber: trade.tradeNumber,
+      instrument: trade.instrument,
+      side: trade.side,
+      entryPrice: trade.entryPrice,
+      exitPrice: trade.exitPrice,
+      points: trade.points || 0,
+      openTime: trade.openTime,
+      closeTime: trade.closeTime,
+      strategy: trade.strategy,
+      marketRegime: trade.marketRegime,
+      conviction: trade.conviction,
+      execution: trade.execution,
+    },
+    customQuestion: customPrompt,
+  });
+
+  const firstFrame = frames[0] || { timestampSecs: 0, formattedTime: '00:00.0', clockTime: trade.openTime };
+
+  return saveTradeAnnotation({
+    tradeId,
+    timestampSecs: firstFrame.timestampSecs,
+    formattedTime: firstFrame.formattedTime,
+    clockTime: firstFrame.clockTime,
+    text: `🎬 [DEBRIEFING COMPLETO DO TRADE — SEQUÊNCIA MULTI-FRAMES]:\n\n${aiAnalysis}`,
+    tag: 'insight',
+    author: 'ai',
+  });
+}
+
+/**
+ * Extrai exclusivamente os frames (prints) das operações a partir do vídeo existente no disco,
+ * sem reprocessar áudio, sem consumir tokens de transcrição e sem recriar o dia.
+ */
+export async function reextractTradeFramesAction(dateStr: string) {
+  const day = await db.query.tradingDays.findFirst({
+    where: eq(tradingDays.date, dateStr),
+  });
+  if (!day) throw new Error(`Dia de operação não encontrado para a data ${dateStr}`);
+
+  const dayTrades = await db.query.trades.findMany({
+    where: eq(trades.tradingDayId, day.id),
+    orderBy: trades.tradeNumber,
+  });
+  if (dayTrades.length === 0) {
+    throw new Error(`Nenhum trade registrado para o dia ${dateStr}`);
+  }
+
+  // Localiza o vídeo gravado do dia
+  const videoDir = path.join(process.cwd(), 'data', 'videos', dateStr);
+  let videoPath = '';
+  let videoFilename = '';
+
+  const videoRecord = await db.query.videoRecords.findFirst({
+    where: eq(videoRecords.tradingDayId, day.id),
+  });
+
+  if (videoRecord && fs.existsSync(path.join(process.cwd(), 'data', videoRecord.filePath))) {
+    videoPath = path.join(process.cwd(), 'data', videoRecord.filePath);
+    videoFilename = videoRecord.filename;
+  } else if (fs.existsSync(videoDir)) {
+    const files = fs.readdirSync(videoDir).filter(f => /\.(mp4|mkv|mov|avi)$/i.test(f));
+    if (files.length > 0) {
+      videoFilename = files[0];
+      videoPath = path.join(videoDir, videoFilename);
+    }
+  }
+
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    throw new Error(`Nenhum arquivo de vídeo encontrado para o dia ${dateStr}`);
+  }
+
+  const parsedObs = parseOBSFilename(videoFilename);
+  const startTime = parsedObs?.startTime || '09:00:00';
+
+  const framesDir = path.join(process.cwd(), 'data', 'images', dateStr, 'video-frames');
+  if (!fs.existsSync(framesDir)) {
+    fs.mkdirSync(framesDir, { recursive: true });
+  }
+
+  const results = await extractTradeFrames(
+    videoPath,
+    startTime,
+    dayTrades.map(t => ({
+      id: t.id,
+      openTime: t.openTime,
+      closeTime: t.closeTime || undefined,
+      tradeNumber: t.tradeNumber,
+    })),
+    framesDir
+  );
+
+  let totalInserted = 0;
+  for (const result of results) {
+    const existingImages = await db.query.tradeImages.findMany({
+      where: eq(tradeImages.tradeId, result.tradeId),
+    });
+
+    for (const frame of result.frames) {
+      const relativePath = path.relative(
+        path.join(process.cwd(), 'data'),
+        frame.path
+      ).replace(/\\/g, '/');
+
+      const typeLabels = {
+        before: '30s antes da entrada',
+        entry: 'Momento da entrada',
+        exit: 'Momento da saída',
+      };
+
+      const caption = `${typeLabels[frame.type]} (${Math.floor(frame.offsetSecs / 60)}:${(frame.offsetSecs % 60).toString().padStart(2, '0')} no vídeo)`;
+      const imageType = `video-${frame.type}`;
+
+      const alreadyExists = existingImages.find(img => img.imageType === imageType || img.filePath === relativePath);
+
+      if (!alreadyExists) {
+        await db.insert(tradeImages).values({
+          id: generateId(),
+          tradeId: result.tradeId,
+          filePath: relativePath,
+          imageType,
+          caption,
+        });
+        totalInserted++;
+      }
+    }
+  }
+
+  try {
+    revalidatePath('/');
+    revalidatePath('/operacoes');
+    revalidatePath('/diario');
+  } catch {}
+
+  return {
+    success: true,
+    tradesProcessed: results.length,
+    framesExtracted: results.reduce((acc, r) => acc + r.frames.length, 0),
+    newImagesInserted: totalInserted,
+  };
 }

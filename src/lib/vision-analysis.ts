@@ -1,8 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
+import { getGeminiClient } from '@/lib/gemini';
 import fs from 'node:fs';
-
-const API_KEY = process.env.GEMINI_API_KEY!;
-const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 const VISION_CHART_PROMPT = `Você é um analista sênior de Price Action, Tape Reading e Análise Técnica de mini-índice (WINFUT) no Brasil.
 
@@ -26,7 +23,8 @@ export async function analyzeTradeScreenshotVision(filePath: string): Promise<st
     const imageBuffer = fs.readFileSync(filePath);
     const mimeType = filePath.endsWith('.png') ? 'image/png' : 'image/jpeg';
 
-    const response = await ai.models.generateContent({
+    const client = getGeminiClient();
+    const response = await client.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: [
         {

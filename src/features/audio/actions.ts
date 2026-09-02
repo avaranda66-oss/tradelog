@@ -1,9 +1,10 @@
 'use server';
 
 import { db } from '@/lib/db';
-import { audioRecords, tradingDays, trades } from '@/lib/db/schema';
+import { audioRecords, tradingDays, trades, videoRecords } from '@/lib/db/schema';
 import { generateId, todayISO } from '@/lib/utils';
-import { transcribeAudio } from '@/lib/gemini';
+import { transcribeAudio, synthesizeAudioTradeConfluence } from '@/lib/gemini';
+import { parseOBSFilename } from '@/lib/video-processor';
 import { eq, and } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import fs from 'node:fs';
@@ -88,13 +89,29 @@ export async function transcribeAudioRecord(audioId: string, forceRetry = false)
   try {
     const fullPath = path.join(process.cwd(), 'data', record.filePath);
     
-    // Extrai a hora de início da gravação (ex: 09:04:54)
+    // Extrai a hora de início real da gravação do pregão (ex: 09:04:54)
     let startMarketTime = '09:04:54';
-    if (record.filePath) {
-      const match = record.filePath.match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/);
-      if (match) {
-        const parts = match[1].split('T')[1].split('-');
-        startMarketTime = `${parts[0]}:${parts[1]}:${parts[2]}`;
+
+    // 1. Tenta buscar no vídeo registrado para este dia no banco (obtém do nome do OBS "2026-08-07 09-04-54.mp4")
+    if (record.tradingDayId) {
+      const video = await db.query.videoRecords.findFirst({
+        where: eq(videoRecords.tradingDayId, record.tradingDayId),
+      });
+      if (video?.filename) {
+        const parsedVideo = parseOBSFilename(video.filename);
+        if (parsedVideo?.startTime) {
+          startMarketTime = parsedVideo.startTime;
+          console.log(`[Audio] Horário de início do pregão obtido do vídeo OBS (${video.filename}): ${startMarketTime}`);
+        }
+      }
+    }
+
+    // 2. Se não encontrou no vídeo, tenta parsear do nome do arquivo de áudio
+    if (startMarketTime === '09:04:54' && record.filePath) {
+      const parsedAudio = parseOBSFilename(path.basename(record.filePath));
+      if (parsedAudio?.startTime) {
+        startMarketTime = parsedAudio.startTime;
+        console.log(`[Audio] Horário de início obtido do arquivo de áudio: ${startMarketTime}`);
       }
     }
 
@@ -120,15 +137,46 @@ export async function transcribeAudioRecord(audioId: string, forceRetry = false)
 
     const result = await transcribeAudio(fullPath, startMarketTime, dayContext);
 
+    // Confluência profunda e auditoria dos trades do CSV com as falas do áudio
+    let finalInsightsObj: any = {};
+    try {
+      finalInsightsObj = JSON.parse(result.insights || '{}');
+    } catch {}
+
+    if (record.tradingDayId) {
+      const dayTrades = await db.query.trades.findMany({
+        where: eq(trades.tradingDayId, record.tradingDayId),
+      });
+      const segments = finalInsightsObj.segments || [];
+      if (dayTrades.length > 0 && segments.length > 0) {
+        try {
+          const confluence = await synthesizeAudioTradeConfluence({
+            dayTrades,
+            segments,
+            startMarketTime,
+          });
+          finalInsightsObj.confluenceTrades = confluence.confluenceTrades;
+          finalInsightsObj.confluenceSummary = confluence.sessionSummary;
+        } catch (err) {
+          console.error('[Audio Actions] Erro na confluência de trades:', err);
+        }
+      }
+    }
+
+    const finalInsightsJson = JSON.stringify(finalInsightsObj);
+
     await db.update(audioRecords)
       .set({
         transcription: result.transcription,
-        insights: result.insights,
+        insights: finalInsightsJson,
         status: 'done',
       })
       .where(eq(audioRecords.id, audioId));
 
-    return result;
+    return {
+      transcription: result.transcription,
+      insights: finalInsightsJson,
+    };
   } catch (error: any) {
     let errorMsg = error?.message || String(error);
     if (errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not valid')) {
@@ -147,6 +195,72 @@ export async function transcribeAudioRecord(audioId: string, forceRetry = false)
     } catch {}
     throw error;
   }
+}
+
+/**
+ * Re-sincroniza a confluência entre os trades do CSV e a narração de áudio existente
+ */
+export async function reSyncAudioTradeConfluence(audioId: string) {
+  const record = await db.query.audioRecords.findFirst({
+    where: eq(audioRecords.id, audioId),
+  });
+  if (!record || !record.tradingDayId) throw new Error('Áudio não encontrado');
+
+  const dayTrades = await db.query.trades.findMany({
+    where: eq(trades.tradingDayId, record.tradingDayId),
+  });
+
+  let insightsObj: any = {};
+  try {
+    insightsObj = JSON.parse(record.insights || '{}');
+  } catch {}
+
+  // Busca todos os áudios do dia para unificar segmentos se houver múltiplas gravações
+  const allDayAudios = await db.query.audioRecords.findMany({
+    where: eq(audioRecords.tradingDayId, record.tradingDayId),
+  });
+
+  const combinedSegments: any[] = [];
+  for (const aud of allDayAudios) {
+    try {
+      const parsed = JSON.parse(aud.insights || '{}');
+      if (Array.isArray(parsed.segments)) {
+        combinedSegments.push(...parsed.segments);
+      }
+    } catch {}
+  }
+
+  const segmentsToUse = combinedSegments.length > 0 ? combinedSegments : (insightsObj.segments || []);
+  const startMarketTime = insightsObj.startMarketTime || '09:00:00';
+
+  const confluence = await synthesizeAudioTradeConfluence({
+    dayTrades,
+    segments: segmentsToUse,
+    startMarketTime,
+  });
+
+  insightsObj.confluenceTrades = confluence.confluenceTrades;
+  insightsObj.confluenceSummary = confluence.sessionSummary;
+
+  const updatedInsightsJson = JSON.stringify(insightsObj);
+
+  await db.update(audioRecords)
+    .set({
+      insights: updatedInsightsJson,
+    })
+    .where(eq(audioRecords.id, audioId));
+
+  try {
+    revalidatePath('/audios');
+    revalidatePath('/database');
+    revalidatePath('/');
+  } catch {}
+
+  return {
+    success: true,
+    confluenceTrades: confluence.confluenceTrades,
+    insights: updatedInsightsJson,
+  };
 }
 
 /**

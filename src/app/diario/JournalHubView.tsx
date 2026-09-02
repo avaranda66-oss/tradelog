@@ -6,6 +6,7 @@ import { TradeModalV2 } from '@/features/trades/components/TradeModalV2';
 import { TradeCard } from '@/features/trades/components/TradeCard';
 import { StrategyTagManager } from '@/features/trades/components/StrategyTagManager';
 import { TranscriptionPanel } from '@/features/audio/components/TranscriptionPanel';
+import { SessionImageGallery } from '@/features/images/components/SessionImageGallery';
 import { JournalProgressWidget } from '@/features/dashboard/components/JournalProgressWidget';
 import Link from 'next/link';
 import { IconJournal, IconTerminal, IconTarget, IconMic, IconCheck } from '@/components/ui/icons';
@@ -18,6 +19,7 @@ interface JournalHubViewProps {
   audios: AudioRecord[];
   allAudios?: AudioRecord[];
   levels?: (typeof keyLevels.$inferSelect)[];
+  historyDays?: TradingDay[];
 }
 
 function calculateSleepDuration(sleepTime?: string | null, wakeUpTime?: string | null): string {
@@ -61,7 +63,7 @@ function calculatePrepTime(wakeUpTime?: string | null, marketOpenTime: string = 
   return `${hours}h ${mins}min de estudo`;
 }
 
-export function JournalHubView({ day, date, trades, allTrades = [], audios, allAudios = [], levels = [] }: JournalHubViewProps) {
+export function JournalHubView({ day, date, trades, allTrades = [], audios, allAudios = [], levels = [], historyDays = [] }: JournalHubViewProps) {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   const wins = trades.filter(t => (t.reais || 0) > 0);
@@ -73,6 +75,16 @@ export function JournalHubView({ day, date, trades, allTrades = [], audios, allA
   const totalGain = wins.reduce((acc, t) => acc + (t.reais || 0), 0);
   const totalLoss = Math.abs(losses.reduce((acc, t) => acc + (t.reais || 0), 0));
   const payoff = totalLoss > 0 ? (totalGain / totalLoss).toFixed(2) : 'N/A';
+
+  let savedTags: string[] | undefined = undefined;
+  if (day?.strategyTags) {
+    try {
+      const parsed = JSON.parse(day.strategyTags);
+      if (Array.isArray(parsed)) {
+        savedTags = parsed;
+      }
+    } catch {}
+  }
 
   return (
     <div className="max-w-[1440px] mx-auto space-y-5 pb-16 animate-in fade-in font-mono">
@@ -107,6 +119,7 @@ export function JournalHubView({ day, date, trades, allTrades = [], audios, allA
         allAudios={allAudios}
         levels={levels}
         audios={audios}
+        historyDays={historyDays}
       />
 
       {/* Grid Principal: 2 Colunas */}
@@ -141,7 +154,7 @@ export function JournalHubView({ day, date, trades, allTrades = [], audios, allA
           </div>
 
           {/* Gerenciador de Tags de Estratégia */}
-          <StrategyTagManager />
+          <StrategyTagManager date={date} initialTags={savedTags} audios={audios} />
 
           {/* Feed de Operações do Dia */}
           {trades.length > 0 ? (
@@ -319,6 +332,11 @@ export function JournalHubView({ day, date, trades, allTrades = [], audios, allA
                 ))}
               </div>
             </div>
+          )}
+
+          {/* PRINTS DA SESSÃO / POST-SESSION DEBRIEF PRINTS (GALERIA VISÍVEL DE CARDS) */}
+          {day && (
+            <SessionImageGallery tradingDayId={day.id} date={date} />
           )}
 
           {/* Narração por Voz & Transcrições do Dia */}

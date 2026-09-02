@@ -28,6 +28,12 @@ export interface GamificationCheckItem {
   hint: string;
 }
 
+export interface BusinessDayStatus {
+  date: string;                               // "YYYY-MM-DD"
+  dayLabel: string;                           // "Seg", "Ter", "Qua", "Qui", "Sex"
+  status: 'completed' | 'missed' | 'pending'; // 🟢 completed, 🔴 missed, ⚪ pending
+}
+
 export interface GamificationResult {
   score: number; // 0 a 100
   flameLevel: number; // 0 a 4
@@ -39,6 +45,7 @@ export interface GamificationResult {
   totalCount: number;
   streakDays: number;
   streakStatus: string;
+  weekBusinessDays: BusinessDayStatus[];
 }
 
 // ─── ESPECIFICAÇÃO DAS 15 INSÍGNIAS INSTITUCIONAIS ─────────────
@@ -168,22 +175,133 @@ export function evaluateBadgesStatus(
 }
 
 /**
- * Calcula a sequência ininterrupta de dias operacionais preenchidos
+ * Verifica se uma data YYYY-MM-DD é fim de semana (Sábado ou Domingo)
+ */
+export function isWeekend(dateStr: string): boolean {
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3) return false;
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  const dayOfWeek = date.getDay(); // 0 = Domingo, 6 = Sábado
+  return dayOfWeek === 0 || dayOfWeek === 6;
+}
+
+/**
+ * Retorna a data do dia útil anterior (ignorando Sábados e Domingos)
+ */
+export function getPreviousBusinessDay(dateStr: string): string {
+  const parts = dateStr.split('-').map(Number);
+  let date = new Date(parts[0], parts[1] - 1, parts[2]);
+
+  do {
+    date.setDate(date.getDate() - 1);
+  } while (date.getDay() === 0 || date.getDay() === 6);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Calcula a sequência ininterrupta de dias úteis operacionais preenchidos.
+ * Sábados e Domingos são ignorados e NÃO quebram a sequência do trader.
  */
 export function calculateStreakDays(days: TradingDay[] = []): number {
   if (!days.length) return 0;
-  const sorted = [...days].sort((a, b) => b.date.localeCompare(a.date));
-  let streak = 0;
 
-  for (const d of sorted) {
+  // Mapa de datas concluídas (apenas dias úteis)
+  const completedBusinessDays = new Set<string>();
+
+  for (const d of days) {
+    if (isWeekend(d.date)) continue; // Finais de semana não são exigidos
+
     const isComplete = Boolean(
       (d.preMarketDone || d.generalBias) &&
-      (d.retrospective || d.honestPhrase || d.totalPoints !== null)
+      (d.retrospective || d.honestPhrase || d.totalPoints !== null || d.farolKeyLevels)
     );
-    if (isComplete) streak++;
-    else break;
+
+    if (isComplete) {
+      completedBusinessDays.add(d.date);
+    }
   }
+
+  if (completedBusinessDays.size === 0) return 0;
+
+  // Ordena todas as datas concluídas de forma decrescente
+  const sortedDates = Array.from(completedBusinessDays).sort((a, b) => b.localeCompare(a));
+
+  let currentCheck = sortedDates[0];
+  let streak = 0;
+
+  // Percorre regressivamente pelos dias úteis
+  while (currentCheck && completedBusinessDays.has(currentCheck)) {
+    streak++;
+    currentCheck = getPreviousBusinessDay(currentCheck);
+  }
+
   return streak;
+}
+
+/**
+ * Avalia os 5 dias úteis da semana atual (Segunda a Sexta) em relação aos registros do banco.
+ * Identifica se cada dia foi concluído (🟢), faltou sem registro (🔴), ou está pendente/futuro (⚪).
+ */
+export function evaluateWeekBusinessDays(
+  referenceDateStr: string,
+  historyDays: TradingDay[] = []
+): BusinessDayStatus[] {
+  const parts = referenceDateStr.split('-').map(Number);
+  const refDate = parts.length === 3 ? new Date(parts[0], parts[1] - 1, parts[2]) : new Date();
+
+  // Encontra a Segunda-feira da semana de referência
+  const dayOfWeek = refDate.getDay(); // 0 = Dom, 1 = Seg, ..., 6 = Sáb
+  const distToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(refDate);
+  monday.setDate(refDate.getDate() + distToMonday);
+
+  const daysMap = new Map<string, TradingDay>();
+  for (const d of historyDays) {
+    daysMap.set(d.date, d);
+  }
+
+  const weekDaysLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'];
+  const result: BusinessDayStatus[] = [];
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (let i = 0; i < 5; i++) {
+    const cur = new Date(monday);
+    cur.setDate(monday.getDate() + i);
+
+    const year = cur.getFullYear();
+    const month = String(cur.getMonth() + 1).padStart(2, '0');
+    const day = String(cur.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+
+    const record = daysMap.get(dateStr);
+    const isComplete = Boolean(
+      record &&
+      (record.preMarketDone || record.generalBias) &&
+      (record.retrospective || record.honestPhrase || record.totalPoints !== null || record.farolKeyLevels)
+    );
+
+    let status: 'completed' | 'missed' | 'pending' = 'pending';
+
+    if (isComplete) {
+      status = 'completed'; // 🟢 Concluído
+    } else if (dateStr < todayStr) {
+      status = 'missed'; // 🔴 Dia útil passado sem registro!
+    } else {
+      status = 'pending'; // ⚪ Pendente (hoje ou futuro)
+    }
+
+    result.push({
+      date: dateStr,
+      dayLabel: weekDaysLabels[i],
+      status,
+    });
+  }
+
+  return result;
 }
 
 /**
@@ -198,6 +316,8 @@ export function calculateJournalCompleteness(
   historyDays: TradingDay[] = []
 ): GamificationResult {
   const streakDays = calculateStreakDays(historyDays);
+  const refDate = day ? day.date : new Date().toISOString().slice(0, 10);
+  const weekBusinessDays = evaluateWeekBusinessDays(refDate, historyDays);
 
   if (!day) {
     return {
@@ -211,6 +331,7 @@ export function calculateJournalCompleteness(
       totalCount: 5,
       streakDays: 0,
       streakStatus: 'STREAK 00 DAYS // INICIANDO SEQUÊNCIA',
+      weekBusinessDays,
     };
   }
 
@@ -326,5 +447,6 @@ export function calculateJournalCompleteness(
     totalCount: items.length,
     streakDays,
     streakStatus,
+    weekBusinessDays,
   };
 }

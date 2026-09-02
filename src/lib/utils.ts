@@ -14,10 +14,11 @@ export function parseBRNumber(str: string): number {
 }
 
 /**
- * Gera um ID único usando CUID2
+ * Gera um ID único usando CUID2 com prefixo opcional
  */
-export function generateId(): string {
-  return createId();
+export function generateId(prefix?: string): string {
+  const id = createId();
+  return prefix ? `${prefix}_${id}` : id;
 }
 
 /**

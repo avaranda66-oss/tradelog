@@ -214,6 +214,7 @@ export async function extractAudioFromVideo(
   await execFileAsync(ffmpeg, [
     '-i', videoPath,
     '-vn',
+    '-af', 'loudnorm',
     '-acodec', 'libmp3lame',
     '-q:a', '2',
     '-y',

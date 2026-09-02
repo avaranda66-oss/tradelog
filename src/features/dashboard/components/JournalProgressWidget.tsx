@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { motion } from 'framer-motion';
 import type { TradingDay, Trade, keyLevels, AudioRecord } from '@/lib/db/schema';
 import { calculateJournalCompleteness } from '@/lib/gamification';
 import { DisciplineFlameIcon } from './DisciplineFlameIcon';
@@ -47,8 +46,11 @@ export function JournalProgressWidget({
           <div className="flex items-center gap-3">
             <DisciplineFlameIcon
               level={result.flameLevel}
-              size={48}
+              size={38}
               complete={result.score === 100}
+              streakDays={result.streakDays}
+              weekBusinessDays={result.weekBusinessDays}
+              onOpenAchievements={() => setShowArchive(prev => !prev)}
             />
 
             <div>
@@ -100,10 +102,11 @@ export function JournalProgressWidget({
           </div>
         </div>
 
-        {/* Trilho de Energia 6px com preenchimento Térmico Acelerado por GPU */}
+        {/* Trilho de Energia 6px com preenchimento 4px centralizado e marcadores de 1px */}
         <div className="relative w-full bg-[#070a10] border border-slate-800/80 rounded-full h-[6px] p-[1px] overflow-hidden">
-          <motion.div
-            className={`h-full w-full rounded-full origin-left relative ${
+          {/* Preenchimento Térmico 4px */}
+          <div
+            className={`h-full rounded-full transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] relative ${
               result.score === 100
                 ? 'bg-teal-400 shadow-[0_0_10px_rgba(45,212,191,0.5)]'
                 : result.score >= 70
@@ -112,9 +115,7 @@ export function JournalProgressWidget({
                 ? 'bg-indigo-500'
                 : 'bg-slate-700'
             }`}
-            initial={false}
-            animate={{ scaleX: Math.max(result.score, 1.5) / 100 }}
-            transition={{ duration: 0.62, ease: [0.22, 1, 0.36, 1] }}
+            style={{ width: `${Math.max(result.score, 1.5)}%` }}
           />
 
           {/* Marcadores de Segmento de 1px nos pontos 20%, 40%, 60%, 80% */}

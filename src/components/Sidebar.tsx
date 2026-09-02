@@ -24,9 +24,11 @@ export interface SidebarProps {
 const DEFAULT_ITEMS: NavItem[] = [
   { href: "/", label: "Estúdio Command", code: "01", icon: <IconTerminal /> },
   { href: "/diario", label: "Diário de Trades", code: "02", icon: <IconJournal /> },
+  { href: "/opcoes", label: "Opções & CDI Yield", code: "09", icon: <IconScale /> },
   { href: "/calendario", label: "Calendário P&L", code: "03", icon: <IconChart /> },
   { href: "/operacoes", label: "Operações & Trades", code: "04", icon: <IconChart /> },
   { href: "/analytics", label: "Analytics & Métricas", code: "05", icon: <IconTarget /> },
+  { href: "/gex", label: "GEX Quant & Regiões", code: "08", icon: <IconTarget /> },
   { href: "/audios", label: "Estúdio de Áudios", code: "06", icon: <IconUpload /> },
   { href: "/database", label: "Banco SQLite", code: "07", icon: <IconScale /> },
 ];
@@ -87,12 +89,23 @@ export function Sidebar({
       </nav>
 
       {!collapsed && (
-        <div className="border-t border-slate-800/80 px-4 py-3">
-          <p className="font-mono text-[9px] tracking-[0.25em] text-slate-600">SESSION</p>
-          <p className="mt-1 flex items-center gap-2 font-mono text-[10px] tracking-wider text-slate-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-teal-400" />
-            {sessionLabel}
-          </p>
+        <div className="border-t border-slate-800/80 px-4 py-3 space-y-2">
+          <div>
+            <p className="font-mono text-[9px] tracking-[0.25em] text-slate-600">SESSION</p>
+            <p className="mt-1 flex items-center gap-2 font-mono text-[10px] tracking-wider text-slate-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-400" />
+              {sessionLabel}
+            </p>
+          </div>
+          <a
+            href="http://localhost:3001"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between px-2 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 font-mono text-[10px] hover:bg-blue-500/20 transition"
+          >
+            <span>📈 Abrir StockLog (Ações)</span>
+            <span>:3001 ↗</span>
+          </a>
         </div>
       )}
     </aside>

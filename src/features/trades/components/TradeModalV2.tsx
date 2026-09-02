@@ -1,13 +1,14 @@
-'use client';
-
 import { useState, useEffect } from 'react';
-import type { Trade, TradeImage } from '@/lib/db/schema';
+import type { Trade, TradeImage, TradeAnnotation } from '@/lib/db/schema';
 import { updateTradeNotes, deleteTrade } from '@/features/trades/actions';
 import { getTradeImages } from '@/features/images/actions';
+import { getTradeAnnotations } from '@/features/video/actions';
 import { ImageDropzone } from '@/features/images/components/ImageDropzone';
 import { StrategySelector } from '@/components/ui/StrategySelector';
 import { TagGroupSelector } from '@/components/ui/TagGroupSelector';
 import { IconChart, IconTarget, IconScale, IconCamera, IconMic, IconCheck } from '@/components/ui/icons';
+import { TradeReplayModal } from '@/features/video/components/TradeReplayModal';
+
 
 const EMOTIONS_PRE = [
   { value: 'confiante', label: 'CONFIANTE' },
@@ -34,7 +35,8 @@ const MARKET_REGIMES = ['Tendência', 'Range', 'Chop', 'Volatilidade', 'Abertura
 const DAY_PHASES = ['Pré-Abertura', 'Abertura', 'Meio Pregão', 'Final Pregão'];
 const STOP_TYPES = ['Técnico', 'Financeiro', 'Temporal', 'Trail', 'Breakeven'];
 
-type TabId = 'resumo' | 'pre' | 'durante' | 'pos' | 'screenshots' | 'audio';
+type TabId = 'resumo' | 'pre' | 'durante' | 'pos' | 'screenshots' | 'replay' | 'audio';
+
 
 interface TradeModalV2Props {
   trade: Trade | null;
@@ -44,11 +46,14 @@ interface TradeModalV2Props {
 
 export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
   const [activeTab, setActiveTab] = useState<TabId>('resumo');
+  const [showReplayModal, setShowReplayModal] = useState(false);
   const [saving, setSaving] = useState(false);
+
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [images, setImages] = useState<TradeImage[]>([]);
+  const [annotations, setAnnotations] = useState<TradeAnnotation[]>([]);
 
   const [form, setForm] = useState({
     conviction: trade?.conviction ?? null as number | null,
@@ -96,8 +101,10 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
         postTradeNote: trade.postTradeNote || '',
       });
       getTradeImages(trade.id).then(setImages);
+      getTradeAnnotations(trade.id).then(setAnnotations);
     }
   }, [trade]);
+
 
   if (!trade) return null;
 
@@ -215,8 +222,10 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
     { id: 'durante', label: 'DURANTE' },
     { id: 'pos', label: 'PÓS-TRADE' },
     { id: 'screenshots', label: `PRINTS (${images.length})` },
+    { id: 'replay', label: '🎬 REPLAY VÍDEO' },
     { id: 'audio', label: 'ÁUDIO' },
   ];
+
 
   function SaveButton() {
     return (
@@ -518,6 +527,115 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
             </div>
           )}
 
+          {/* ABA REPLAY VÍDEO */}
+          {activeTab === 'replay' && (
+            <div className="space-y-4 font-mono">
+              <div className="p-4 bg-[#070a10] border border-teal-500/30 rounded-xl space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-teal-300 uppercase tracking-wider">REPLAY DE VÍDEO & TIMELAPSE</h4>
+                    <p className="text-[11px] text-slate-400 font-sans mt-0.5">
+                      Assista ao vídeo gravado do OBS focado neste trade (30s antes até saída), com zoom interativo, timelapse, anotações de frames e caneta piloto.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowReplayModal(true)}
+                    className="px-4 py-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs rounded-lg shadow-lg shadow-teal-500/20 flex items-center gap-1.5 transition-all"
+                  >
+                    🎬 ABRIR PLAYER EXPANDIDO
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs">
+                  <div className="bg-[#0b1018] p-2 rounded border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">ENTRADA</span>
+                    <strong className="text-slate-200">{trade.openTime}</strong>
+                  </div>
+                  <div className="bg-[#0b1018] p-2 rounded border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">SAÍDA</span>
+                    <strong className="text-slate-200">{trade.closeTime}</strong>
+                  </div>
+                  <div className="bg-[#0b1018] p-2 rounded border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">DURAÇÃO</span>
+                    <strong className="text-slate-200">{trade.duration || '—'}</strong>
+                  </div>
+                  <div className="bg-[#0b1018] p-2 rounded border border-slate-800/80">
+                    <span className="text-[10px] text-slate-500 block">RESULTADO</span>
+                    <strong className={resultColor}>{(trade.points || 0) > 0 ? '+' : ''}{trade.points} pts</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lista de Insights & Transcrições Timestamped */}
+              <div className="bg-[#070a10] border border-slate-800/80 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <span>📝 TRANSCRIÇÃO & ANOTAÇÕES FRAME-A-FRAME</span>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] text-teal-400 font-bold font-mono">
+                      {annotations.length}
+                    </span>
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowReplayModal(true)}
+                    className="text-xs text-teal-400 hover:text-teal-300 font-bold"
+                  >
+                    + Adicionar no Player ↗
+                  </button>
+                </div>
+
+                {annotations.length === 0 ? (
+                  <div className="py-6 text-center text-slate-600 text-xs">
+                    Nenhuma anotação de frame salva neste trade. Abra o Player de Replay para anotar insights e desenhar nos frames!
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {annotations.map((ann) => (
+                      <div
+                        key={ann.id}
+                        onClick={() => setShowReplayModal(true)}
+                        className="p-3 bg-[#0b1018] border border-slate-800/80 hover:border-teal-500/40 rounded-lg transition-all cursor-pointer group flex items-start justify-between gap-4"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 px-2 py-0.5 rounded font-mono flex items-center gap-1">
+                              <span>🕒 {ann.clockTime || ann.formattedTime}</span>
+                              {ann.clockTime && <span className="text-slate-500 text-[9px]">({ann.formattedTime})</span>}
+                            </span>
+
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/30 uppercase">
+                              {ann.tag || 'insight'}
+                            </span>
+                            {ann.author === 'ai' && (
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                🤖 AI Coach
+                              </span>
+                            )}
+                            {ann.drawingData && (
+                              <span className="text-[9px] text-amber-400 font-bold">
+                                ✏️ Desenho salvo
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-300 font-sans leading-relaxed whitespace-pre-wrap">
+                            {ann.text}
+                          </p>
+
+                        </div>
+
+                        <span className="text-slate-500 group-hover:text-teal-400 text-xs font-bold whitespace-nowrap">
+                          Ver no Vídeo ↗
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+
           {/* ABA SCREENSHOTS */}
           {activeTab === 'screenshots' && (
             <ImageDropzone tradeId={trade.id} date={date} images={images} onUploaded={() => getTradeImages(trade.id).then(setImages)} />
@@ -537,8 +655,16 @@ export function TradeModalV2({ trade, date, onClose }: TradeModalV2Props) {
 
         </div>
       </div>
+
+      {showReplayModal && (
+        <TradeReplayModal
+          trade={trade}
+          onClose={() => setShowReplayModal(false)}
+        />
+      )}
     </div>
   );
 }
 
 export default TradeModalV2;
+
