@@ -8,6 +8,7 @@ import {
   parseBusinessDate,
   getB3TradingDays,
   getDiObservationDates,
+  getPreviousOrSameB3TradingDay,
 } from './b3-calendar';
 
 export type AnnualRateDecimal = number; // Sempre em decimal: 0.14 = 14% a.a.
@@ -44,20 +45,23 @@ export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): nu
   return Math.round(rawFactor * 100000000) / 100000000;
 }
 
+const SCALE_8 = BigInt('100000000');
+const SCALE_16 = BigInt('10000000000000000');
+const HALF_SCALE_8 = BigInt('50000000');
+
 /**
  * Realiza o produtório acumulado canônico da B3 com truncamento intermediário a 16 casas decimais
- * e arredondamento final para 8 casas decimais conforme metodologia oficial do Índice DI.
+ * e arredondamento final para 8 casas decimais via aritmética inteira BigInt fixed-point exata.
  */
 export function calculateB3AccumulatedFactor(dailyFactors: number[]): number {
   if (dailyFactors.length === 0) return 1.0;
-  let acc = 1.0;
+  let accumulated16 = SCALE_16;
   for (const factor of dailyFactors) {
-    acc = acc * factor;
-    // Truncamento a 16 casas decimais conforme B3
-    acc = Math.trunc(acc * 1e16) / 1e16;
+    const factor8 = BigInt(Math.round(factor * 100000000));
+    accumulated16 = (accumulated16 * factor8) / SCALE_8;
   }
-  // Arredondamento final a 8 casas decimais
-  return Math.round(acc * 1e8) / 1e8;
+  const rounded8 = (accumulated16 + HALF_SCALE_8) / SCALE_8;
+  return Number(rounded8) / 100000000;
 }
 
 export interface DiAccrualObservation {
@@ -92,10 +96,11 @@ export interface RealizedDiResult {
 }
 
 /**
- * Calcula a acumulação diária realizada do CDI entre duas datas de negócio (openDate, valuationDate]
+ * Calcula a acumulação diária realizada do CDI entre duas datas de negócio [openDate, valuationDate)
  * Metodologia Oficial B3:
- * O intervalo de taxas DI aplicáveis é [openDate, valuationDate) - Data inicial inclusive, data final exclusive.
+ * O intervalo de taxas DI aplicáveis é [openDate, accrualValuationDate) - Data inicial inclusive, data final exclusive.
  * A taxa de openDate (D_0) remunera a primeira sessão decorrida (D_1 = openDate + 1 DU).
+ * Se valuationDate cair em fim de semana ou feriado, normaliza para o dia útil de pregão B3 mais recente.
  */
 export function calculateRealizedDiFactor(
   openDateStr: BusinessDate,
@@ -108,10 +113,30 @@ export function calculateRealizedDiFactor(
   const safeFallback = toAnnualRateDecimal(fallbackAnnualRate);
   const series = customSeries ?? CANONICAL_DI_RATES;
 
-  // Rate observation dates: [openDate, valuationDate)
-  const rateDates = getDiObservationDates(openDate, valDate);
-  // Accrual dates: (openDate, valuationDate]
-  const accrualDates = getB3TradingDays(openDate, valDate, 'EXCLUDE_START_INCLUDE_END');
+  // Normalização de valuationDate para o pregão B3 mais recente (evita inflar DU em fins de semana e feriados)
+  const accrualValuationDate = getPreviousOrSameB3TradingDay(valDate);
+
+  if (openDate >= accrualValuationDate) {
+    return {
+      accumulatedFactor: 1.0,
+      periodYieldDecimal: 0.0,
+      isEstimated: false,
+      observationsCount: 0,
+      datesUsed: [],
+      observations: [],
+    };
+  }
+
+  // Rate observation dates: [openDate, accrualValuationDate)
+  const rateDates = getDiObservationDates(openDate, accrualValuationDate);
+  // Accrual dates: (openDate, accrualValuationDate]
+  const accrualDates = getB3TradingDays(openDate, accrualValuationDate, 'EXCLUDE_START_INCLUDE_END');
+
+  if (rateDates.length !== accrualDates.length) {
+    throw new Error(
+      `[CDI Engine Invariant Violation] Inconsistência de datas B3: rateDates (${rateDates.length}) != accrualDates (${accrualDates.length}) entre ${openDate} e ${accrualValuationDate}`
+    );
+  }
 
   if (rateDates.length === 0) {
     return {
@@ -130,7 +155,7 @@ export function calculateRealizedDiFactor(
 
   for (let i = 0; i < rateDates.length; i++) {
     const rateDate = rateDates[i];
-    const accrualDate = accrualDates[i] || rateDate;
+    const accrualDate = accrualDates[i];
     const obs = series.get(rateDate);
 
     if (obs) {

@@ -67,12 +67,12 @@ export function runAllTests() {
     assert(true, 'countB3TradingDays valida boundary imediatamente e lança UnsupportedB3CalendarYearError');
   }
 
-  // ─── 2. CDI ACCRUAL TESTS (CANÔNICO B3 [start, end) E TRUNCAMENTO 16 CASAS) ───
+  // ─── 2. CDI ACCRUAL TESTS (CANÔNICO B3 [start, end), BIGINT 16 CASAS, FINS DE SEMANA E FERIADOS) ───
   console.log('\n2. CDI Accrual Engine Tests:');
   const di6du = calculateRealizedDiFactor('2026-08-24', '2026-09-01');
   assert(di6du.observationsCount === 6, 'DI acumulou exatamente 6 observações');
   assert(di6du.isEstimated === false, 'DI usou série oficial B3 sem fallback');
-  assert(Math.abs(di6du.periodYieldDecimal - 0.00310356) < 0.0001, 'Yield CDI 6 DU é aproximadamente +0.3104%');
+  assert(Math.abs(di6du.periodYieldDecimal - 0.00310356) < 0.00001, 'Yield CDI 6 DU é aproximadamente +0.3104%');
 
   const diProj12 = calculateProjectedDiFactor(12, 0.14);
   assert(Math.abs(diProj12.periodYieldDecimal - 0.006259) < 0.0001, 'CDI projetado 12 DU é aproximadamente +0.6259%');
@@ -80,23 +80,54 @@ export function runAllTests() {
   assert(normalizeAnnualRate(14.0, 'PERCENT') === 0.14, 'normalizeAnnualRate normaliza PERCENT para decimal');
   assert(normalizeAnnualRate(0.14, 'DECIMAL') === 0.14, 'normalizeAnnualRate preserva DECIMAL');
 
-  // Teste de Convenção Temporal Canônica B3 [openDate, valuationDate) com Taxas Heterogêneas (D0 != D1)
+  // Golden Test com Constantes Independentes Reconciliadas (D0 = 13.90%, D1 = 15.00%)
+  // TDI(13.90%) -> FDI = 1.00051660
+  // TDI(15.00%) -> FDI = 1.00055476
+  // Produto 16 casas: 1.00051660 * 1.00055476 = 1.0010716465890160 -> Arredondado 8 casas: 1.00107165
   const customSeries = new Map<string, { annualRateDecimal: number; source: string }>([
-    ['2026-08-24', { annualRateDecimal: 0.1390, source: 'TEST_D0' }], // Taxa em 24/08 (D0)
-    ['2026-08-25', { annualRateDecimal: 0.1500, source: 'TEST_D1' }], // Taxa em 25/08 (D1)
+    ['2026-08-24', { annualRateDecimal: 0.1390, source: 'TEST_D0' }],
+    ['2026-08-25', { annualRateDecimal: 0.1500, source: 'TEST_D1' }],
   ]);
 
-  // 24/08 -> 25/08 (1 DU): deve utilizar a taxa de 24/08 (13.90%) para remunerar até 25/08
   const diD1 = calculateRealizedDiFactor('2026-08-24', '2026-08-25', 0.14, customSeries as any);
-  const fdi24 = Math.round(Math.pow(1 + 0.1390, 1 / 252.0) * 100000000) / 100000000;
-  assert(Math.abs(diD1.accumulatedFactor - fdi24) < 0.00000001, '24/08 -> 25/08 (1 DU) acumula estritamente a taxa de 24/08 (13.90%)');
+  assert(diD1.accumulatedFactor === 1.00051660, 'Golden Test D1: 24/08 -> 25/08 (1 DU) resulta rigorosamente em 1.00051660');
   assert(diD1.observations[0].rateDate === '2026-08-24' && diD1.observations[0].accrualDate === '2026-08-25', 'DiAccrualObservation separa rateDate (24/08) de accrualDate (25/08)');
 
-  // 24/08 -> 26/08 (2 DU): deve acumular FDI(24/08) * FDI(25/08)
   const diD2 = calculateRealizedDiFactor('2026-08-24', '2026-08-26', 0.14, customSeries as any);
-  const fdi25 = Math.round(Math.pow(1 + 0.1500, 1 / 252.0) * 100000000) / 100000000;
-  const expectedProd = Math.round(Math.trunc(fdi24 * fdi25 * 1e16) / 1e16 * 1e8) / 1e8;
-  assert(Math.abs(diD2.accumulatedFactor - expectedProd) < 0.00000001, '24/08 -> 26/08 (2 DU) acumula FDI(24/08) * FDI(25/08) com convenção canônica B3 [start, end)');
+  assert(diD2.accumulatedFactor === 1.00107165, 'Golden Test D2: 24/08 -> 26/08 (2 DU) resulta rigorosamente em 1.00107165 (BigInt 16 casas)');
+
+  // Testes de Valuation em Fins de Semana e Feriados (Sem inflar DU nem CDI)
+  // 1. Sexta 28/08 -> Sábado 29/08 (0 DU adicionais, 0 CDI)
+  const diFriSat = calculateRealizedDiFactor('2026-08-28', '2026-08-29');
+  assert(diFriSat.observationsCount === 0 && diFriSat.accumulatedFactor === 1.0, 'Sexta -> Sábado resulta em 0 DU e 0 CDI adicional');
+
+  // 2. Quinta 27/08 -> Sábado 29/08 (1 DU: quinta -> sexta)
+  const diThuSat = calculateRealizedDiFactor('2026-08-27', '2026-08-29');
+  assert(diThuSat.observationsCount === 1, 'Quinta -> Sábado resulta em exatamente 1 DU');
+  assert(diThuSat.observations[0].rateDate === '2026-08-27' && diThuSat.observations[0].accrualDate === '2026-08-28', 'Quinta -> Sábado remunera a sessão de sexta com a taxa da quinta');
+
+  // 3. Sexta 04/09 -> Segunda 07/09 (Feriado da Independência B3: 0 DU, 0 CDI)
+  const diFriHoliday = calculateRealizedDiFactor('2026-09-04', '2026-09-07');
+  assert(diFriHoliday.observationsCount === 0 && diFriHoliday.accumulatedFactor === 1.0, 'Sexta -> Segunda Feriado (07/09) resulta em 0 DU e 0 CDI adicional');
+
+  // 4. Sexta 04/09 -> Terça 08/09 (1 DU após feriado: taxa de sexta remunerando até terça)
+  const diFriTue = calculateRealizedDiFactor('2026-09-04', '2026-09-08');
+  assert(diFriTue.observationsCount === 1, 'Sexta -> Terça (após feriado) resulta em exatamente 1 DU');
+  assert(diFriTue.observations[0].rateDate === '2026-09-04' && diFriTue.observations[0].accrualDate === '2026-09-08', 'Sexta -> Terça remunera até terça com a taxa de sexta');
+
+  // Invariant Quantitativo: Para qualquer par de datas, observationsCount === elapsedTradingDays normalizado
+  const testPairs: [string, string][] = [
+    ['2026-08-24', '2026-09-01'],
+    ['2026-08-27', '2026-08-29'],
+    ['2026-08-28', '2026-08-29'],
+    ['2026-09-04', '2026-09-07'],
+    ['2026-09-04', '2026-09-08'],
+  ];
+  for (const [o, v] of testPairs) {
+    const res = calculateRealizedDiFactor(o as any, v as any);
+    const expectedDU = countB3TradingDays(o as any, v as any);
+    assert(res.observationsCount === expectedDU, `Invariant check: ${o} -> ${v} observationsCount (${res.observationsCount}) === elapsedDU (${expectedDU})`);
+  }
 
   // ─── 3. PRICING & EXIT QUOTE TESTS ───
   console.log('\n3. Pricing & Exit Quote Tests:');

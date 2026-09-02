@@ -200,3 +200,31 @@ export function getDiObservationDates(
 ): BusinessDate[] {
   return getB3TradingDays(openDateStr, valuationDateStr, 'INCLUDE_START_EXCLUDE_END');
 }
+
+/**
+ * Normaliza uma data para o dia útil de pregão da B3 mais recente (mesmo dia se útil, ou dia útil anterior caso fim de semana/feriado)
+ */
+export function getPreviousOrSameB3TradingDay(dateStr: BusinessDate): BusinessDate {
+  const clean = parseBusinessDate(dateStr);
+  const [yStr, mStr, dStr] = clean.split('-');
+  const y = parseInt(yStr, 10);
+  const m = parseInt(mStr, 10) - 1;
+  const d = parseInt(dStr, 10);
+
+  if (!SUPPORTED_YEARS.includes(y as (typeof SUPPORTED_YEARS)[number])) {
+    throw new UnsupportedB3CalendarYearError(y);
+  }
+
+  const cur = new Date(y, m, d);
+  while (true) {
+    const yyyy = cur.getFullYear();
+    const mm = String(cur.getMonth() + 1).padStart(2, '0');
+    const dd = String(cur.getDate()).padStart(2, '0');
+    const dStrFormatted = `${yyyy}-${mm}-${dd}` as BusinessDate;
+
+    if (isB3TradingDay(dStrFormatted)) {
+      return dStrFormatted;
+    }
+    cur.setDate(cur.getDate() - 1);
+  }
+}
