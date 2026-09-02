@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { calculateStrategyCanonicalBenchmarkCapital } from '../../features/options/calculations';
 
 /**
  * Verifica se uma coluna existe na tabela SQLite e a adiciona via DDL se ausente.
@@ -264,37 +265,53 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
       }>;
 
       for (const strat of strategiesWithoutSegment) {
-        // Calcula o capital de benchmark a partir das pernas
+        // Calcula o capital de benchmark canônico via Risk Recognizer oficial B3
         const legRows = sqliteInstance.prepare(`
-          SELECT l.allocated_quantity, p.strike, p.entry_price, p.option_type, p.side
+          SELECT l.allocated_quantity, l.economic_role, p.strike, p.entry_price, p.underlying_current_spot, p.expiration_date, p.option_type, p.side
           FROM option_strategy_legs l
           JOIN option_positions p ON p.id = l.position_id
           WHERE l.strategy_id = ?;
         `).all(strat.id) as Array<{
           allocated_quantity: number;
+          economic_role: string;
           strike: number;
           entry_price: number;
+          underlying_current_spot: number | null;
+          expiration_date: string;
           option_type: string;
           side: string;
         }>;
 
-        let benchmarkCapital = 0;
-        for (const l of legRows) {
-          const isSell = l.side === 'SELL' || l.side === 'SHORT';
-          if (isSell) {
-            benchmarkCapital += l.strike * l.allocated_quantity;
-          } else {
-            benchmarkCapital += l.entry_price * l.allocated_quantity;
-          }
-        }
+        const benchmarkCapital = calculateStrategyCanonicalBenchmarkCapital(
+          legRows.map((l) => ({
+            allocatedQuantity: l.allocated_quantity,
+            economicRole: l.economic_role,
+            position: {
+              optionType: l.option_type as any,
+              side: l.side as any,
+              strike: l.strike,
+              entryPrice: l.entry_price,
+              underlyingCurrentSpot: l.underlying_current_spot,
+              expirationDate: l.expiration_date,
+            },
+          }))
+        );
 
         const mode = strat.collateral_mode || 'IDLE_CASH';
         let capitalRemunerated = 0;
-        if (mode !== 'IDLE_CASH') {
+        let quality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA' = 'FULL';
+
+        if (mode === 'IDLE_CASH') {
+          capitalRemunerated = 0;
+          quality = 'FULL';
+        } else {
           if (strat.capital_remunerated_reais !== null && strat.capital_remunerated_reais !== undefined) {
             capitalRemunerated = Math.min(strat.capital_remunerated_reais, benchmarkCapital);
+            quality = 'FULL';
           } else {
+            // Funding assumido (hipótese de 100% da garantia remunerada sem dado explícito)
             capitalRemunerated = benchmarkCapital;
+            quality = 'PARTIAL'; // P1.6: NÃO promover hipótese antiga para dado observado FULL!
           }
         }
 
@@ -304,7 +321,7 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
             id, strategy_id, start_date, end_date, benchmark_capital_reais,
             capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
             source_type, quality, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATION', 'FULL', ?);
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CREATION', ?, ?);
         `).run(
           segId,
           strat.id,
@@ -314,6 +331,7 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
           capitalRemunerated,
           mode,
           strat.collateral_yield_pct_cdi ?? null,
+          quality,
           strat.created_at || new Date().toISOString()
         );
       }
@@ -401,7 +419,12 @@ export function applyMigrations(sqliteInstance: Database.Database): void {
       funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
       quality TEXT NOT NULL DEFAULT 'FULL',
       created_at TEXT NOT NULL,
-      CHECK(end_date IS NULL OR end_date >= start_date)
+      CHECK(end_date IS NULL OR end_date >= start_date),
+      CHECK(
+        (source_type = 'CREATION' AND maneuver_event_id IS NULL AND funding_event_id IS NULL) OR
+        (source_type = 'MANEUVER' AND maneuver_event_id IS NOT NULL AND funding_event_id IS NULL) OR
+        (source_type = 'FUNDING_CHANGE' AND maneuver_event_id IS NULL AND funding_event_id IS NOT NULL)
+      )
     );
   `);
 

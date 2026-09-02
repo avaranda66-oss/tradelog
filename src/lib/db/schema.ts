@@ -475,7 +475,7 @@ export const strategyFundingSegments = sqliteTable('strategy_funding_segments', 
   maneuverEventId: text('maneuver_event_id').references(() => strategyManeuverEvents.id, { onDelete: 'restrict' }),
   fundingEventId: text('funding_event_id').references(() => strategyFundingEvents.id, { onDelete: 'restrict' }),
 
-  quality: text('quality').notNull().default('FULL'), // "FULL" | "INSUFFICIENT_DATA"
+  quality: text('quality').notNull().default('FULL'), // "FULL" | "PARTIAL" | "INSUFFICIENT_DATA"
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
 }, (table) => [
   uniqueIndex('one_open_funding_segment_per_strategy')
@@ -485,6 +485,11 @@ export const strategyFundingSegments = sqliteTable('strategy_funding_segments', 
   check('funding_seg_benchmark_check', sql`${table.benchmarkCapitalReais} >= 0`),
   check('funding_seg_remunerated_check', sql`${table.capitalRemuneratedReais} >= 0 AND ${table.capitalRemuneratedReais} <= ${table.benchmarkCapitalReais}`),
   check('funding_seg_pct_cdi_check', sql`${table.collateralPctCdi} IS NULL OR ${table.collateralPctCdi} >= 0`),
+  check('funding_seg_source_coherence_check', sql`
+    (${table.sourceType} = 'CREATION' AND ${table.maneuverEventId} IS NULL AND ${table.fundingEventId} IS NULL) OR
+    (${table.sourceType} = 'MANEUVER' AND ${table.maneuverEventId} IS NOT NULL AND ${table.fundingEventId} IS NULL) OR
+    (${table.sourceType} = 'FUNDING_CHANGE' AND ${table.maneuverEventId} IS NULL AND ${table.fundingEventId} IS NOT NULL)
+  `),
 ]);
 
 // ─── Option Position Executions (Execuções Financeiras Reais — Fonte Canônica) ───
@@ -554,6 +559,7 @@ export type StrategyFundingSegment = typeof strategyFundingSegments.$inferSelect
 export type NewStrategyFundingSegment = typeof strategyFundingSegments.$inferInsert;
 export type OptionPositionExecution = typeof optionPositionExecutions.$inferSelect;
 export type NewOptionPositionExecution = typeof optionPositionExecutions.$inferInsert;
+export type FundingSegmentQuality = 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA';
 
 
 

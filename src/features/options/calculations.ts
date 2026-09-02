@@ -1333,6 +1333,53 @@ export function detectStrategyRiskAndPayoff(params: {
   };
 }
 
+/**
+ * Helper puro que calcula o Capital de Referência do Benchmark / Capital Reservado
+ * consumindo exatamente o motor detectStrategyRiskAndPayoff sem heurísticas paralelas.
+ */
+export function calculateStrategyCanonicalBenchmarkCapital(legs: Array<{
+  allocatedQuantity: number;
+  economicRole?: string;
+  position: {
+    optionType: 'CALL' | 'PUT';
+    side: 'SELL' | 'BUY' | 'SHORT' | 'LONG';
+    strike: number;
+    entryPrice: number;
+    underlyingCurrentSpot?: number | null;
+    expirationDate?: string;
+  };
+}>): number {
+  if (!legs || legs.length === 0) return 0;
+
+  let netInitialCreditDebit = 0;
+  for (const leg of legs) {
+    const isShort = leg.position.side === 'SELL' || (leg.position.side as any) === 'SHORT';
+    if (isShort) netInitialCreditDebit += leg.position.entryPrice * leg.allocatedQuantity;
+    else netInitialCreditDebit -= leg.position.entryPrice * leg.allocatedQuantity;
+  }
+
+  const enrichedMockLegs = legs.map((leg) => ({
+    allocatedQuantity: leg.allocatedQuantity,
+    economicRole: leg.economicRole || 'CUSTOM',
+    position: {
+      optionType: leg.position.optionType,
+      side: leg.position.side === 'SHORT' ? 'SELL' : leg.position.side === 'LONG' ? 'BUY' : leg.position.side,
+      strike: leg.position.strike,
+      entryPrice: leg.position.entryPrice,
+      currentPrice: leg.position.entryPrice,
+      underlyingCurrentSpot: leg.position.underlyingCurrentSpot ?? leg.position.strike,
+      expirationDate: leg.position.expirationDate || '2099-12-31',
+    } as any,
+  }));
+
+  const risk = detectStrategyRiskAndPayoff({
+    legs: enrichedMockLegs,
+    netInitialCreditDebitReais: netInitialCreditDebit,
+  });
+
+  return risk.capitalReservedReais;
+}
+
 export interface EnrichedOptionStrategy {
   id: string;
   portfolio: string;

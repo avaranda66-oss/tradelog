@@ -348,7 +348,12 @@ sqlite.exec(`
     funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
     quality TEXT NOT NULL DEFAULT 'FULL',
     created_at TEXT NOT NULL,
-    CHECK(end_date IS NULL OR end_date >= start_date)
+    CHECK(end_date IS NULL OR end_date >= start_date),
+    CHECK(
+      (source_type = 'CREATION' AND maneuver_event_id IS NULL AND funding_event_id IS NULL) OR
+      (source_type = 'MANEUVER' AND maneuver_event_id IS NOT NULL AND funding_event_id IS NULL) OR
+      (source_type = 'FUNDING_CHANGE' AND maneuver_event_id IS NULL AND funding_event_id IS NOT NULL)
+    )
   );
 
   CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy

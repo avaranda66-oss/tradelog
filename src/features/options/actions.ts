@@ -6,18 +6,23 @@ import {
   optionStrategies,
   optionStrategyLegs,
   strategyAllocationEvents,
+  strategyManeuverEvents,
+  strategyFundingEvents,
+  strategyFundingSegments,
+  optionPositionExecutions,
   type OptionPosition,
   type NewOptionPosition,
   type OptionStrategy,
   type OptionStrategyLeg,
 } from '@/lib/db/schema';
 import { generateId } from '@/lib/utils';
-import { eq, desc, inArray } from 'drizzle-orm';
+import { eq, desc, inArray, and, isNull } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import {
   enrichOptionPosition,
   enrichOptionStrategy,
   detectStrategyRiskAndPayoff,
+  calculateStrategyCanonicalBenchmarkCapital,
   isActionFeedEligible,
   type PositionCalculatedMetrics,
   type EnrichedOptionPosition,
@@ -799,6 +804,9 @@ export async function groupOptionPositionsAction(params: {
           positionId: pos.id,
           allocatedQuantity: allocQty,
           economicRole: econRole,
+          legacyClosedAllocatedQuantity: 0,
+          closedAllocatedQuantity: 0,
+          openAllocatedQuantity: allocQty,
           createdAt: now,
         }).run();
 
@@ -812,6 +820,28 @@ export async function groupOptionPositionsAction(params: {
           timestamp: now,
         }).run();
       }
+
+      // Inserir o segmento de funding inicial concreto (Bootstrap da Timeline para a nova estrutura)
+      let initialRemunerated = params.capitalRemuneratedReais ?? 0;
+      if (params.collateralMode === 'IDLE_CASH') {
+        initialRemunerated = 0;
+      } else if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+        initialRemunerated = benchmarkCapitalReais * (params.collateralCoveragePct / 100);
+      }
+
+      tx.insert(strategyFundingSegments).values({
+        id: generateId('strat_fnd_seg'),
+        strategyId,
+        startDate: openedAt,
+        endDate: null,
+        benchmarkCapitalReais,
+        capitalRemuneratedReais: initialRemunerated,
+        collateralMode: params.collateralMode || 'IDLE_CASH',
+        collateralPctCdi: params.collateralYieldPctCDI ?? null,
+        sourceType: 'CREATION',
+        quality: 'FULL',
+        createdAt: now,
+      }).run();
     });
 
     safeRevalidate('/opcoes');
@@ -835,6 +865,21 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
       return { success: false, error: 'Estrutura não encontrada.' };
     }
 
+    // P0.5: Verifica se a estratégia possui histórico contábil (execuções ou manobras)
+    const execs = await db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.strategyId, strategyId),
+    });
+    const maneuvers = await db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, strategyId),
+    });
+
+    if (execs.length > 0 || maneuvers.length > 0) {
+      return {
+        success: false,
+        error: 'STRATEGY_HAS_FINANCIAL_HISTORY: Esta estrutura possui histórico financeiro auditável (execuções ou manobras) e não pode ser desagrupada. O histórico deve ser preservado para fins contábeis.',
+      };
+    }
+
     const legs = await db.query.optionStrategyLegs.findMany({
       where: eq(optionStrategyLegs.strategyId, strategyId),
     });
@@ -854,7 +899,11 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
         }).run();
       }
 
-      // Deleta a estratégia (cascade deleta as legs, as posições permanecem intactas!)
+      // Remove segmentos e eventos de funding da estrutura virgem antes de deletá-la
+      tx.delete(strategyFundingSegments).where(eq(strategyFundingSegments.strategyId, strategyId)).run();
+      tx.delete(strategyFundingEvents).where(eq(strategyFundingEvents.strategyId, strategyId)).run();
+
+      // Deleta a estratégia (cascade deleta as legs, liberando as posições!)
       tx.delete(optionStrategies).where(eq(optionStrategies.id, strategyId)).run();
     });
 
@@ -966,16 +1015,73 @@ export async function updateOptionStrategyFundingAction(params: {
       }
     }
 
-    db.update(optionStrategies)
-      .set({
+    const effectiveDate = getBrazilTodayDate();
+    const now = new Date().toISOString();
+
+    db.transaction((tx) => {
+      // 1. Ler o segmento vigente aberto
+      const openSegment = tx.query.strategyFundingSegments.findFirst({
+        where: and(
+          eq(strategyFundingSegments.strategyId, params.strategyId),
+          isNull(strategyFundingSegments.endDate)
+        ),
+      }).sync();
+
+      // 2. Criar strategy_funding_event CHANGE
+      const fundingEventId = generateId('strat_fnd_ev');
+      tx.insert(strategyFundingEvents).values({
+        id: fundingEventId,
+        strategyId: params.strategyId,
+        eventType: 'CHANGE',
+        effectiveDate,
+        previousCollateralMode: existingStrategy.collateralMode || 'IDLE_CASH',
+        newCollateralMode: params.collateralMode,
+        previousCoveragePct: existingStrategy.collateralCoveragePct,
+        newCoveragePct: params.collateralCoveragePct ?? null,
+        previousCapitalRemunerated: existingStrategy.capitalRemuneratedReais,
+        newCapitalRemunerated: finalCapitalRemunerated ?? 0,
+        previousPctCdi: existingStrategy.collateralYieldPctCDI,
+        newPctCdi: params.collateralYieldPctCDI ?? null,
+        notes: 'Alteração prospectiva de funding via interface',
+        createdAt: now,
+      }).run();
+
+      // 3. Fechar segmento vigente em effectiveDate
+      if (openSegment) {
+        tx.update(strategyFundingSegments)
+          .set({ endDate: effectiveDate })
+          .where(eq(strategyFundingSegments.id, openSegment.id))
+          .run();
+      }
+
+      // 4. Abrir novo segmento de funding
+      tx.insert(strategyFundingSegments).values({
+        id: generateId('strat_fnd_seg'),
+        strategyId: params.strategyId,
+        startDate: effectiveDate,
+        endDate: null,
+        benchmarkCapitalReais,
+        capitalRemuneratedReais: finalCapitalRemunerated ?? 0,
         collateralMode: params.collateralMode,
-        collateralYieldPctCDI: params.collateralYieldPctCDI ?? null,
-        capitalRemuneratedReais: finalCapitalRemunerated ?? null,
-        collateralCoveragePct: params.collateralCoveragePct ?? null,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(optionStrategies.id, params.strategyId))
-      .run();
+        collateralPctCdi: params.collateralYieldPctCDI ?? null,
+        sourceType: 'FUNDING_CHANGE',
+        fundingEventId,
+        quality: 'FULL',
+        createdAt: now,
+      }).run();
+
+      // 5. Atualizar snapshot da option_strategy
+      tx.update(optionStrategies)
+        .set({
+          collateralMode: params.collateralMode,
+          collateralYieldPctCDI: params.collateralYieldPctCDI ?? null,
+          capitalRemuneratedReais: finalCapitalRemunerated ?? null,
+          collateralCoveragePct: params.collateralCoveragePct ?? null,
+          updatedAt: now,
+        })
+        .where(eq(optionStrategies.id, params.strategyId))
+        .run();
+    });
 
     safeRevalidate('/opcoes');
     return { success: true };
@@ -1042,6 +1148,11 @@ export async function createOptionPosition(data: {
       side: data.side,
       strategyType: data.strategyType || (isSell ? (data.optionType === 'PUT' ? 'VENDA_PUT' : 'VENDA_CALL') : 'COMPRA_CALL'),
       quantity: data.quantity,
+      legacyClosedQuantity: 0,
+      legacyQuality: null,
+      closedQuantity: 0,
+      openQuantity: data.status === 'CLOSED' ? 0 : data.quantity,
+      realizedPnlReais: 0,
       strike: data.strike,
       entryPrice: data.entryPrice,
       currentPrice: data.currentPrice || data.entryPrice,
@@ -1111,22 +1222,53 @@ export async function updateOptionPosition(
     });
     if (!current) throw new Error('Posição não encontrada');
 
-    // Valida se nova quantidade é compatível com alocações existentes
-    if (data.quantity !== undefined && data.quantity < current.quantity) {
+    let openQuantity = current.openQuantity ?? current.quantity;
+    let closedQuantity = current.closedQuantity ?? 0;
+    let legacyClosedQuantity = current.legacyClosedQuantity ?? 0;
+
+    // P0.3: Proteção de Imutabilidade da Quantidade Original
+    if (data.quantity !== undefined && data.quantity !== current.quantity) {
+      // 1. Verifica se a posição possui execuções reais
+      const executions = await db.query.optionPositionExecutions.findMany({
+        where: eq(optionPositionExecutions.positionId, id),
+      });
+      // 2. Verifica se a posição possui alocações em pernas de estruturas
       const activeLegs = await db.query.optionStrategyLegs.findMany({
         where: eq(optionStrategyLegs.positionId, id),
       });
-      const totalAllocated = activeLegs.reduce((sum, l) => sum + l.allocatedQuantity, 0);
-      if (data.quantity < totalAllocated) {
+
+      const isVirgin = executions.length === 0 && activeLegs.length === 0 && closedQuantity === 0 && current.status === 'OPEN';
+
+      if (!isVirgin) {
         return {
           success: false,
-          error: `Não é possível reduzir a quantidade para ${data.quantity}, pois ${totalAllocated} unidades estão alocadas em estruturas ativas. Desagrupe ou reduza a estrutura primeiro.`,
+          error: 'QUANTITY_IMMUTABLE: A quantidade original não pode ser alterada porque a posição possui execuções, alocações ou fechamentos registrados.',
         };
       }
+
+      if (data.quantity <= 0) {
+        return {
+          success: false,
+          error: 'INVALID_QUANTITY: A quantidade deve ser um número inteiro positivo.',
+        };
+      }
+
+      // Para correção estrita de posição virgem: atualiza atomicamente quantity e openQuantity
+      openQuantity = data.quantity;
+      closedQuantity = 0;
+      legacyClosedQuantity = 0;
+    }
+
+    const targetQuantity = data.quantity !== undefined ? data.quantity : current.quantity;
+    if (openQuantity < 0 || openQuantity > targetQuantity) {
+      return {
+        success: false,
+        error: `INVARIANT_VIOLATION: openQuantity (${openQuantity}) deve ser >= 0 e <= quantity (${targetQuantity}).`,
+      };
     }
 
     const strike = data.strike !== undefined ? data.strike : current.strike;
-    const quantity = data.quantity !== undefined ? data.quantity : current.quantity;
+    const quantity = targetQuantity;
     const entryPrice = data.entryPrice !== undefined ? data.entryPrice : current.entryPrice;
     const side = data.side || current.side;
     const optionType = data.optionType || current.optionType;
@@ -1146,6 +1288,10 @@ export async function updateOptionPosition(
 
     await db.update(optionPositions).set({
       ...data,
+      quantity,
+      openQuantity,
+      closedQuantity,
+      legacyClosedQuantity,
       allocatedCapital,
       breakEven: data.breakEven || breakEven,
       cdiRateAnnual: data.cdiRateAnnual !== undefined ? toAnnualRateDecimal(data.cdiRateAnnual) : current.cdiRateAnnual,
@@ -1299,6 +1445,11 @@ export async function seedInitialOptionsIfEmpty(): Promise<void> {
         side: 'SELL',
         strategyType: 'VENDA_PUT',
         quantity: 400,
+        legacyClosedQuantity: 0,
+        legacyQuality: null,
+        closedQuantity: 0,
+        openQuantity: 400,
+        realizedPnlReais: 0,
         strike: 38.69,
         entryPrice: 1.04,
         currentPrice: 0.29,
@@ -1331,6 +1482,11 @@ export async function seedInitialOptionsIfEmpty(): Promise<void> {
         side: 'BUY',
         strategyType: 'COMPRA_CALL',
         quantity: 200,
+        legacyClosedQuantity: 0,
+        legacyQuality: null,
+        closedQuantity: 0,
+        openQuantity: 200,
+        realizedPnlReais: 0,
         strike: 38.69,
         entryPrice: 1.18,
         currentPrice: 2.07,
@@ -1363,6 +1519,11 @@ export async function seedInitialOptionsIfEmpty(): Promise<void> {
         side: 'SELL',
         strategyType: 'VENDA_PUT',
         quantity: 500,
+        legacyClosedQuantity: 0,
+        legacyQuality: null,
+        closedQuantity: 0,
+        openQuantity: 500,
+        realizedPnlReais: 0,
         strike: 10.42,
         entryPrice: 0.50,
         currentPrice: 0.37,
@@ -1409,6 +1570,9 @@ export async function seedInitialOptionsIfEmpty(): Promise<void> {
           positionId: itubPutId,
           allocatedQuantity: 400,
           economicRole: 'FINANCING',
+          legacyClosedAllocatedQuantity: 0,
+          closedAllocatedQuantity: 0,
+          openAllocatedQuantity: 400,
           createdAt: now,
         },
         {
@@ -1417,9 +1581,26 @@ export async function seedInitialOptionsIfEmpty(): Promise<void> {
           positionId: itubCallId,
           allocatedQuantity: 200,
           economicRole: 'DIRECTIONAL',
+          legacyClosedAllocatedQuantity: 0,
+          closedAllocatedQuantity: 0,
+          openAllocatedQuantity: 200,
           createdAt: now,
         },
       ]);
+
+      await db.insert(strategyFundingSegments).values({
+        id: generateId('strat_fnd_seg'),
+        strategyId: stratId,
+        startDate: '2026-08-24',
+        endDate: null,
+        benchmarkCapitalReais: 15476.0,
+        capitalRemuneratedReais: 0,
+        collateralMode: 'IDLE_CASH',
+        collateralPctCdi: null,
+        sourceType: 'CREATION',
+        quality: 'FULL',
+        createdAt: now,
+      });
     }
   } catch (err) {
     console.error('[Options Actions] Erro ao semear posições iniciais:', err);

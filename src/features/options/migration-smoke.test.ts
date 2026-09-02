@@ -1,8 +1,10 @@
 /**
- * SQLite Migration Smoke Test (Fase 4.1)
+ * SQLite Migration Smoke Test (Fase 4.1.1 — Foundation Integration)
  * Testa a evolução não-destrutiva do schema, idempotência de migrações,
  * reconciliação canônica de baseline de legados (completos vs incompletos),
- * partial unique indexes, check constraints físicas e integridade relacional.
+ * canonical benchmark capital via Risk Recognizer B3 (Golden Case ITUB4 R$ 15.476,00),
+ * rebaixamento de funding presumido para PARTIAL,
+ * partial unique index, check constraints físicas de sourceType e integridade relacional.
  */
 
 import Database from 'better-sqlite3';
@@ -17,7 +19,7 @@ function assert(condition: boolean, msg: string) {
 
 export function runMigrationSmokeTest() {
   console.log('\n========================================');
-  console.log('🧪 RUNNING SQLITE MIGRATION SMOKE TEST (FASE 4.1)');
+  console.log('🧪 RUNNING SQLITE MIGRATION SMOKE TEST (FASE 4.1.1)');
   console.log('========================================\n');
 
   // 1. Criar banco em memória com schema LEGADO (sem as novas colunas e tabelas)
@@ -67,6 +69,8 @@ export function runMigrationSmokeTest() {
       underlying_ticker TEXT NOT NULL,
       collateral_mode TEXT DEFAULT 'IDLE_CASH',
       collateral_yield_pct_cdi REAL,
+      capital_remunerated_reais REAL,
+      collateral_coverage_pct REAL,
       status TEXT NOT NULL DEFAULT 'OPEN',
       opened_at TEXT NOT NULL,
       closed_at TEXT,
@@ -88,112 +92,126 @@ export function runMigrationSmokeTest() {
 
   console.log('--- ETAPA 1: Inserindo dados legados reais ---');
 
-  // Posição 1: OPEN normal (400 unidades)
+  // Posição 1: Golden Case ITUB4 Short Put ITUBU393 (400 unidades @ 1.04, strike 38.69)
   sqlite.prepare(`
     INSERT INTO option_positions (id, ticker_underlying, ticker_option, option_type, side, strategy_type, quantity, strike, entry_price, current_price, entry_date, expiration_date, allocated_capital, status)
-    VALUES ('pos_open_1', 'ITUB4', 'ITUBU393', 'PUT', 'SELL', 'VENDA_PUT', 400, 38.69, 1.04, 0.29, '2026-08-24', '2026-09-18', 15476.0, 'OPEN');
+    VALUES ('pos_itub_put', 'ITUB4', 'ITUBU393', 'PUT', 'SELL', 'VENDA_PUT', 400, 38.69, 1.04, 0.29, '2026-08-24', '2026-09-18', 15476.0, 'OPEN');
   `).run();
 
-  // Posição 2: CLOSED completo com exitPrice e exitDate (200 unidades, compra de Call a 1.18 saída a 2.07)
+  // Posição 2: Golden Case ITUB4 Long Call ITUBI393 (200 unidades @ 1.18, strike 38.69)
+  sqlite.prepare(`
+    INSERT INTO option_positions (id, ticker_underlying, ticker_option, option_type, side, strategy_type, quantity, strike, entry_price, current_price, entry_date, expiration_date, allocated_capital, status)
+    VALUES ('pos_itub_call', 'ITUB4', 'ITUBI393', 'CALL', 'BUY', 'COMPRA_CALL', 200, 38.69, 1.18, 2.07, '2026-08-24', '2026-09-18', 236.0, 'OPEN');
+  `).run();
+
+  // Posição 3: CLOSED completo com exitPrice e exitDate (200 unidades PETR4, saída a 0.20)
   sqlite.prepare(`
     INSERT INTO option_positions (id, ticker_underlying, ticker_option, option_type, side, strategy_type, quantity, strike, entry_price, current_price, exit_price, exit_date, entry_date, expiration_date, allocated_capital, status)
-    VALUES ('pos_closed_complete', 'ITUB4', 'ITUBI393', 'CALL', 'BUY', 'COMPRA_CALL', 200, 38.69, 1.18, 2.07, 2.07, '2026-09-02', '2026-08-24', '2026-09-18', 236.0, 'CLOSED');
+    VALUES ('pos_closed_complete', 'PETR4', 'PETRU300', 'PUT', 'SELL', 'VENDA_PUT', 200, 30.0, 0.80, 0.20, 0.20, '2026-09-02', '2026-08-24', '2026-09-18', 6000.0, 'CLOSED');
   `).run();
 
-  // Posição 3: CLOSED incompleto SEM exitPrice e SEM exitDate (300 unidades)
+  // Posição 4: CLOSED incompleto SEM exitPrice e SEM exitDate (300 unidades LREN3)
   sqlite.prepare(`
     INSERT INTO option_positions (id, ticker_underlying, ticker_option, option_type, side, strategy_type, quantity, strike, entry_price, current_price, exit_price, exit_date, entry_date, expiration_date, allocated_capital, status)
     VALUES ('pos_closed_incomplete', 'LREN3', 'LRENV104', 'PUT', 'SELL', 'VENDA_PUT', 300, 10.42, 0.50, 0.37, NULL, NULL, '2026-08-27', '2026-10-16', 3126.0, 'CLOSED');
   `).run();
 
-  // Posição 4: OPEN com alocação parcial (400 unidades no total, 100 alocadas em strategy e 300 livres)
+  // Posição 5: OPEN com funding presumido sem capital_remunerated_reais (100 unidades VALE3)
   sqlite.prepare(`
     INSERT INTO option_positions (id, ticker_underlying, ticker_option, option_type, side, strategy_type, quantity, strike, entry_price, current_price, entry_date, expiration_date, allocated_capital, status)
-    VALUES ('pos_partial_alloc', 'PETR4', 'PETRU300', 'PUT', 'SELL', 'VENDA_PUT', 400, 30.0, 0.80, 0.40, '2026-08-20', '2026-09-18', 12000.0, 'OPEN');
+    VALUES ('pos_assumed_csp', 'VALE3', 'VALEU600', 'PUT', 'SELL', 'VENDA_PUT', 100, 60.0, 1.50, 1.00, '2026-08-20', '2026-09-18', 6000.0, 'OPEN');
   `).run();
 
-  // Estratégia 1: CLOSED terminal associada à pos_closed_complete (Caso A: 100% inequívoca)
+  // Estratégia 1: Golden Case ITUB4 Financiada 2:1 (+200 CALL / -400 PUT)
+  sqlite.prepare(`
+    INSERT INTO option_strategies (id, name, strategy_type, book, underlying_ticker, collateral_mode, collateral_yield_pct_cdi, capital_remunerated_reais, collateral_coverage_pct, status, opened_at)
+    VALUES ('strat_golden_itub', 'ITUB4 — Call Financiada por Put 2:1', 'CUSTOM_MULTI_LEG', 'HYBRID', 'ITUB4', 'REMUNERATED_100_CDI', 100.0, 15476.0, 100.0, 'OPEN', '2026-08-24');
+  `).run();
+  sqlite.prepare(`
+    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity, economic_role)
+    VALUES ('leg_itub_put', 'strat_golden_itub', 'pos_itub_put', 400, 'FINANCING');
+  `).run();
+  sqlite.prepare(`
+    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity, economic_role)
+    VALUES ('leg_itub_call', 'strat_golden_itub', 'pos_itub_call', 200, 'DIRECTIONAL');
+  `).run();
+
+  // Estratégia 2: CLOSED terminal associada à pos_closed_complete (Caso A: 100% inequívoca)
   sqlite.prepare(`
     INSERT INTO option_strategies (id, name, strategy_type, underlying_ticker, collateral_mode, status, opened_at, closed_at)
-    VALUES ('strat_closed_A', 'Trava Call ITUB Encerrada', 'BULL_CALL_SPREAD', 'ITUB4', 'IDLE_CASH', 'CLOSED', '2026-08-24', '2026-09-02');
+    VALUES ('strat_closed_A', 'Venda Put PETR4 Encerrada', 'VENDA_PUT', 'PETR4', 'IDLE_CASH', 'CLOSED', '2026-08-24', '2026-09-02');
   `).run();
   sqlite.prepare(`
-    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity)
-    VALUES ('leg_closed_A', 'strat_closed_A', 'pos_closed_complete', 200);
+    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity, economic_role)
+    VALUES ('leg_closed_A', 'strat_closed_A', 'pos_closed_complete', 200, 'INCOME');
   `).run();
 
-  // Estratégia 2: CLOSED terminal associada à pos_closed_incomplete (Caso B: dados incompletos)
+  // Estratégia 3: CLOSED terminal associada à pos_closed_incomplete (Caso B: dados incompletos)
   sqlite.prepare(`
     INSERT INTO option_strategies (id, name, strategy_type, underlying_ticker, collateral_mode, status, opened_at, closed_at)
-    VALUES ('strat_closed_B', 'LREN3 Encerrada Incompleta', 'CUSTOM_MULTI_LEG', 'LREN3', 'IDLE_CASH', 'CLOSED', '2026-08-27', '2026-10-16');
+    VALUES ('strat_closed_B', 'LREN3 Encerrada Incompleta', 'VENDA_PUT', 'LREN3', 'IDLE_CASH', 'CLOSED', '2026-08-27', '2026-10-16');
   `).run();
   sqlite.prepare(`
-    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity)
-    VALUES ('leg_closed_B', 'strat_closed_B', 'pos_closed_incomplete', 300);
+    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity, economic_role)
+    VALUES ('leg_closed_B', 'strat_closed_B', 'pos_closed_incomplete', 300, 'INCOME');
   `).run();
 
-  // Estratégia 3: OPEN ativa associada à pos_open_1 (400 unidades) e pos_partial_alloc (100 unidades)
+  // Estratégia 4: OPEN com funding remunerado mas SEM capital_remunerated_reais (Assumed Funding Legacy)
   sqlite.prepare(`
-    INSERT INTO option_strategies (id, name, strategy_type, underlying_ticker, collateral_mode, collateral_yield_pct_cdi, status, opened_at)
-    VALUES ('strat_active_open', 'Estrutura Ativa Aberta', 'CUSTOM_MULTI_LEG', 'ITUB4', 'REMUNERATED_100_CDI', 100.0, 'OPEN', '2026-08-24');
+    INSERT INTO option_strategies (id, name, strategy_type, underlying_ticker, collateral_mode, collateral_yield_pct_cdi, capital_remunerated_reais, status, opened_at)
+    VALUES ('strat_assumed_funding', 'VALE3 CSP Funding Assumido', 'VENDA_PUT', 'VALE3', 'REMUNERATED_100_CDI', 100.0, NULL, 'OPEN', '2026-08-20');
   `).run();
   sqlite.prepare(`
-    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity)
-    VALUES ('leg_active_1', 'strat_active_open', 'pos_open_1', 400);
-  `).run();
-  sqlite.prepare(`
-    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity)
-    VALUES ('leg_active_2', 'strat_active_open', 'pos_partial_alloc', 100);
+    INSERT INTO option_strategy_legs (id, strategy_id, position_id, allocated_quantity, economic_role)
+    VALUES ('leg_assumed', 'strat_assumed_funding', 'pos_assumed_csp', 100, 'INCOME');
   `).run();
 
   assert(true, 'Banco legado preparado com posições e estratégias abertas e fechadas');
 
-  console.log('\n--- ETAPA 2: Executando Migração Fase 4.1 ---');
+  console.log('\n--- ETAPA 2: Executando Migração Fase 4.1.1 ---');
   applyMigrations(sqlite);
   assert(true, 'applyMigrations executada com sucesso');
 
   console.log('\n--- ETAPA 3: Verificando Posições e Reconciliação de Baseline ---');
 
-  // Posição 1 (OPEN): open_quantity = 400, closed_quantity = 0, legacy_closed_quantity = 0
-  const pos1: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_open_1');
-  assert(pos1.open_quantity === 400, 'Posição OPEN possui open_quantity = 400');
-  assert(pos1.closed_quantity === 0, 'Posição OPEN possui closed_quantity = 0');
-  assert(pos1.legacy_closed_quantity === 0, 'Posição OPEN possui legacy_closed_quantity = 0');
-  assert(pos1.realized_pnl_reais === 0, 'Posição OPEN possui realized_pnl_reais = 0');
+  // Posição Golden ITUB Put (OPEN): open_quantity = 400, closed_quantity = 0, legacy_closed_quantity = 0
+  const posItubPut: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_itub_put');
+  assert(posItubPut.open_quantity === 400, 'Posição OPEN possui open_quantity = 400');
+  assert(posItubPut.closed_quantity === 0, 'Posição OPEN possui closed_quantity = 0');
+  assert(posItubPut.legacy_closed_quantity === 0, 'Posição OPEN possui legacy_closed_quantity = 0');
+  assert(posItubPut.realized_pnl_reais === 0, 'Posição OPEN possui realized_pnl_reais = 0');
 
-  // Posição 2 (CLOSED Completa): open = 0, closed = 200, legacy_closed = 0, execution gerada
-  const pos2: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_closed_complete');
-  assert(pos2.open_quantity === 0, 'Posição CLOSED completa possui open_quantity = 0');
-  assert(pos2.closed_quantity === 200, 'Posição CLOSED completa possui closed_quantity = 200');
-  assert(pos2.legacy_closed_quantity === 0, 'Posição CLOSED completa possui legacy_closed_quantity = 0');
-  const expectedPnl2 = (2.07 - 1.18) * 200; // +178.00
-  assert(Math.abs(pos2.realized_pnl_reais - expectedPnl2) < 0.001, `P&L Realizado apurado no servidor com precisão (+R$ ${expectedPnl2.toFixed(2)})`);
+  // Posição 3 (CLOSED Completa): open = 0, closed = 200, legacy_closed = 0, execution gerada
+  const posComplete: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_closed_complete');
+  assert(posComplete.open_quantity === 0, 'Posição CLOSED completa possui open_quantity = 0');
+  assert(posComplete.closed_quantity === 200, 'Posição CLOSED completa possui closed_quantity = 200');
+  assert(posComplete.legacy_closed_quantity === 0, 'Posição CLOSED completa possui legacy_closed_quantity = 0');
+  const expectedPnlComplete = (0.80 - 0.20) * 200; // Venda recompra mais barata: +R$ 120.00
+  assert(Math.abs(posComplete.realized_pnl_reais - expectedPnlComplete) < 0.001, `P&L Realizado apurado no servidor com precisão (+R$ ${expectedPnlComplete.toFixed(2)})`);
 
-  const exec2: any = sqlite.prepare('SELECT * FROM option_position_executions WHERE position_id = ?').get('pos_closed_complete');
-  assert(exec2 !== undefined, 'Execution gerada para posição fechada completa');
-  assert(exec2.source === 'LEGACY_MIGRATION', 'Execution marcada como LEGACY_MIGRATION');
-  assert(exec2.quantity === 200, 'Execution quantidade = 200');
-  assert(exec2.price === 2.07, 'Execution preço = 2.07');
-  assert(exec2.execution_date === '2026-09-02', 'Execution data real = 2026-09-02');
-  assert(exec2.strategy_id === 'strat_closed_A', 'Execution atribuída à estratégia pai');
-  assert(exec2.strategy_leg_id === 'leg_closed_A', 'Execution atribuída à strategy leg (Caso A inequívoco)');
+  const execComplete: any = sqlite.prepare('SELECT * FROM option_position_executions WHERE position_id = ?').get('pos_closed_complete');
+  assert(execComplete !== undefined, 'Execution gerada para posição fechada completa');
+  assert(execComplete.source === 'LEGACY_MIGRATION', 'Execution marcada como LEGACY_MIGRATION');
+  assert(execComplete.quantity === 200, 'Execution quantidade = 200');
+  assert(execComplete.price === 0.20, 'Execution preço = 0.20');
+  assert(execComplete.execution_date === '2026-09-02', 'Execution data real = 2026-09-02');
+  assert(execComplete.strategy_id === 'strat_closed_A', 'Execution atribuída à estratégia pai');
+  assert(execComplete.strategy_leg_id === 'leg_closed_A', 'Execution atribuída à strategy leg (Caso A inequívoco)');
 
-  // Reconciliação da Posição 2: closedQuantity === legacy_closed_quantity + SUM(executions.quantity)
-  const sumExec2: any = sqlite.prepare('SELECT COALESCE(SUM(quantity), 0) AS total FROM option_position_executions WHERE position_id = ?').get('pos_closed_complete');
-  assert(pos2.closed_quantity === pos2.legacy_closed_quantity + sumExec2.total, 'Reconciliação Canônica Posição 2: closed_quantity === legacy_closed + sum(executions)');
+  // Reconciliação da Posição Completa: closedQuantity === legacy_closed_quantity + SUM(executions.quantity)
+  const sumExecComplete: any = sqlite.prepare('SELECT COALESCE(SUM(quantity), 0) AS total FROM option_position_executions WHERE position_id = ?').get('pos_closed_complete');
+  assert(posComplete.closed_quantity === posComplete.legacy_closed_quantity + sumExecComplete.total, 'Reconciliação Canônica Posição Completa: closed_quantity === legacy_closed + sum(executions)');
 
-  // Posição 3 (CLOSED Incompleta): open = 0, closed = 300, legacy_closed = 300, SEM execution gerada
-  const pos3: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_closed_incomplete');
-  assert(pos3.open_quantity === 0, 'Posição CLOSED incompleta possui open_quantity = 0');
-  assert(pos3.closed_quantity === 300, 'Posição CLOSED incompleta possui closed_quantity = 300');
-  assert(pos3.legacy_closed_quantity === 300, 'Posição CLOSED incompleta possui legacy_closed_quantity = 300 (baseline)');
-  assert(pos3.legacy_quality === 'LEGACY_INCOMPLETE', 'Posição marcada com legacy_quality = LEGACY_INCOMPLETE');
+  // Posição 4 (CLOSED Incompleta): open = 0, closed = 300, legacy_closed = 300, SEM execution gerada
+  const posIncomplete: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_closed_incomplete');
+  assert(posIncomplete.open_quantity === 0, 'Posição CLOSED incompleta possui open_quantity = 0');
+  assert(posIncomplete.closed_quantity === 300, 'Posição CLOSED incompleta possui closed_quantity = 300');
+  assert(posIncomplete.legacy_closed_quantity === 300, 'Posição CLOSED incompleta possui legacy_closed_quantity = 300 (baseline)');
+  assert(posIncomplete.legacy_quality === 'LEGACY_INCOMPLETE', 'Posição marcada com legacy_quality = LEGACY_INCOMPLETE');
 
-  const exec3Count: any = sqlite.prepare('SELECT COUNT(*) AS c FROM option_position_executions WHERE position_id = ?').get('pos_closed_incomplete');
-  assert(exec3Count.c === 0, 'NÃO fabricar execution fictícia para posição legacy incompleta sem data/preço');
-
-  // Reconciliação da Posição 3: closedQuantity (300) === legacy_closed_quantity (300) + SUM(executions) (0)
-  assert(pos3.closed_quantity === pos3.legacy_closed_quantity + exec3Count.c, 'Reconciliação Canônica Posição 3: 300 === 300 + 0 (Matematicamente Perfeita)');
+  const execIncompleteCount: any = sqlite.prepare('SELECT COUNT(*) AS c FROM option_position_executions WHERE position_id = ?').get('pos_closed_incomplete');
+  assert(execIncompleteCount.c === 0, 'NÃO fabricar execution fictícia para posição legacy incompleta sem data/preço');
+  assert(posIncomplete.closed_quantity === posIncomplete.legacy_closed_quantity + execIncompleteCount.c, 'Reconciliação Canônica Posição Incompleta: 300 === 300 + 0 (Matematicamente Perfeita)');
 
   console.log('\n--- ETAPA 4: Verificando Strategy Legs e Anti-Double-Counting ---');
 
@@ -218,40 +236,51 @@ export function runMigrationSmokeTest() {
   assert(legB.closed_allocated_quantity === legB.legacy_closed_allocated_quantity + sumExecLegB.total, 'Reconciliação Leg B: closed_allocated === legacy_closed + executions (300 === 300 + 0)');
   assert(legB.closed_allocated_quantity <= legB.allocated_quantity, 'Invariante: closed_allocated_quantity <= allocated_quantity (Zero Double Counting!)');
 
-  // Leg Active 1 & 2 (OPEN)
-  const legAct1: any = sqlite.prepare('SELECT * FROM option_strategy_legs WHERE id = ?').get('leg_active_1');
-  assert(legAct1.open_allocated_quantity === 400, 'Leg Ativa 1: open_allocated = 400');
-  assert(legAct1.closed_allocated_quantity === 0, 'Leg Ativa 1: closed_allocated = 0');
-
-  const legAct2: any = sqlite.prepare('SELECT * FROM option_strategy_legs WHERE id = ?').get('leg_active_2');
-  assert(legAct2.open_allocated_quantity === 100, 'Leg Ativa 2 (Parcial): open_allocated = 100');
-  assert(legAct2.closed_allocated_quantity === 0, 'Leg Ativa 2: closed_allocated = 0');
-
-  // Posição 4 (Parcial): 400 total - 100 alocadas = 300 livres
-  const pos4: any = sqlite.prepare('SELECT * FROM option_positions WHERE id = ?').get('pos_partial_alloc');
-  const freeQuantityPos4 = pos4.open_quantity - legAct2.open_allocated_quantity;
-  assert(freeQuantityPos4 === 300, 'Quantidade livre disponível da posição 4 calculada exatamente: 400 - 100 = 300');
-
-  console.log('\n--- ETAPA 5: Verificando Strategy Funding Timeline Bootstrap ---');
+  console.log('\n--- ETAPA 5: Verificando Strategy Funding Timeline Bootstrap (Golden Case ITUB & Assumed Funding) ---');
 
   const segments: any[] = sqlite.prepare('SELECT * FROM strategy_funding_segments ORDER BY strategy_id').all();
-  assert(segments.length === 3, 'Todas as 3 estratégias possuem segmento inicial criado');
+  assert(segments.length === 4, 'Todas as 4 estratégias possuem segmento inicial criado');
 
-  const segActive: any = sqlite.prepare('SELECT * FROM strategy_funding_segments WHERE strategy_id = ?').get('strat_active_open');
-  assert(segActive.source_type === 'CREATION', 'Segmento ativo criado com source_type = CREATION');
-  assert(segActive.quality === 'FULL', 'Segmento ativo possui quality = FULL');
-  assert(segActive.end_date === null, 'Segmento de estratégia aberta possui end_date = null (vigente)');
-  assert(segActive.benchmark_capital_reais > 0, `Benchmark capital calculado da estrutura ativa: R$ ${segActive.benchmark_capital_reais.toFixed(2)}`);
-  assert(segActive.capital_remunerated_reais <= segActive.benchmark_capital_reais, 'Capital remunerado <= benchmark capital');
+  // P0.1 & P1.8: Golden Case ITUB4 — Validação Estrita do Benchmark Capital Canônico (R$ 15.476,00)
+  const segItub: any = sqlite.prepare('SELECT * FROM strategy_funding_segments WHERE strategy_id = ?').get('strat_golden_itub');
+  assert(segItub.source_type === 'CREATION', 'Segmento Golden ITUB possui source_type = CREATION');
+  assert(segItub.maneuver_event_id === null, 'Segmento CREATION possui maneuver_event_id = NULL');
+  assert(segItub.funding_event_id === null, 'Segmento CREATION possui funding_event_id = NULL');
+  assert(segItub.quality === 'FULL', 'Segmento Golden ITUB com capital preenchido possui quality = FULL');
+  assert(segItub.end_date === null, 'Segmento Golden ITUB aberto possui end_date = null');
+  assert(
+    Math.abs(segItub.benchmark_capital_reais - 15476.0) < 0.001,
+    `P0.1 Aprovado: Benchmark Capital da ITUB 2:1 calculado rigorosamente em R$ 15.476,00 (obtido R$ ${segItub.benchmark_capital_reais.toFixed(2)}, NÃO 15.712)`
+  );
+  assert(
+    Math.abs(segItub.capital_remunerated_reais - 15476.0) < 0.001,
+    `Capital remunerado preservado em R$ 15.476,00 (obtido R$ ${segItub.capital_remunerated_reais.toFixed(2)})`
+  );
+  assert(segItub.capital_remunerated_reais <= segItub.benchmark_capital_reais, 'Capital remunerado <= benchmark capital');
 
-  console.log('\n--- ETAPA 6: Validando Constraints Físicas e Partial Unique Index ---');
+  // P1.6: Funding Presumido não pode virar FULL (deve ser rebaixado para PARTIAL)
+  const segAssumed: any = sqlite.prepare('SELECT * FROM strategy_funding_segments WHERE strategy_id = ?').get('strat_assumed_funding');
+  assert(
+    Math.abs(segAssumed.benchmark_capital_reais - 6000.0) < 0.001,
+    `Benchmark da VALE3 CSP calculado em R$ 6.000,00 (obtido R$ ${segAssumed.benchmark_capital_reais.toFixed(2)})`
+  );
+  assert(
+    Math.abs(segAssumed.capital_remunerated_reais - 6000.0) < 0.001,
+    `Capital remunerado presumido em 100% (R$ ${segAssumed.capital_remunerated_reais.toFixed(2)})`
+  );
+  assert(
+    segAssumed.quality === 'PARTIAL',
+    'P1.6 Aprovado: Funding legacy presumido sem capital preenchido classificado estritamente como PARTIAL (NÃO promovido para FULL)'
+  );
 
-  // 1. Partial Unique Index: Tentar inserir um SEGUNDO segmento aberto para strat_active_open deve FALHAR
+  console.log('\n--- ETAPA 6: Validando Constraints Físicas, Source Coherence e Partial Unique Index ---');
+
+  // 1. Partial Unique Index: Tentar inserir um SEGUNDO segmento aberto para strat_golden_itub deve FALHAR
   let threwPartialUnique = false;
   try {
     sqlite.prepare(`
       INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, created_at)
-      VALUES ('seg_duplicate_open', 'strat_active_open', '2026-09-02', NULL, 7738.0, 7738.0, 'REMUNERATED_100_CDI', 'MANEUVER', datetime('now'));
+      VALUES ('seg_duplicate_open', 'strat_golden_itub', '2026-09-02', NULL, 7738.0, 7738.0, 'REMUNERATED_100_CDI', 'CREATION', datetime('now'));
     `).run();
   } catch (err: any) {
     threwPartialUnique = true;
@@ -262,11 +291,51 @@ export function runMigrationSmokeTest() {
   // Inserir segmento FECHADO (end_date preenchido) para a mesma estratégia deve ter SUCESSO
   sqlite.prepare(`
     INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, created_at)
-    VALUES ('seg_historical_closed', 'strat_active_open', '2026-08-24', '2026-09-02', 15476.0, 15476.0, 'REMUNERATED_100_CDI', 'CREATION', datetime('now'));
+    VALUES ('seg_historical_closed', 'strat_golden_itub', '2026-08-24', '2026-09-02', 15476.0, 15476.0, 'REMUNERATED_100_CDI', 'CREATION', datetime('now'));
   `).run();
   assert(true, 'Inserção de segmento histórico fechado para a mesma estratégia permitida sem violação');
 
-  // 2. Check Constraint: capital remunerado > benchmark capital deve FALHAR
+  // 2. P1.7: Physical CHECK Constraint para Coerência de sourceType
+  // 2a. source_type = MANEUVER com maneuver_event_id NULL deve FALHAR pelo CHECK
+  let threwManeuverCheck = false;
+  try {
+    sqlite.prepare(`
+      INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, maneuver_event_id, created_at)
+      VALUES ('seg_incoherent_maneuver', 'strat_closed_A', '2026-08-24', '2026-09-02', 6000.0, 0, 'IDLE_CASH', 'MANEUVER', NULL, datetime('now'));
+    `).run();
+  } catch (err: any) {
+    threwManeuverCheck = true;
+    assert(err.message.includes('CHECK constraint failed'), 'P1.7: CHECK físico barrou source_type = MANEUVER com maneuver_event_id NULL');
+  }
+  assert(threwManeuverCheck, 'Constraint física de coerência de MANEUVER validada');
+
+  // 2b. source_type = FUNDING_CHANGE com funding_event_id NULL deve FALHAR pelo CHECK
+  let threwFundingCheck = false;
+  try {
+    sqlite.prepare(`
+      INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, funding_event_id, created_at)
+      VALUES ('seg_incoherent_funding', 'strat_closed_A', '2026-08-24', '2026-09-02', 6000.0, 0, 'IDLE_CASH', 'FUNDING_CHANGE', NULL, datetime('now'));
+    `).run();
+  } catch (err: any) {
+    threwFundingCheck = true;
+    assert(err.message.includes('CHECK constraint failed'), 'P1.7: CHECK físico barrou source_type = FUNDING_CHANGE com funding_event_id NULL');
+  }
+  assert(threwFundingCheck, 'Constraint física de coerência de FUNDING_CHANGE validada');
+
+  // 2c. source_type = CREATION com maneuver_event_id preenchido deve FALHAR pelo CHECK
+  let threwCreationCheck = false;
+  try {
+    sqlite.prepare(`
+      INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, maneuver_event_id, created_at)
+      VALUES ('seg_incoherent_creation', 'strat_closed_A', '2026-08-24', '2026-09-02', 6000.0, 0, 'IDLE_CASH', 'CREATION', 'some_maneuver_id', datetime('now'));
+    `).run();
+  } catch (err: any) {
+    threwCreationCheck = true;
+    assert(err.message.includes('CHECK constraint failed'), 'P1.7: CHECK físico barrou source_type = CREATION com maneuver_event_id != NULL');
+  }
+  assert(threwCreationCheck, 'Constraint física de coerência de CREATION validada');
+
+  // 3. Check Constraint: capital remunerado > benchmark capital deve FALHAR
   let threwExcessRemunerated = false;
   try {
     sqlite.prepare(`
@@ -279,7 +348,7 @@ export function runMigrationSmokeTest() {
   }
   assert(threwExcessRemunerated, 'Check constraint de capital remunerado validada com sucesso');
 
-  // 3. Check Constraint: end_date < start_date deve FALHAR
+  // 4. Check Constraint: end_date < start_date deve FALHAR
   let threwInvertedDates = false;
   try {
     sqlite.prepare(`
@@ -292,12 +361,12 @@ export function runMigrationSmokeTest() {
   }
   assert(threwInvertedDates, 'Check constraint de datas invertidas validada com sucesso');
 
-  // 4. Check Constraint: execution quantity <= 0 deve FALHAR
+  // 5. Check Constraint: execution quantity <= 0 deve FALHAR
   let threwZeroQuantity = false;
   try {
     sqlite.prepare(`
       INSERT INTO option_position_executions (id, position_id, execution_type, quantity, price, execution_date, entry_price_basis_reais, gross_realized_pnl_reais, net_realized_pnl_reais, created_at)
-      VALUES ('exec_invalid_qty', 'pos_open_1', 'BUY_TO_CLOSE', 0, 1.0, '2026-09-02', 1.04, 0, 0, datetime('now'));
+      VALUES ('exec_invalid_qty', 'pos_itub_put', 'BUY_TO_CLOSE', 0, 1.0, '2026-09-02', 1.04, 0, 0, datetime('now'));
     `).run();
   } catch (err: any) {
     threwZeroQuantity = true;
@@ -337,9 +406,9 @@ export function runMigrationSmokeTest() {
   const execCountAfter = sqlite.prepare('SELECT COUNT(*) AS c FROM option_position_executions').get() as any;
   const segCountAfter = sqlite.prepare('SELECT COUNT(*) AS c FROM strategy_funding_segments').get() as any;
 
-  assert(posCountAfter.c === 4, 'Idempotência: contagem de posições inalterada');
+  assert(posCountAfter.c === 5, 'Idempotência: contagem de posições inalterada (5)');
   assert(execCountAfter.c === 1, 'Idempotência: nenhuma execution duplicada gerada na segunda execução');
-  assert(segCountAfter.c === 4, 'Idempotência: nenhum segmento duplicado gerado na segunda execução');
+  assert(segCountAfter.c === 5, 'Idempotência: nenhum segmento duplicado gerado na segunda execução (4 iniciais + 1 histórico fechado)');
 
   sqlite.close();
 
