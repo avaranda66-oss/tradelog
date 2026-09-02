@@ -24,6 +24,7 @@ import {
   type OptionMarketSnapshot,
   type StrategyEconomicPerformance,
 } from './calculations';
+import { hasQualityNote } from './components/StrategyEconomicStorytellingCard';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -1137,8 +1138,45 @@ export function runAllTests() {
   assert(multiStrikeCspStrat.metrics.maxLossType === 'FINITE', 'Multi Strike CSP: Max loss permanece calculável (FINITE)');
   assert(multiStrikeCspStrat.metrics.breakEvenInferior === null, 'Multi Strike CSP: breakEvenInferior é null (não fabrica break-even médio enganoso)');
 
+  // ─── 9. QUALITY NOTES INTERPRETATION HELPER TESTS ───
+  console.log('\n9. Quality Notes Interpretation Helper Tests:');
+  assert(
+    hasQualityNote(['ASSUMED_FULL_COLLATERAL_COVERAGE'], 'ASSUMED_FULL_COLLATERAL_COVERAGE') === true,
+    'hasQualityNote: Correspondência exata'
+  );
+  assert(
+    hasQualityNote(
+      ['ASSUMED_FULL_COLLATERAL_COVERAGE: Capital remunerado não especificado; assumindo 100%'],
+      'ASSUMED_FULL_COLLATERAL_COVERAGE'
+    ) === true,
+    'hasQualityNote: Correspondência de prefixo com mensagem contextual'
+  );
+  assert(
+    hasQualityNote(
+      ['CLOSED_AT_REQUIRED: Data de encerramento/rolagem ausente; apuração encerrada.'],
+      'CLOSED_AT_REQUIRED'
+    ) === true,
+    'hasQualityNote: CLOSED_AT_REQUIRED detectado com mensagem contextual'
+  );
+  assert(
+    hasQualityNote(['OTHER_CODE: Mensagem'], 'CLOSED_AT_REQUIRED') === false,
+    'hasQualityNote: Código inexistente retorna false'
+  );
+  assert(
+    hasQualityNote(null, 'CLOSED_AT_REQUIRED') === false,
+    'hasQualityNote: Notas nulas retornam false com segurança'
+  );
+  assert(
+    hasQualityNote([], 'CLOSED_AT_REQUIRED') === false,
+    'hasQualityNote: Array vazio retorna false'
+  );
+  assert(
+    hasQualityNote(['CLOSED_AT_REQUIRED_EXTRA: Mensagem'], 'CLOSED_AT_REQUIRED') === false,
+    'hasQualityNote: Prefixo falso sem separador dois-pontos não colide'
+  );
+
   console.log('\n========================================');
-  console.log('✅ ALL 86 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
+  console.log('✅ ALL UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');
 }
 

@@ -8,6 +8,11 @@ interface StrategyEconomicStorytellingCardProps {
   onOpenFundingModal?: (strategy: EnrichedOptionStrategy) => void;
 }
 
+export function hasQualityNote(notes?: string[] | null, code?: string): boolean {
+  if (!notes || !code) return false;
+  return notes.some((note) => note === code || note.startsWith(`${code}:`));
+}
+
 export function StrategyEconomicStorytellingCard({
   strategy,
   onOpenFundingModal,
@@ -19,7 +24,8 @@ export function StrategyEconomicStorytellingCard({
   const isMtm = ep.resultNature === 'MTM';
   const isPositivePnl = ep.optionPnlReais >= 0;
   const isPositiveExcess = ep.excessReturnVsCdiReais >= 0;
-  const isAssumedFunding = ep.qualityNotes?.includes('ASSUMED_FULL_COLLATERAL_COVERAGE');
+  const isAssumedFunding = hasQualityNote(ep.qualityNotes, 'ASSUMED_FULL_COLLATERAL_COVERAGE');
+  const isMissingClosedAt = hasQualityNote(ep.qualityNotes, 'CLOSED_AT_REQUIRED');
 
   // Narrativa temporal e de realização
   const timeContextText = isMtm
@@ -239,7 +245,7 @@ export function StrategyEconomicStorytellingCard({
         <div className="text-slate-300 leading-relaxed text-xs">
           {!canCompareToCdi ? (
             <span>
-              {ep.qualityNotes?.includes('CLOSED_AT_REQUIRED')
+              {isMissingClosedAt
                 ? 'Data de encerramento da operação ausente no registro histórico.'
                 : 'Dados temporais ou base de capital insuficientes para uma comparação consistente com o CDI.'}{' '}
               As opções {isMtm ? 'estão registrando' : 'registraram'}{' '}

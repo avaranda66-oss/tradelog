@@ -377,6 +377,46 @@ export async function runActionsSuiteTests() {
     assert(invalidCovRes.success === false, 'Pre-Insert Validation: Cobertura > 100% bloqueada');
     assert(Boolean(invalidCovRes.error?.includes('INVALID_COLLATERAL_COVERAGE_PERCENT')), 'Pre-Insert Validation: Retorna erro INVALID_COLLATERAL_COVERAGE_PERCENT');
 
+    // 4.3.1. Rejeição de NaN e Infinity no groupOptionPositionsAction
+    const groupNaNRes = await groupOptionPositionsAction({
+      name: 'Teste Group NaN',
+      strategyType: 'CUSTOM_MULTI_LEG',
+      underlyingTicker: 'TEST4',
+      collateralMode: 'CUSTOM',
+      collateralYieldPctCDI: NaN,
+      legs: [
+        { positionId: testPos1Id, allocatedQuantity: 10, economicRole: 'FINANCING' },
+        { positionId: testPos2Id, allocatedQuantity: 10, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupNaNRes.success === false, 'Pre-Insert Validation: Rejeição de NaN em collateralYieldPctCDI');
+
+    const groupInfRes = await groupOptionPositionsAction({
+      name: 'Teste Group Infinity',
+      strategyType: 'CUSTOM_MULTI_LEG',
+      underlyingTicker: 'TEST4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: Infinity,
+      legs: [
+        { positionId: testPos1Id, allocatedQuantity: 10, economicRole: 'FINANCING' },
+        { positionId: testPos2Id, allocatedQuantity: 10, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupInfRes.success === false, 'Pre-Insert Validation: Rejeição de Infinity em collateralCoveragePct');
+
+    const groupNaNCapRes = await groupOptionPositionsAction({
+      name: 'Teste Group NaN Capital',
+      strategyType: 'CUSTOM_MULTI_LEG',
+      underlyingTicker: 'TEST4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      capitalRemuneratedReais: NaN,
+      legs: [
+        { positionId: testPos1Id, allocatedQuantity: 10, economicRole: 'FINANCING' },
+        { positionId: testPos2Id, allocatedQuantity: 10, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupNaNCapRes.success === false, 'Pre-Insert Validation: Rejeição de NaN em capitalRemuneratedReais');
+
     // 4.4. Sucesso com Funding Zero Preservado (0% Coverage e R$ 0 Remunerado)
     const zeroFundingRes = await groupOptionPositionsAction({
       name: 'Teste Zero Funding Preservado',
