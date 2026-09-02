@@ -672,10 +672,23 @@ export async function groupOptionPositionsAction(params: {
 
     const posIds = params.legs.map((l) => l.positionId);
 
+    const effectiveCollateralMode = params.collateralMode || 'IDLE_CASH';
+
     // Validações imediatas de input
-    if (params.collateralMode === 'CUSTOM') {
+    if (effectiveCollateralMode === 'CUSTOM') {
       if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || !Number.isFinite(params.collateralYieldPctCDI) || params.collateralYieldPctCDI < 0) {
         return { success: false, error: 'CUSTOM_COLLATERAL_PERCENT_REQUIRED: Informe um percentual válido e não-negativo (>= 0) para o CDI customizado.' };
+      }
+    }
+
+    if (effectiveCollateralMode !== 'IDLE_CASH') {
+      const hasCoverage = params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null;
+      const hasRemunerated = params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null;
+      if (!hasCoverage && !hasRemunerated) {
+        return {
+          success: false,
+          error: 'EXPLICIT_FUNDING_SPLIT_REQUIRED: Para modalidades de colateral remunerado, é obrigatório informar explicitamente a porcentagem de cobertura ou o capital remunerado.',
+        };
       }
     }
 
@@ -751,14 +764,30 @@ export async function groupOptionPositionsAction(params: {
       });
       const benchmarkCapitalReais = riskProfile.capitalReservedReais;
 
-      if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
-        if (params.capitalRemuneratedReais < 0) {
-          throw new Error('INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.');
+      let finalCapitalRemunerated: number | null = null;
+      let finalCoveragePct: number | null = null;
+
+      if (effectiveCollateralMode === 'IDLE_CASH') {
+        finalCapitalRemunerated = 0;
+        finalCoveragePct = null;
+      } else {
+        if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+          finalCoveragePct = params.collateralCoveragePct;
+          finalCapitalRemunerated = benchmarkCapitalReais * (params.collateralCoveragePct / 100);
+        } else if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
+          finalCapitalRemunerated = params.capitalRemuneratedReais;
+          finalCoveragePct = benchmarkCapitalReais > 0 ? (params.capitalRemuneratedReais / benchmarkCapitalReais) * 100 : null;
         }
-        if (benchmarkCapitalReais > 0 && params.capitalRemuneratedReais > benchmarkCapitalReais + 0.01) {
-          throw new Error(
-            `REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK: Capital remunerado (R$ ${params.capitalRemuneratedReais.toFixed(2)}) não pode exceder o capital de referência do benchmark (R$ ${benchmarkCapitalReais.toFixed(2)}).`
-          );
+
+        if (finalCapitalRemunerated !== null) {
+          if (finalCapitalRemunerated < 0) {
+            throw new Error('INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.');
+          }
+          if (benchmarkCapitalReais > 0 && finalCapitalRemunerated > benchmarkCapitalReais + 0.01) {
+            throw new Error(
+              `REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK: Capital remunerado (R$ ${finalCapitalRemunerated.toFixed(2)}) não pode exceder o capital de referência do benchmark (R$ ${benchmarkCapitalReais.toFixed(2)}).`
+            );
+          }
         }
       }
 
@@ -780,10 +809,10 @@ export async function groupOptionPositionsAction(params: {
         strategyType: detectedType,
         book: detectedBook,
         underlyingTicker,
-        collateralMode: params.collateralMode || 'IDLE_CASH',
+        collateralMode: effectiveCollateralMode,
         collateralYieldPctCDI: params.collateralYieldPctCDI ?? null,
-        capitalRemuneratedReais: params.capitalRemuneratedReais ?? null,
-        collateralCoveragePct: params.collateralCoveragePct ?? null,
+        capitalRemuneratedReais: finalCapitalRemunerated,
+        collateralCoveragePct: finalCoveragePct,
         status: 'OPEN',
         openedAt,
         notes: params.notes,
@@ -822,21 +851,14 @@ export async function groupOptionPositionsAction(params: {
       }
 
       // Inserir o segmento de funding inicial concreto (Bootstrap da Timeline para a nova estrutura)
-      let initialRemunerated = params.capitalRemuneratedReais ?? 0;
-      if (params.collateralMode === 'IDLE_CASH') {
-        initialRemunerated = 0;
-      } else if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
-        initialRemunerated = benchmarkCapitalReais * (params.collateralCoveragePct / 100);
-      }
-
       tx.insert(strategyFundingSegments).values({
         id: generateId('strat_fnd_seg'),
         strategyId,
         startDate: openedAt,
         endDate: null,
         benchmarkCapitalReais,
-        capitalRemuneratedReais: initialRemunerated,
-        collateralMode: params.collateralMode || 'IDLE_CASH',
+        capitalRemuneratedReais: finalCapitalRemunerated ?? 0,
+        collateralMode: effectiveCollateralMode,
         collateralPctCdi: params.collateralYieldPctCDI ?? null,
         sourceType: 'CREATION',
         quality: 'FULL',
@@ -865,18 +887,21 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
       return { success: false, error: 'Estrutura não encontrada.' };
     }
 
-    // P0.5: Verifica se a estratégia possui histórico contábil (execuções ou manobras)
+    // P0.3 (Fase 4.1.2): Verifica se a estratégia possui histórico contábil (execuções, manobras ou eventos de funding)
     const execs = await db.query.optionPositionExecutions.findMany({
       where: eq(optionPositionExecutions.strategyId, strategyId),
     });
     const maneuvers = await db.query.strategyManeuverEvents.findMany({
       where: eq(strategyManeuverEvents.strategyId, strategyId),
     });
+    const fundingEvents = await db.query.strategyFundingEvents.findMany({
+      where: eq(strategyFundingEvents.strategyId, strategyId),
+    });
 
-    if (execs.length > 0 || maneuvers.length > 0) {
+    if (execs.length > 0 || maneuvers.length > 0 || fundingEvents.length > 0) {
       return {
         success: false,
-        error: 'STRATEGY_HAS_FINANCIAL_HISTORY: Esta estrutura possui histórico financeiro auditável (execuções ou manobras) e não pode ser desagrupada. O histórico deve ser preservado para fins contábeis.',
+        error: 'STRATEGY_HAS_FINANCIAL_HISTORY: Esta estrutura possui histórico financeiro auditável (execuções, manobras ou alterações de funding) e não pode ser desagrupada. O histórico deve ser preservado para fins contábeis.',
       };
     }
 
@@ -899,9 +924,8 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
         }).run();
       }
 
-      // Remove segmentos e eventos de funding da estrutura virgem antes de deletá-la
+      // Remove apenas o segmento de criação da estrutura 100% virgem antes de deletá-la
       tx.delete(strategyFundingSegments).where(eq(strategyFundingSegments.strategyId, strategyId)).run();
-      tx.delete(strategyFundingEvents).where(eq(strategyFundingEvents.strategyId, strategyId)).run();
 
       // Deleta a estratégia (cascade deleta as legs, liberando as posições!)
       tx.delete(optionStrategies).where(eq(optionStrategies.id, strategyId)).run();
@@ -916,7 +940,13 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
 }
 
 /**
- * 3.1. Edição Explícita de Funding / Remuneração da Estrutura
+ * 3.1. Edição Explícita de Funding / Remuneração da Estrutura (Prospectiva 'CHANGE')
+ *
+ * OBSERVAÇÃO ARQUITETURAL (Fase 4.1.2 / P1.6):
+ * Esta ação realiza exclusivamente alterações PROSPECTIVAS ('CHANGE') na timeline de funding,
+ * encerrando o segmento vigente e abrindo um novo a partir da data de hoje.
+ * O eventType 'CORRECTION' de strategy_funding_events está estritamente reservado para
+ * correções retroativas de auditoria e NÃO é executado por esta action.
  */
 export async function updateOptionStrategyFundingAction(params: {
   strategyId: string;
@@ -1122,6 +1152,14 @@ export async function createOptionPosition(data: {
   status?: 'OPEN' | 'CLOSED';
 }): Promise<{ success: boolean; id?: string; error?: string }> {
   try {
+    // P0.4 (Fase 4.1.2): Bloqueia criação direta como CLOSED para preservar a identidade canônica
+    if (data.status === 'CLOSED') {
+      return {
+        success: false,
+        error: 'DIRECT_CLOSED_CREATION_NOT_SUPPORTED: Criação direta de posições fechadas não é suportada. Cadastre a posição como OPEN e utilize o fluxo de encerramento canônico.',
+      };
+    }
+
     const id = generateId('opt_pos');
     const now = new Date().toISOString();
 
@@ -1151,7 +1189,7 @@ export async function createOptionPosition(data: {
       legacyClosedQuantity: 0,
       legacyQuality: null,
       closedQuantity: 0,
-      openQuantity: data.status === 'CLOSED' ? 0 : data.quantity,
+      openQuantity: data.quantity,
       realizedPnlReais: 0,
       strike: data.strike,
       entryPrice: data.entryPrice,
@@ -1161,7 +1199,7 @@ export async function createOptionPosition(data: {
       entryDate: data.entryDate,
       expirationDate: data.expirationDate,
       allocatedCapital,
-      status: data.status || 'OPEN',
+      status: 'OPEN',
       delta: data.delta,
       gamma: data.gamma,
       theta: data.theta,
@@ -1307,7 +1345,7 @@ export async function updateOptionPosition(
 }
 
 /**
- * 6. Encerra / Realiza a Posição com Proteção de Alocação
+ * 6. Encerra / Realiza a Posição Avulsa (Full Close Canônico com Geração de Executions)
  */
 export async function closeOptionPosition(params: {
   id: string;
@@ -1317,23 +1355,87 @@ export async function closeOptionPosition(params: {
   notes?: string;
 }): Promise<{ success: boolean; error?: string }> {
   try {
-    const now = new Date().toISOString();
-    const exitDate = params.exitDate || getBrazilTodayDate();
+    if (params.status === 'EXERCISED' || params.status === 'ROLLED') {
+      return {
+        success: false,
+        error: `NOT_SUPPORTED: Encerramento com status '${params.status}' não é suportado diretamente em posições avulsas nesta versão.`,
+      };
+    }
 
-    // Ao encerrar a posição, também encerra as alocações/estruturas associadas
-    await db.update(optionPositions).set({
-      exitPrice: params.exitPrice,
-      exitDate,
-      status: params.status,
-      notes: params.notes,
-      updatedAt: now,
-    }).where(eq(optionPositions.id, params.id));
+    const pos = await db.query.optionPositions.findFirst({
+      where: eq(optionPositions.id, params.id),
+    });
+    if (!pos) {
+      return { success: false, error: 'Posição não encontrada.' };
+    }
+
+    const openQuantity = pos.openQuantity ?? (pos.status === 'CLOSED' ? 0 : pos.quantity);
+    if (openQuantity <= 0 || pos.status === 'CLOSED') {
+      return { success: false, error: 'POSITION_ALREADY_CLOSED: A posição já se encontra totalmente encerrada.' };
+    }
+
+    // Verifica se há alocação ativa em pernas de estruturas
+    const activeLegs = await db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.positionId, params.id),
+    });
+    const totalAllocated = activeLegs.reduce((sum, leg) => sum + (leg.openAllocatedQuantity ?? leg.allocatedQuantity), 0);
+    if (totalAllocated > 0) {
+      return {
+        success: false,
+        error: 'POSITION_ALLOCATED_TO_STRATEGY: A posição possui quantidade ativa em uma estrutura e deve ser encerrada pelo manejo da estratégia.',
+      };
+    }
+
+    const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
+    let executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' | 'EXPIRE_WORTHLESS' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
+    let effectivePrice = params.exitPrice;
+
+    if (params.status === 'EXPIRED_WORTHLESS') {
+      executionType = 'EXPIRE_WORTHLESS';
+      effectivePrice = 0;
+    }
+
+    const unitPnl = isSell ? (pos.entryPrice - effectivePrice) : (effectivePrice - pos.entryPrice);
+    const realizedPnlDelta = Math.round(unitPnl * openQuantity * 100) / 100;
+    const newTotalRealizedPnl = Math.round(((pos.realizedPnlReais ?? 0) + realizedPnlDelta) * 100) / 100;
+    const newClosedQuantity = (pos.closedQuantity ?? 0) + openQuantity;
+
+    const execId = generateId('opt_pos_exec');
+    const exitDate = params.exitDate || getBrazilTodayDate();
+    const now = new Date().toISOString();
+
+    db.transaction((tx) => {
+      tx.insert(optionPositionExecutions).values({
+        id: execId,
+        positionId: params.id,
+        executionType,
+        quantity: openQuantity,
+        price: effectivePrice,
+        executionDate: exitDate,
+        entryPriceBasisReais: pos.entryPrice,
+        grossRealizedPnlReais: realizedPnlDelta,
+        netRealizedPnlReais: realizedPnlDelta,
+        source: 'USER_MANUAL',
+        createdAt: now,
+      }).run();
+
+      tx.update(optionPositions).set({
+        exitPrice: effectivePrice,
+        exitDate,
+        status: params.status === 'EXPIRED_WORTHLESS' ? 'EXPIRED_WORTHLESS' : 'CLOSED',
+        openQuantity: 0,
+        closedQuantity: newClosedQuantity,
+        realizedPnlReais: newTotalRealizedPnl,
+        notes: params.notes ?? pos.notes,
+        updatedAt: now,
+      }).where(eq(optionPositions.id, params.id)).run();
+    });
 
     safeRevalidate('/opcoes');
     return { success: true };
   } catch (err: any) {
-    console.error('[Options Actions] Erro ao encerrar posição:', err);
-    return { success: false, error: err.message };
+    console.error('[Options Actions] Erro ao encerrar posição canonicamente:', err);
+    return { success: false, error: err.message || 'Erro ao encerrar posição' };
   }
 }
 

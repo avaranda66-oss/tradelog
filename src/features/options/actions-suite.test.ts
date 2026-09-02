@@ -11,6 +11,7 @@ import {
   updateOptionStrategyFundingAction,
   createOptionPosition,
   updateOptionPosition,
+  closeOptionPosition,
   ungroupOptionStrategyAction,
   type GetOptionPositionsResult,
 } from './actions';
@@ -531,10 +532,29 @@ export async function runActionsSuiteTests() {
     db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.positionId, [testPos1Id, testPos2Id])).run();
     db.delete(optionPositions).where(inArray(optionPositions.id, [testPos1Id, testPos2Id])).run();
 
-    console.log('\n6. Phase 4.1.1 Foundation Integration Tests:');
+    console.log('\n6. Phase 4.1.1 & 4.1.2 Foundation Closure Tests:');
 
-    // 6.1. P0.2: Criação de nova posição pós-migration inicializa openQuantity e baseline
-    const createNewPos1Res = await createOptionPosition({
+    // 6.1. P0.4: Rejeição de criação direta com status CLOSED
+    const rejectClosedRes = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'MGLU3',
+      tickerOption: 'MGLUU200',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 400,
+      strike: 2.00,
+      entryPrice: 0.15,
+      currentPrice: 0.15,
+      entryDate: '2026-09-02',
+      expirationDate: '2026-10-16',
+      status: 'CLOSED',
+    });
+    assert(rejectClosedRes.success === false, 'P0.4: Criação direta como CLOSED rejeitada');
+    assert(Boolean(rejectClosedRes.error?.includes('DIRECT_CLOSED_CREATION_NOT_SUPPORTED')), 'P0.4: Erro DIRECT_CLOSED_CREATION_NOT_SUPPORTED retornado');
+
+    // 6.2. P1.5: Rejeição de groupOptionPositionsAction em modo remunerado sem split explícito
+    const createPosA = await createOptionPosition({
       portfolio: 'Principal',
       tickerUnderlying: 'MGLU3',
       tickerOption: 'MGLUU200',
@@ -549,10 +569,7 @@ export async function runActionsSuiteTests() {
       expirationDate: '2026-10-16',
       status: 'OPEN',
     });
-    assert(createNewPos1Res.success === true && Boolean(createNewPos1Res.id), 'P0.2: createOptionPosition 1 executado com sucesso');
-    const newPos1Id = createNewPos1Res.id!;
-
-    const createNewPos2Res = await createOptionPosition({
+    const createPosB = await createOptionPosition({
       portfolio: 'Principal',
       tickerUnderlying: 'MGLU3',
       tickerOption: 'MGLUI200',
@@ -567,9 +584,24 @@ export async function runActionsSuiteTests() {
       expirationDate: '2026-10-16',
       status: 'OPEN',
     });
-    assert(createNewPos2Res.success === true && Boolean(createNewPos2Res.id), 'P0.2: createOptionPosition 2 executado com sucesso');
-    const newPos2Id = createNewPos2Res.id!;
+    const newPos1Id = createPosA.id!;
+    const newPos2Id = createPosB.id!;
 
+    // Tentativa com REMUNERATED_100_CDI sem coverage e sem capital
+    const rejectRemuneratedRes = await groupOptionPositionsAction({
+      name: 'MGLU3 Sem Split',
+      strategyType: 'CUSTOM_MULTI_LEG',
+      underlyingTicker: 'MGLU3',
+      collateralMode: 'REMUNERATED_100_CDI',
+      legs: [
+        { positionId: newPos1Id, allocatedQuantity: 1000, economicRole: 'FINANCING' },
+        { positionId: newPos2Id, allocatedQuantity: 500, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(rejectRemuneratedRes.success === false, 'P1.5: Criação de estratégia remunerada sem split explícito rejeitada');
+    assert(Boolean(rejectRemuneratedRes.error?.includes('EXPLICIT_FUNDING_SPLIT_REQUIRED')), 'P1.5: Erro EXPLICIT_FUNDING_SPLIT_REQUIRED retornado');
+
+    // 6.3. P0.2: Criação e inicialização de caches de posições e pernas
     const fetchedNewPos1 = db.query.optionPositions.findFirst({
       where: eq(optionPositions.id, newPos1Id),
     }).sync();
@@ -579,10 +611,9 @@ export async function runActionsSuiteTests() {
     assert(fetchedNewPos1?.legacyClosedQuantity === 0, 'P0.2: legacyClosedQuantity inicializado como 0 (NÃO null)');
     assert(fetchedNewPos1?.realizedPnlReais === 0, 'P0.2: realizedPnlReais inicializado como 0 (NÃO null)');
 
-    // 6.2. P0.3: Proteção de Imutabilidade da Quantidade Original
-    // Cria uma estrutura de 2 pernas para prender as posições
-    const newStratRes = await groupOptionPositionsAction({
-      name: 'MGLU3 Estrutura 2:1',
+    // 6.4. Agrupamento Virgem Válido (com IDLE_CASH)
+    const virginStratRes = await groupOptionPositionsAction({
+      name: 'MGLU3 Estrutura Virgem',
       strategyType: 'CUSTOM_MULTI_LEG',
       underlyingTicker: 'MGLU3',
       collateralMode: 'IDLE_CASH',
@@ -591,83 +622,41 @@ export async function runActionsSuiteTests() {
         { positionId: newPos2Id, allocatedQuantity: 500, economicRole: 'DIRECTIONAL' },
       ],
     });
-    assert(newStratRes.success === true, 'P0.2: groupOptionPositionsAction executado com sucesso');
-    const newStratId = newStratRes.strategyId!;
+    assert(virginStratRes.success === true, 'P0.2: Agrupamento virgem criado com sucesso');
+    const virginStratId = virginStratRes.strategyId!;
 
-    // P0.2: Verifica se as legs nasceram com os caches preenchidos
     const newLeg1 = db.query.optionStrategyLegs.findFirst({
       where: and(
-        eq(optionStrategyLegs.strategyId, newStratId),
+        eq(optionStrategyLegs.strategyId, virginStratId),
         eq(optionStrategyLegs.positionId, newPos1Id)
       ),
     }).sync();
-    assert(newLeg1?.allocatedQuantity === 1000, 'P0.2: allocatedQuantity leg 1 gravada como 1000');
-    assert(newLeg1?.openAllocatedQuantity === 1000, 'P0.2: openAllocatedQuantity leg 1 inicializado como 1000 (NÃO null)');
-    assert(newLeg1?.closedAllocatedQuantity === 0, 'P0.2: closedAllocatedQuantity leg 1 inicializado como 0 (NÃO null)');
-    assert(newLeg1?.legacyClosedAllocatedQuantity === 0, 'P0.2: legacyClosedAllocatedQuantity leg 1 inicializado como 0 (NÃO null)');
-
-    // P0.2: Verifica se a estratégia nova nasceu com segmento de funding inicial
-    const initFundingSeg = db.query.strategyFundingSegments.findFirst({
-      where: and(
-        eq(strategyFundingSegments.strategyId, newStratId),
-        isNull(strategyFundingSegments.endDate)
-      ),
-    }).sync();
-    assert(initFundingSeg !== undefined, 'P0.2: Novo segmento de funding aberto criado na criação da estratégia');
-    assert(initFundingSeg?.benchmarkCapitalReais === 2000.0, 'P0.2: Benchmark capital calculado via Risk Recognizer B3 (1000 * 2.00 = R$ 2.000,00)');
-    assert(initFundingSeg?.sourceType === 'CREATION', 'P0.2: sourceType inicial gravado como CREATION');
-    assert(initFundingSeg?.quality === 'FULL', 'P0.2: quality inicial gravado como FULL');
+    assert(newLeg1?.openAllocatedQuantity === 1000, 'P0.2: openAllocatedQuantity inicializado como 1000');
+    assert(newLeg1?.closedAllocatedQuantity === 0, 'P0.2: closedAllocatedQuantity inicializado como 0');
 
     // P0.3: Tentar alterar quantity de uma posição alocada deve FALHAR com QUANTITY_IMMUTABLE
     const alterAllocatedRes = await updateOptionPosition(newPos1Id, { quantity: 800 });
     assert(alterAllocatedRes.success === false, 'P0.3: Alteração de quantity em posição alocada bloqueada');
     assert(Boolean(alterAllocatedRes.error?.includes('QUANTITY_IMMUTABLE')), 'P0.3: Erro QUANTITY_IMMUTABLE retornado');
 
-    // 6.3. P0.4: Atualização de Funding fecha segmento antigo, cria evento e abre novo segmento
-    const updateFundingSegRes = await updateOptionStrategyFundingAction({
-      strategyId: newStratId,
-      collateralMode: 'REMUNERATED_100_CDI',
-      collateralCoveragePct: 100,
+    // 6.5. P0.2: Bloqueio de Full Close em posição alocada em estrutura ativa
+    const closeAllocatedRes = await closeOptionPosition({
+      id: newPos1Id,
+      exitPrice: 0.05,
+      status: 'CLOSED',
     });
-    assert(updateFundingSegRes.success === true, 'P0.4: updateOptionStrategyFundingAction executado com sucesso');
+    assert(closeAllocatedRes.success === false, 'P0.2: Full Close em posição alocada em estrutura bloqueado');
+    assert(Boolean(closeAllocatedRes.error?.includes('POSITION_ALLOCATED_TO_STRATEGY')), 'P0.2: Erro POSITION_ALLOCATED_TO_STRATEGY retornado');
 
-    // Verifica se o segmento anterior foi fechado
-    const previousSeg = db.query.strategyFundingSegments.findFirst({
-      where: and(
-        eq(strategyFundingSegments.strategyId, newStratId),
-        eq(strategyFundingSegments.id, initFundingSeg!.id)
-      ),
-    }).sync();
-    assert(previousSeg?.endDate !== null, 'P0.4: Segmento inicial fechado com endDate preenchido');
+    // 6.6. P0.3: Desagrupamento de Estrutura 100% Virgem (apenas CREATION segment, 0 funding events) -> SUCCESS
+    const ungroupVirginRes = await ungroupOptionStrategyAction(virginStratId);
+    assert(ungroupVirginRes.success === true, 'P0.3: Estrutura virgem desagrupada com sucesso');
 
-    // Verifica se o novo segmento vigente foi aberto
-    const currentSeg = db.query.strategyFundingSegments.findFirst({
-      where: and(
-        eq(strategyFundingSegments.strategyId, newStratId),
-        isNull(strategyFundingSegments.endDate)
-      ),
-    }).sync();
-    assert(currentSeg !== undefined && currentSeg.id !== initFundingSeg!.id, 'P0.4: Novo segmento aberto vigente criado');
-    assert(currentSeg?.sourceType === 'FUNDING_CHANGE', 'P0.4: Novo segmento possui sourceType = FUNDING_CHANGE');
-    assert(currentSeg?.fundingEventId !== null, 'P0.4: Novo segmento referencia fundingEventId');
-    assert(currentSeg?.capitalRemuneratedReais === 2000.0, 'P0.4: Capital remunerado do novo segmento = R$ 2.000,00');
-
-    // Reconciliação Snapshot <-> Segmento Vigente
-    const stratSnapshot = db.query.optionStrategies.findFirst({
-      where: eq(optionStrategies.id, newStratId),
-    }).sync();
-    assert(stratSnapshot?.collateralMode === currentSeg?.collateralMode, 'P0.4: Snapshot collateralMode espelha segmento vigente');
-    assert(stratSnapshot?.capitalRemuneratedReais === currentSeg?.capitalRemuneratedReais, 'P0.4: Snapshot capitalRemuneratedReais espelha segmento vigente');
-
-    // 6.4. P0.5: Desagrupamento de Estrutura Virgem com Funding Segment Não Quebra por FK
-    const ungroupVirginRes = await ungroupOptionStrategyAction(newStratId);
-    assert(ungroupVirginRes.success === true, 'P0.5: Estrutura virgem desagrupada com sucesso sem FOREIGN KEY constraint failed');
-
-    // Posições voltam a estar livres
+    // Pernas cascade-deletadas e posições livres
     const legsAfterUngroup = db.query.optionStrategyLegs.findMany({
       where: inArray(optionStrategyLegs.positionId, [newPos1Id, newPos2Id]),
     }).sync();
-    assert(legsAfterUngroup.length === 0, 'P0.5: Pernas cascade-deletadas, liberando as posições');
+    assert(legsAfterUngroup.length === 0, 'P0.3: Pernas cascade-deletadas, liberando as posições');
 
     // P0.3: Posição virgem liberada permite correção atômica de quantity
     const correctVirginRes = await updateOptionPosition(newPos1Id, { quantity: 1500 });
@@ -681,10 +670,10 @@ export async function runActionsSuiteTests() {
     assert(correctedPos.openQuantity === 1500, 'P0.3: openQuantity atualizado atomicamente para 1500');
     assert((correctedPos.openQuantity ?? 0) <= correctedPos.quantity, 'P0.3: Invariante 0 <= openQuantity <= quantity preservada');
 
-    // 6.5. P0.5: Bloqueio de Desagrupamento quando há histórico contábil (Execution)
-    // Agrupa novamente para simular execução
-    const stratWithExecRes = await groupOptionPositionsAction({
-      name: 'MGLU3 com Execucao',
+    // 6.7. P0.3 & P0.4: Desagrupamento Bloqueado após alteração de funding (Preservação de Audit Trail)
+    // Agrupa novamente
+    const reGroupRes = await groupOptionPositionsAction({
+      name: 'MGLU3 Estrutura Auditável',
       strategyType: 'CUSTOM_MULTI_LEG',
       underlyingTicker: 'MGLU3',
       collateralMode: 'IDLE_CASH',
@@ -693,36 +682,178 @@ export async function runActionsSuiteTests() {
         { positionId: newPos2Id, allocatedQuantity: 500, economicRole: 'DIRECTIONAL' },
       ],
     });
-    const stratWithExecId = stratWithExecRes.strategyId!;
+    const auditStratId = reGroupRes.strategyId!;
 
-    // Insere uma execução atrelada a essa estratégia
-    db.insert(optionPositionExecutions).values({
-      id: 'exec_test_audit',
-      positionId: newPos1Id,
-      strategyId: stratWithExecId,
-      executionType: 'BUY_TO_CLOSE',
-      quantity: 500,
-      price: 0.05,
-      executionDate: '2026-09-02',
-      entryPriceBasisReais: 0.15,
-      grossRealizedPnlReais: (0.15 - 0.05) * 500,
-      netRealizedPnlReais: (0.15 - 0.05) * 500,
-      createdAt: new Date().toISOString(),
-    }).run();
+    // Executa alteração prospectiva de funding (gera strategy_funding_events CHANGE)
+    const updateAuditFundingRes = await updateOptionStrategyFundingAction({
+      strategyId: auditStratId,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: 100,
+    });
+    assert(updateAuditFundingRes.success === true, 'P0.4: updateOptionStrategyFundingAction executado com sucesso');
 
-    // Tentativa de desagrupar deve ser bloqueada por histórico contábil
-    const ungroupBlockedRes = await ungroupOptionStrategyAction(stratWithExecId);
-    assert(ungroupBlockedRes.success === false, 'P0.5: Desagrupamento com execuções financeiras bloqueado com segurança');
-    assert(Boolean(ungroupBlockedRes.error?.includes('STRATEGY_HAS_FINANCIAL_HISTORY')), 'P0.5: Erro STRATEGY_HAS_FINANCIAL_HISTORY retornado');
+    // Verifica que existe 1 evento de funding CHANGE
+    const fundingEventsInDb = db.query.strategyFundingEvents.findMany({
+      where: eq(strategyFundingEvents.strategyId, auditStratId),
+    }).sync();
+    assert(fundingEventsInDb.length === 1, 'P0.4: Evento de funding CHANGE gravado na auditoria');
+    assert(fundingEventsInDb[0].eventType === 'CHANGE', 'P0.4: EventType é CHANGE (prospectivo)');
 
-    // Limpeza da suíte 6
-    db.delete(optionPositionExecutions).where(eq(optionPositionExecutions.id, 'exec_test_audit')).run();
-    db.delete(strategyAllocationEvents).where(eq(strategyAllocationEvents.strategyId, stratWithExecId)).run();
-    db.delete(strategyFundingSegments).where(eq(strategyFundingSegments.strategyId, stratWithExecId)).run();
-    db.delete(strategyFundingEvents).where(eq(strategyFundingEvents.strategyId, stratWithExecId)).run();
-    db.delete(optionStrategyLegs).where(eq(optionStrategyLegs.strategyId, stratWithExecId)).run();
-    db.delete(optionStrategies).where(eq(optionStrategies.id, stratWithExecId)).run();
-    db.delete(optionPositions).where(inArray(optionPositions.id, [newPos1Id, newPos2Id])).run();
+    // Tentativa de desagrupar deve ser BLOQUEADA por histórico de funding!
+    const ungroupFundingRes = await ungroupOptionStrategyAction(auditStratId);
+    assert(ungroupFundingRes.success === false, 'P0.3: Desagrupamento bloqueado por presença de histórico de funding');
+    assert(Boolean(ungroupFundingRes.error?.includes('STRATEGY_HAS_FINANCIAL_HISTORY')), 'P0.3: Erro STRATEGY_HAS_FINANCIAL_HISTORY retornado');
+
+    // Provar que nada foi apagado
+    const eventsAfterBlocked = db.query.strategyFundingEvents.findMany({
+      where: eq(strategyFundingEvents.strategyId, auditStratId),
+    }).sync();
+    const segmentsAfterBlocked = db.query.strategyFundingSegments.findMany({
+      where: eq(strategyFundingSegments.strategyId, auditStratId),
+    }).sync();
+    const stratAfterBlocked = db.query.optionStrategies.findFirst({
+      where: eq(optionStrategies.id, auditStratId),
+    }).sync();
+    assert(eventsAfterBlocked.length === 1, 'P0.3: Evento de funding PRESERVADO no banco');
+    assert(segmentsAfterBlocked.length === 2, 'P0.3: Segmentos de funding PRESERVADOS no banco (inicial fechado + vigente aberto)');
+    assert(Boolean(stratAfterBlocked), 'P0.3: Estratégia PRESERVADA no banco');
+
+    // 6.8. P0.2: Full Close Canônico em Posição Avulsa (Standalone)
+    const createStandalonePut = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBDC4',
+      tickerOption: 'BBDCU150',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 400,
+      strike: 15.00,
+      entryPrice: 1.04,
+      currentPrice: 1.04,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+    });
+    const standalonePutId = createStandalonePut.id!;
+
+    // Rejeição de status não suportados diretamente (EXERCISED, ROLLED)
+    const rejectExercised = await closeOptionPosition({
+      id: standalonePutId,
+      exitPrice: 1.04,
+      status: 'EXERCISED',
+    });
+    assert(rejectExercised.success === false, 'P0.2: Encerramento com EXERCISED rejeitado com NOT_SUPPORTED');
+    assert(Boolean(rejectExercised.error?.includes('NOT_SUPPORTED')), 'P0.2: Erro NOT_SUPPORTED retornado para EXERCISED');
+
+    const rejectRolled = await closeOptionPosition({
+      id: standalonePutId,
+      exitPrice: 1.04,
+      status: 'ROLLED',
+    });
+    assert(rejectRolled.success === false, 'P0.2: Encerramento com ROLLED rejeitado com NOT_SUPPORTED');
+    assert(Boolean(rejectRolled.error?.includes('NOT_SUPPORTED')), 'P0.2: Erro NOT_SUPPORTED retornado para ROLLED');
+
+    // Executa Full Close normal com lucro (venda a 1.04, recompra a 0.20 -> unitPnl = +0.84 * 400 = +R$ 336.00)
+    const fullCloseRes = await closeOptionPosition({
+      id: standalonePutId,
+      exitPrice: 0.20,
+      exitDate: '2026-09-02',
+      status: 'CLOSED',
+      notes: 'Fechamento integral a mercado com 80% do lucro',
+    });
+    assert(fullCloseRes.success === true, 'P0.2: closeOptionPosition executado com sucesso');
+
+    // Validação da posição fechada
+    const closedPos = db.query.optionPositions.findFirst({
+      where: eq(optionPositions.id, standalonePutId),
+    }).sync();
+    assert(closedPos?.status === 'CLOSED', 'P0.2: Posição status = CLOSED');
+    assert(closedPos?.openQuantity === 0, 'P0.2: openQuantity zerado = 0');
+    assert(closedPos?.closedQuantity === 400, 'P0.2: closedQuantity atualizado para 400');
+    assert(closedPos?.exitPrice === 0.20, 'P0.2: exitPrice gravado = 0.20');
+    assert(Math.abs((closedPos?.realizedPnlReais ?? 0) - 336.0) < 0.01, 'P0.2: realizedPnlReais apurado com precisão: +R$ 336,00');
+
+    // Validação da execution gerada
+    const execsForPos = db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.positionId, standalonePutId),
+    }).sync();
+    assert(execsForPos.length === 1, 'P0.2: Exatamente 1 execution gerada para o fechamento');
+    const exec = execsForPos[0];
+    assert(exec.quantity === 400, 'P0.2: Execution quantity = 400');
+    assert(exec.price === 0.20, 'P0.2: Execution price = 0.20');
+    assert(exec.executionType === 'BUY_TO_CLOSE', 'P0.2: Execution type = BUY_TO_CLOSE (recompra de short)');
+    assert(exec.grossRealizedPnlReais === 336.0, 'P0.2: Execution grossRealizedPnl = 336.0');
+    assert(exec.netRealizedPnlReais === 336.0, 'P0.2: Execution netRealizedPnl = 336.0');
+
+    // Validação das identidades canônicas estritas
+    assert(
+      closedPos?.closedQuantity === (closedPos?.legacyClosedQuantity ?? 0) + execsForPos.reduce((s, e) => s + e.quantity, 0),
+      'P0.2: Reconciliação canônica: closedQuantity === legacyClosedQuantity + sum(executions)'
+    );
+    assert(
+      closedPos?.openQuantity === (closedPos?.quantity ?? 0) - (closedPos?.closedQuantity ?? 0),
+      'P0.2: Reconciliação canônica: openQuantity === quantity - closedQuantity'
+    );
+
+    // Tentativa de fechar novamente deve ser bloqueada com POSITION_ALREADY_CLOSED
+    const secondCloseRes = await closeOptionPosition({
+      id: standalonePutId,
+      exitPrice: 0.10,
+      status: 'CLOSED',
+    });
+    assert(secondCloseRes.success === false, 'P0.2: Segundo fechamento de posição já encerrada bloqueado');
+    assert(Boolean(secondCloseRes.error?.includes('POSITION_ALREADY_CLOSED')), 'P0.2: Erro POSITION_ALREADY_CLOSED retornado');
+
+    // 6.9. P0.2: Full Close com EXPIRED_WORTHLESS em CALL comprada
+    const createLongCall = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEI600',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'COMPRA_CALL',
+      quantity: 200,
+      strike: 60.00,
+      entryPrice: 1.18,
+      currentPrice: 0.01,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+    });
+    const longCallId = createLongCall.id!;
+
+    const expireCallRes = await closeOptionPosition({
+      id: longCallId,
+      exitPrice: 0,
+      status: 'EXPIRED_WORTHLESS',
+      notes: 'Virou pó no vencimento',
+    });
+    assert(expireCallRes.success === true, 'P0.2: Encerramento com EXPIRED_WORTHLESS executado com sucesso');
+
+    const expiredPos = db.query.optionPositions.findFirst({
+      where: eq(optionPositions.id, longCallId),
+    }).sync();
+    assert(expiredPos?.status === 'EXPIRED_WORTHLESS', 'P0.2: Posição status = EXPIRED_WORTHLESS');
+    assert(expiredPos?.openQuantity === 0, 'P0.2: openQuantity = 0');
+    assert(expiredPos?.closedQuantity === 200, 'P0.2: closedQuantity = 200');
+    assert(expiredPos?.realizedPnlReais === -236.0, 'P0.2: realizedPnlReais = -R$ 236,00 (-1.18 * 200)');
+
+    const expireExecs = db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.positionId, longCallId),
+    }).sync();
+    assert(expireExecs.length === 1, 'P0.2: 1 execution gerada para o pó');
+    assert(expireExecs[0].executionType === 'EXPIRE_WORTHLESS', 'P0.2: Execution type = EXPIRE_WORTHLESS');
+    assert(expireExecs[0].price === 0, 'P0.2: Execution price = 0');
+    assert(expireExecs[0].netRealizedPnlReais === -236.0, 'P0.2: Execution netRealizedPnl = -236.0');
+
+    // Limpeza da Seção 6
+    db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, [standalonePutId, longCallId, newPos1Id, newPos2Id])).run();
+    db.delete(strategyFundingSegments).where(eq(strategyFundingSegments.strategyId, auditStratId)).run();
+    db.delete(strategyFundingEvents).where(eq(strategyFundingEvents.strategyId, auditStratId)).run();
+    db.delete(strategyAllocationEvents).where(eq(strategyAllocationEvents.strategyId, auditStratId)).run();
+    db.delete(optionStrategyLegs).where(eq(optionStrategyLegs.strategyId, auditStratId)).run();
+    db.delete(optionStrategies).where(eq(optionStrategies.id, auditStratId)).run();
+    db.delete(optionPositions).where(inArray(optionPositions.id, [newPos1Id, newPos2Id, standalonePutId, longCallId])).run();
 
   } finally {
     // Limpeza Final de Segurança

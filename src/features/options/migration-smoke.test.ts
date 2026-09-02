@@ -412,6 +412,174 @@ export function runMigrationSmokeTest() {
 
   sqlite.close();
 
+  console.log('\n--- ETAPA 9: Two-Hop Migration Test (4.1 -> 4.1.2 Reconstrução Não-Destrutiva) ---');
+
+  const sqliteTwoHop = new Database(':memory:');
+  sqliteTwoHop.pragma('foreign_keys = ON');
+
+  // 1. Criar banco exatamente no estado de 037ac1e (schema 4.1 anterior sem o novo CHECK)
+  sqliteTwoHop.exec(`
+    CREATE TABLE option_positions (
+      id TEXT PRIMARY KEY,
+      portfolio TEXT DEFAULT 'Principal',
+      ticker_underlying TEXT NOT NULL,
+      ticker_option TEXT NOT NULL,
+      option_type TEXT NOT NULL,
+      side TEXT NOT NULL,
+      strategy_type TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      strike REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      current_price REAL NOT NULL,
+      exit_price REAL,
+      underlying_entry_spot REAL,
+      underlying_current_spot REAL,
+      entry_date TEXT NOT NULL,
+      expiration_date TEXT NOT NULL,
+      exit_date TEXT,
+      allocated_capital REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      delta REAL,
+      gamma REAL,
+      theta REAL,
+      vega REAL,
+      iv REAL,
+      pop REAL,
+      break_even REAL,
+      cdi_rate_annual REAL DEFAULT 0.14,
+      notes TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      legacy_closed_quantity INTEGER NOT NULL DEFAULT 0,
+      legacy_quality TEXT,
+      closed_quantity INTEGER NOT NULL DEFAULT 0,
+      open_quantity INTEGER,
+      realized_pnl_reais REAL NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE option_strategies (
+      id TEXT PRIMARY KEY,
+      portfolio TEXT DEFAULT 'Principal',
+      name TEXT NOT NULL,
+      strategy_type TEXT NOT NULL,
+      book TEXT NOT NULL DEFAULT 'HYBRID',
+      underlying_ticker TEXT NOT NULL,
+      collateral_mode TEXT DEFAULT 'IDLE_CASH',
+      collateral_yield_pct_cdi REAL,
+      capital_remunerated_reais REAL,
+      collateral_coverage_pct REAL,
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      opened_at TEXT NOT NULL,
+      closed_at TEXT,
+      notes TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE strategy_maneuver_events (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      maneuver_type TEXT NOT NULL,
+      maneuver_date TEXT NOT NULL,
+      ratio_preserved INTEGER NOT NULL DEFAULT 1,
+      audit_units_before INTEGER,
+      audit_units_after INTEGER,
+      audit_ratio_before TEXT,
+      audit_ratio_after TEXT,
+      preserves_original_ratio INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE strategy_funding_events (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      event_type TEXT NOT NULL,
+      effective_date TEXT NOT NULL,
+      previous_collateral_mode TEXT NOT NULL,
+      new_collateral_mode TEXT NOT NULL,
+      previous_coverage_pct REAL,
+      new_coverage_pct REAL,
+      previous_capital_remunerated REAL,
+      new_capital_remunerated REAL,
+      previous_pct_cdi REAL,
+      new_pct_cdi REAL,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- Tabela de 037ac1e: SEM a constraint funding_seg_source_coherence_check
+    CREATE TABLE strategy_funding_segments (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+      capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+      collateral_mode TEXT NOT NULL,
+      collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+      source_type TEXT NOT NULL,
+      maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
+      funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
+      quality TEXT NOT NULL DEFAULT 'FULL',
+      created_at TEXT NOT NULL,
+      CHECK(end_date IS NULL OR end_date >= start_date)
+    );
+
+    CREATE UNIQUE INDEX one_open_funding_segment_per_strategy
+    ON strategy_funding_segments(strategy_id)
+    WHERE end_date IS NULL;
+  `);
+
+  // Inserir strategy e segmento inicial na tabela de 037ac1e
+  sqliteTwoHop.prepare(`
+    INSERT INTO option_strategies (id, name, strategy_type, book, underlying_ticker, collateral_mode, status, opened_at, created_at)
+    VALUES ('strat_twohop', 'Trava TwoHop', 'CUSTOM', 'HYBRID', 'VALE3', 'REMUNERATED_100_CDI', 'OPEN', '2026-08-01', '2026-08-01');
+  `).run();
+
+  sqliteTwoHop.prepare(`
+    INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, quality, created_at)
+    VALUES ('seg_twohop_initial', 'strat_twohop', '2026-08-01', NULL, 5000.0, 5000.0, 'REMUNERATED_100_CDI', 'CREATION', 'FULL', '2026-08-01');
+  `).run();
+
+  // Provar que ANTES do upgrade, a constraint de coerência estava ausente
+  const preCheckSql = sqliteTwoHop.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments'").get() as { sql: string };
+  assert(!preCheckSql.sql.includes('source_type = \'CREATION\' AND maneuver_event_id IS NULL'), 'Pré-migração: banco está no estado de 037ac1e sem o novo CHECK');
+
+  // 3. Executar applyMigrations atual (executa upgradeStrategyFundingSegmentsCoherenceCheck)
+  applyMigrations(sqliteTwoHop);
+
+  // 4. Provar que dados permaneceram intactos
+  const segAfterUpgrade = sqliteTwoHop.prepare("SELECT * FROM strategy_funding_segments WHERE id = 'seg_twohop_initial'").get() as any;
+  assert(Boolean(segAfterUpgrade), 'P0.1: Dados do segmento existente permaneceram intactos após upgrade');
+  assert(segAfterUpgrade.benchmark_capital_reais === 5000.0, 'P0.1: benchmark_capital_reais preservado (5000.0)');
+  assert(segAfterUpgrade.capital_remunerated_reais === 5000.0, 'P0.1: capital_remunerated_reais preservado (5000.0)');
+  assert(segAfterUpgrade.source_type === 'CREATION', 'P0.1: source_type preservado (CREATION)');
+
+  // 5. Consultar sqlite_master e verificar que a constraint nova está fisicamente presente
+  const postCheckSql = sqliteTwoHop.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments'").get() as { sql: string };
+  assert(postCheckSql.sql.includes('source_type = \'CREATION\' AND maneuver_event_id IS NULL'), 'P0.1: Novo CHECK de coerência fisicamente instalado após rebuild');
+
+  // 6. Tentar inserir MANEUVER sem maneuver_event_id -> deve ser barrado pelo novo CHECK
+  let threwCoherenceViolation = false;
+  try {
+    sqliteTwoHop.prepare(`
+      INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, maneuver_event_id, created_at)
+      VALUES ('seg_incoherent', 'strat_twohop', '2026-08-15', '2026-08-20', 5000.0, 5000.0, 'REMUNERATED_100_CDI', 'MANEUVER', NULL, datetime('now'));
+    `).run();
+  } catch (err: any) {
+    threwCoherenceViolation = true;
+    assert(err.message.includes('CHECK constraint failed'), 'P0.1: Banco reconstruído barrou fisicamente MANEUVER sem maneuver_event_id por CHECK constraint');
+  }
+  assert(threwCoherenceViolation, 'P0.1: Violação de coerência rejeitada fisicamente no banco atualizado');
+
+  // 7. Testar idempotência executando applyMigrations novamente
+  applyMigrations(sqliteTwoHop);
+  const segCountTwoHop = sqliteTwoHop.prepare('SELECT COUNT(*) AS c FROM strategy_funding_segments').get() as any;
+  assert(segCountTwoHop.c === 1, 'P0.1: Idempotência do upgrade confirmada (1 segmento)');
+
+  sqliteTwoHop.close();
+
   console.log('\n========================================');
   console.log('✅ ALL SQLITE MIGRATION SMOKE TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');

@@ -340,6 +340,71 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
 }
 
 /**
+ * P0.1 (Fase 4.1.2): Reconstrução não-destrutiva de strategy_funding_segments para bancos
+ * que já executaram a Fase 4.1 (037ac1e) sem o CHECK de coerência de source_type.
+ */
+function upgradeStrategyFundingSegmentsCoherenceCheck(sqliteInstance: Database.Database): void {
+  const tableInfo = sqliteInstance
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments'")
+    .get() as { sql: string } | undefined;
+
+  if (!tableInfo) return;
+
+  // Se já possui a constraint física de coerência de source_type, nenhuma ação necessária
+  if (tableInfo.sql.includes('source_type = \'CREATION\' AND maneuver_event_id IS NULL')) {
+    return;
+  }
+
+  // Reconstrução não-destrutiva transacional preservando FKs, IDs e dados
+  sqliteInstance.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    CREATE TABLE strategy_funding_segments_upgrade (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+      capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+      collateral_mode TEXT NOT NULL,
+      collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+      source_type TEXT NOT NULL,
+      maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
+      funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
+      quality TEXT NOT NULL DEFAULT 'FULL',
+      created_at TEXT NOT NULL,
+      CHECK(end_date IS NULL OR end_date >= start_date),
+      CHECK(
+        (source_type = 'CREATION' AND maneuver_event_id IS NULL AND funding_event_id IS NULL) OR
+        (source_type = 'MANEUVER' AND maneuver_event_id IS NOT NULL AND funding_event_id IS NULL) OR
+        (source_type = 'FUNDING_CHANGE' AND maneuver_event_id IS NULL AND funding_event_id IS NOT NULL)
+      )
+    );
+
+    INSERT INTO strategy_funding_segments_upgrade (
+      id, strategy_id, start_date, end_date, benchmark_capital_reais,
+      capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
+      source_type, maneuver_event_id, funding_event_id, quality, created_at
+    )
+    SELECT
+      id, strategy_id, start_date, end_date, benchmark_capital_reais,
+      capital_remunerated_reais, collateral_mode, collateral_pct_cdi,
+      source_type, maneuver_event_id, funding_event_id, quality, created_at
+    FROM strategy_funding_segments;
+
+    DROP TABLE strategy_funding_segments;
+
+    ALTER TABLE strategy_funding_segments_upgrade RENAME TO strategy_funding_segments;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy
+    ON strategy_funding_segments(strategy_id)
+    WHERE end_date IS NULL;
+
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+/**
  * Executa todas as migrações incrementais auditáveis no banco de dados SQLite fornecido.
  */
 export function applyMigrations(sqliteInstance: Database.Database): void {
@@ -427,6 +492,9 @@ export function applyMigrations(sqliteInstance: Database.Database): void {
       )
     );
   `);
+
+  // P0.1 (Fase 4.1.2): Upgrade real para bancos que já criaram strategy_funding_segments na 4.1 sem o novo CHECK
+  upgradeStrategyFundingSegmentsCoherenceCheck(sqliteInstance);
 
   ensureIndex(sqliteInstance, 'one_open_funding_segment_per_strategy', `
     CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy
