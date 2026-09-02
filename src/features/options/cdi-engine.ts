@@ -45,6 +45,26 @@ export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): nu
   return Math.round(rawFactor * 100000000) / 100000000;
 }
 
+/**
+ * Calcula o Fator Diário indexado a um percentual do CDI (ex: 110% do CDI) conforme metodologia oficial B3.
+ * Regra B3: O percentual p é aplicado sobre a taxa diária efetiva:
+ * TDI_indexada = (FDI - 1) * (pctCdi / 100)
+ * FDI_indexado = round(1 + TDI_indexada, 8)
+ */
+export function calculateIndexedDailyFactor(
+  annualRateDecimal: AnnualRateDecimal,
+  pctCdi: number = 100
+): number {
+  if (pctCdi <= 0) return 1.0;
+  const standardDailyFactor = calculateB3DailyFactor(annualRateDecimal);
+  if (pctCdi === 100) return standardDailyFactor;
+
+  const dailyEffectiveRate = standardDailyFactor - 1.0;
+  const indexedDailyRate = dailyEffectiveRate * (pctCdi / 100.0);
+  const rawIndexedFactor = 1.0 + indexedDailyRate;
+  return Math.round(rawIndexedFactor * 100000000) / 100000000;
+}
+
 const SCALE_8 = BigInt('100000000');
 const SCALE_16 = BigInt('10000000000000000');
 const HALF_SCALE_8 = BigInt('50000000');
@@ -93,6 +113,7 @@ export interface RealizedDiResult {
   observationsCount: number;
   datesUsed: BusinessDate[]; // rateDates utilizadas
   observations: DiAccrualObservation[];
+  pctCdi: number;
 }
 
 /**
@@ -106,7 +127,8 @@ export function calculateRealizedDiFactor(
   openDateStr: BusinessDate,
   valuationDateStr: BusinessDate,
   fallbackAnnualRate: AnnualRateDecimal = 0.14,
-  customSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>
+  customSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>,
+  pctCdi: number = 100
 ): RealizedDiResult {
   const openDate = parseBusinessDate(openDateStr);
   const valDate = parseBusinessDate(valuationDateStr);
@@ -116,7 +138,7 @@ export function calculateRealizedDiFactor(
   // Normalização de valuationDate para o pregão B3 mais recente (evita inflar DU em fins de semana e feriados)
   const accrualValuationDate = getPreviousOrSameB3TradingDay(valDate);
 
-  if (openDate >= accrualValuationDate) {
+  if (openDate >= accrualValuationDate || pctCdi <= 0) {
     return {
       accumulatedFactor: 1.0,
       periodYieldDecimal: 0.0,
@@ -124,6 +146,7 @@ export function calculateRealizedDiFactor(
       observationsCount: 0,
       datesUsed: [],
       observations: [],
+      pctCdi,
     };
   }
 
@@ -146,6 +169,7 @@ export function calculateRealizedDiFactor(
       observationsCount: 0,
       datesUsed: [],
       observations: [],
+      pctCdi,
     };
   }
 
@@ -159,7 +183,7 @@ export function calculateRealizedDiFactor(
     const obs = series.get(rateDate);
 
     if (obs) {
-      const dailyFactor = calculateB3DailyFactor(obs.annualRateDecimal);
+      const dailyFactor = calculateIndexedDailyFactor(obs.annualRateDecimal, pctCdi);
       dailyFactors.push(dailyFactor);
       observations.push({
         accrualDate,
@@ -169,7 +193,7 @@ export function calculateRealizedDiFactor(
         source: obs.source,
       });
     } else {
-      const syntheticDailyFactor = calculateB3DailyFactor(safeFallback);
+      const syntheticDailyFactor = calculateIndexedDailyFactor(safeFallback, pctCdi);
       dailyFactors.push(syntheticDailyFactor);
       isEstimated = true;
       observations.push({
@@ -191,7 +215,21 @@ export function calculateRealizedDiFactor(
     observationsCount: dailyFactors.length,
     datesUsed: rateDates,
     observations,
+    pctCdi,
   };
+}
+
+/**
+ * Atalho conveniente para calcular acumulação indexada a percentual de CDI (ex: 110% CDI, 90% CDI)
+ */
+export function calculateIndexedDiFactor(
+  openDateStr: BusinessDate,
+  valuationDateStr: BusinessDate,
+  pctCdi: number = 100,
+  fallbackAnnualRate: AnnualRateDecimal = 0.14,
+  customSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>
+): RealizedDiResult {
+  return calculateRealizedDiFactor(openDateStr, valuationDateStr, fallbackAnnualRate, customSeries, pctCdi);
 }
 
 export interface ProjectedDiResult {

@@ -8,6 +8,7 @@ import {
   parseBusinessDate,
   countB3TradingDays,
   getBrazilTodayDate,
+  getPreviousOrSameB3TradingDay,
 } from './b3-calendar';
 import {
   type AnnualRateDecimal,
@@ -15,6 +16,8 @@ import {
   normalizeAnnualRate,
   calculateRealizedDiFactor,
   calculateProjectedDiFactor,
+  calculateIndexedDiFactor,
+  calculateB3DailyFactor,
   type RealizedDiResult,
   type ProjectedDiResult,
 } from './cdi-engine';
@@ -388,7 +391,324 @@ export function calculateCollateralReturn(params: {
   };
 }
 
-// ─── 8. POSITION METRICS & ENRICHMENT ───
+// ─── 8. STRATEGY ECONOMIC PERFORMANCE ENGINE (DOUBLE YIELD & STORYTELLING) ───
+export interface StrategyEconomicPerformance {
+  startDate: BusinessDate;
+  valuationDate: BusinessDate;
+  accrualValuationDate: BusinessDate;
+  elapsedDU: number;
+  resultNature: 'MTM' | 'REALIZED';
+
+  // Bases de Capital
+  capitalReservedReais: number;        // Capital bloqueado por margem / strikes de opções vendidas (ex: R$ 15.476)
+  capitalRemuneratedReais: number;    // Saldo em garantia aplicado no CDI (ex: R$ 15.476 ou R$ 0)
+  benchmarkCapitalReais: number;      // Custo de oportunidade de referência
+  capitalBasisMethod: 'STATIC' | 'DAILY_WEIGHTED';
+
+  // Risco Econômico
+  maxLossEconomicReais: number | null;
+  maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
+
+  // Benchmark CDI (100% CDI Puro)
+  benchmarkCdiAccumulatedFactor: number;
+  benchmarkCdiYieldDecimal: number;
+  benchmarkCdiReais: number;
+  benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED';
+
+  // Carrego Real do Caixa (Collateral)
+  collateralMode: CollateralMode;
+  collateralPctCdi: number;
+  collateralAccumulatedFactor: number;
+  collateralYieldDecimal: number;
+  collateralCarryReais: number;
+
+  // Resultado Opções
+  optionPnlReais: number;
+
+  // Resultado Econômico Consolidado
+  totalEconomicReturnReais: number;   // optionPnlReais + collateralCarryReais
+  excessReturnVsCdiReais: number;     // totalEconomicReturnReais - benchmarkCdiReais
+
+  // Múltiplos
+  optionPnlToCdiMultiple: number | null;
+  totalReturnToCdiMultiple: number | null;
+
+  // Retornos no Período (%)
+  optionReturnOnBenchmarkCapitalPct: number | null;
+  totalEconomicReturnPct: number | null;
+  cdiPeriodReturnPct: number | null;
+  excessPeriodPctPoints: number | null;
+
+  // Eficiência de Capital e Risco
+  excessReturnOnReservedCapitalPct: number | null;
+  excessReturnOnMaxRiskPct: number | null;
+  extraProfitPer1000RiskReais: number | null;
+
+  // Dias de CDI Equivalentes (Composição Logarítmica)
+  optionPnlEquivalentCdiDU: number | null;
+
+  // Carry Diário Normalizado (R$/DU)
+  thetaReaisPerComparableDay: number | null;
+  cdiCarryReaisPerComparableDay: number | null;
+  thetaToCdiDailyMultiple: number | null;
+
+  // Ritmo Mensal e Anualizado Equivalente
+  monthlyEquivalentPct: number | null;
+  annualizedEquivalentPct: number | null;
+  annualizationQuality: 'NOT_AVAILABLE' | 'VERY_SHORT_PERIOD' | 'INDICATIVE' | 'NORMAL';
+
+  // Qualidade Global
+  economicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA';
+  qualityNotes: string[];
+}
+
+export interface StrategyEconomicPerformanceParams {
+  startDate: BusinessDate;
+  valuationDate?: BusinessDate;
+  capitalReservedReais: number;
+  capitalRemuneratedReais?: number;
+  benchmarkCapitalReais?: number;
+  optionPnlReais: number;
+  collateralMode?: CollateralMode;
+  collateralPctCdi?: number | null;
+  maxLossEconomicReais?: number | null;
+  maxLossType?: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
+  netThetaReaisPerDay?: number | null;
+  resultNature?: 'MTM' | 'REALIZED';
+  customDiSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>;
+  cdiFallbackAnnualRate?: number;
+  legsOpenedAtDifferentDates?: boolean;
+}
+
+export function calculateStrategyEconomicPerformance(
+  params: StrategyEconomicPerformanceParams
+): StrategyEconomicPerformance {
+  const qualityNotes: string[] = [];
+  const startDate = parseBusinessDate(params.startDate);
+  const valDate = parseBusinessDate(params.valuationDate || getBrazilTodayDate());
+  const accrualValuationDate = getPreviousOrSameB3TradingDay(valDate);
+  const elapsedDU = countB3TradingDays(startDate, accrualValuationDate);
+  const resultNature: 'MTM' | 'REALIZED' = params.resultNature ?? 'MTM';
+
+  // 1. Capitais Segregados
+  const capitalReservedReais = Math.max(0, params.capitalReservedReais);
+  const collateralMode: CollateralMode = params.collateralMode ?? 'IDLE_CASH';
+
+  let collateralPctCdi = 0;
+  if (collateralMode === 'REMUNERATED_100_CDI') {
+    collateralPctCdi = 100;
+  } else if (collateralMode === 'CUSTOM') {
+    collateralPctCdi = params.collateralPctCdi !== undefined && params.collateralPctCdi !== null && Number.isFinite(params.collateralPctCdi)
+      ? params.collateralPctCdi
+      : 100;
+  }
+
+  const capitalRemuneratedReais = collateralMode === 'IDLE_CASH'
+    ? 0
+    : (params.capitalRemuneratedReais !== undefined ? Math.max(0, params.capitalRemuneratedReais) : capitalReservedReais);
+
+  const benchmarkCapitalReais = params.benchmarkCapitalReais !== undefined
+    ? Math.max(0, params.benchmarkCapitalReais)
+    : capitalReservedReais;
+
+  const capitalBasisMethod: 'STATIC' | 'DAILY_WEIGHTED' = params.legsOpenedAtDifferentDates
+    ? 'DAILY_WEIGHTED'
+    : 'STATIC';
+
+  if (params.legsOpenedAtDifferentDates) {
+    qualityNotes.push('Pernas com datas de abertura distintas: benchmark linear simplificado para STATIC');
+  }
+
+  // 2. Benchmark CDI (100% CDI Puro)
+  const benchDi = calculateRealizedDiFactor(
+    startDate,
+    accrualValuationDate,
+    params.cdiFallbackAnnualRate ?? 0.14,
+    params.customDiSeries,
+    100
+  );
+  const benchmarkCdiAccumulatedFactor = benchDi.accumulatedFactor;
+  const benchmarkCdiYieldDecimal = benchDi.periodYieldDecimal;
+  const benchmarkCdiReais = benchmarkCapitalReais * benchmarkCdiYieldDecimal;
+
+  let benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' = 'OFFICIAL_DI';
+  if (benchDi.isEstimated) {
+    benchmarkQuality = benchDi.observations.some((o) => o.source === 'B3_OFFICIAL')
+      ? 'PARTIAL_ESTIMATE'
+      : 'ESTIMATED';
+    qualityNotes.push('Benchmark CDI contém observações estimadas com taxa de referência');
+  }
+
+  // 3. Carrego Real do Caixa (Collateral Carry com indexação diária oficial B3)
+  const collateralDi = calculateRealizedDiFactor(
+    startDate,
+    accrualValuationDate,
+    params.cdiFallbackAnnualRate ?? 0.14,
+    params.customDiSeries,
+    collateralPctCdi
+  );
+  const collateralAccumulatedFactor = collateralDi.accumulatedFactor;
+  const collateralYieldDecimal = collateralDi.periodYieldDecimal;
+  const collateralCarryReais = capitalRemuneratedReais * collateralYieldDecimal;
+
+  // 4. Resultados Financeiros & Excesso vs CDI
+  const optionPnlReais = params.optionPnlReais;
+  const totalEconomicReturnReais = optionPnlReais + collateralCarryReais;
+  const excessReturnVsCdiReais = totalEconomicReturnReais - benchmarkCdiReais;
+
+  // 5. Múltiplos
+  const minBenchmarkThreshold = 0.05;
+  const optionPnlToCdiMultiple = Math.abs(benchmarkCdiReais) >= minBenchmarkThreshold
+    ? optionPnlReais / benchmarkCdiReais
+    : null;
+  const totalReturnToCdiMultiple = Math.abs(benchmarkCdiReais) >= minBenchmarkThreshold
+    ? totalEconomicReturnReais / benchmarkCdiReais
+    : null;
+
+  // 6. Retornos do Período (%)
+  const optionReturnOnBenchmarkCapitalPct = benchmarkCapitalReais > 0
+    ? (optionPnlReais / benchmarkCapitalReais) * 100.0
+    : null;
+  const totalEconomicReturnPct = benchmarkCapitalReais > 0
+    ? (totalEconomicReturnReais / benchmarkCapitalReais) * 100.0
+    : null;
+  const cdiPeriodReturnPct = benchmarkCdiYieldDecimal * 100.0;
+  const excessPeriodPctPoints = totalEconomicReturnPct !== null
+    ? totalEconomicReturnPct - cdiPeriodReturnPct
+    : null;
+
+  // 7. Risco & Eficiência de Capital
+  const maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN' = params.maxLossType ?? (
+    params.maxLossEconomicReais !== undefined && params.maxLossEconomicReais !== null ? 'FINITE' : 'UNKNOWN'
+  );
+  const maxLossEconomicReais = maxLossType === 'FINITE' && params.maxLossEconomicReais !== undefined && params.maxLossEconomicReais !== null
+    ? Math.max(0, params.maxLossEconomicReais)
+    : null;
+
+  const excessReturnOnReservedCapitalPct = capitalReservedReais > 0
+    ? (excessReturnVsCdiReais / capitalReservedReais) * 100.0
+    : null;
+
+  let excessReturnOnMaxRiskPct: number | null = null;
+  let extraProfitPer1000RiskReais: number | null = null;
+
+  if (maxLossType === 'FINITE' && maxLossEconomicReais !== null && maxLossEconomicReais > 0) {
+    excessReturnOnMaxRiskPct = (excessReturnVsCdiReais / maxLossEconomicReais) * 100.0;
+    extraProfitPer1000RiskReais = (excessReturnVsCdiReais / maxLossEconomicReais) * 1000.0;
+  }
+
+  // 8. Dias de CDI Equivalentes (Composição Logarítmica)
+  let optionPnlEquivalentCdiDU: number | null = null;
+  if (elapsedDU > 0 && benchmarkCapitalReais > 0 && benchmarkCdiAccumulatedFactor > 1.0) {
+    const equivalentDailyFactor = Math.pow(benchmarkCdiAccumulatedFactor, 1.0 / elapsedDU);
+    const optionReturn = optionPnlReais / benchmarkCapitalReais;
+    if (equivalentDailyFactor > 1.00000001 && 1.0 + optionReturn > 0) {
+      optionPnlEquivalentCdiDU = Math.log1p(optionReturn) / Math.log(equivalentDailyFactor);
+    }
+  }
+
+  // 9. Carry Diário (Theta vs CDI Normalizado em R$/DU)
+  const lastDailyFactor = benchDi.observations.length > 0
+    ? benchDi.observations[benchDi.observations.length - 1].dailyFactor
+    : calculateB3DailyFactor(params.cdiFallbackAnnualRate ?? 0.14);
+  const cdiCarryReaisPerComparableDay = capitalRemuneratedReais * (lastDailyFactor - 1.0);
+  const thetaReaisPerComparableDay = params.netThetaReaisPerDay !== undefined && params.netThetaReaisPerDay !== null
+    ? params.netThetaReaisPerDay * (365.0 / 252.0)
+    : null;
+  const thetaToCdiDailyMultiple = (thetaReaisPerComparableDay !== null && cdiCarryReaisPerComparableDay > 0.05)
+    ? thetaReaisPerComparableDay / cdiCarryReaisPerComparableDay
+    : null;
+
+  // 10. Ritmo Mensal e Anualizado com Guards
+  let annualizationQuality: 'NOT_AVAILABLE' | 'VERY_SHORT_PERIOD' | 'INDICATIVE' | 'NORMAL' = 'NORMAL';
+  let monthlyEquivalentPct: number | null = null;
+  let annualizedEquivalentPct: number | null = null;
+
+  if (elapsedDU < 5 || totalEconomicReturnPct === null || totalEconomicReturnPct <= -100) {
+    annualizationQuality = 'NOT_AVAILABLE';
+  } else {
+    if (elapsedDU <= 15) {
+      annualizationQuality = 'VERY_SHORT_PERIOD';
+    } else if (elapsedDU <= 40) {
+      annualizationQuality = 'INDICATIVE';
+    } else {
+      annualizationQuality = 'NORMAL';
+    }
+    const periodBase = 1.0 + totalEconomicReturnPct / 100.0;
+    if (periodBase > 0) {
+      monthlyEquivalentPct = (Math.pow(periodBase, 21.0 / elapsedDU) - 1.0) * 100.0;
+      annualizedEquivalentPct = (Math.pow(periodBase, 252.0 / elapsedDU) - 1.0) * 100.0;
+    }
+  }
+
+  // 11. Qualidade Global
+  let economicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA' = 'FULL';
+  if (benchmarkCapitalReais <= 0 || elapsedDU <= 0) {
+    economicPerformanceQuality = 'INSUFFICIENT_DATA';
+    qualityNotes.push('Capital insuficiente ou zero dias úteis decorridos');
+  } else if (params.legsOpenedAtDifferentDates || benchmarkQuality !== 'OFFICIAL_DI') {
+    economicPerformanceQuality = 'PARTIAL';
+  }
+
+  return {
+    startDate,
+    valuationDate: valDate,
+    accrualValuationDate,
+    elapsedDU,
+    resultNature,
+
+    capitalReservedReais,
+    capitalRemuneratedReais,
+    benchmarkCapitalReais,
+    capitalBasisMethod,
+
+    maxLossEconomicReais,
+    maxLossType,
+
+    benchmarkCdiAccumulatedFactor,
+    benchmarkCdiYieldDecimal,
+    benchmarkCdiReais,
+    benchmarkQuality,
+
+    collateralMode,
+    collateralPctCdi,
+    collateralAccumulatedFactor,
+    collateralYieldDecimal,
+    collateralCarryReais,
+
+    optionPnlReais,
+
+    totalEconomicReturnReais,
+    excessReturnVsCdiReais,
+
+    optionPnlToCdiMultiple,
+    totalReturnToCdiMultiple,
+
+    optionReturnOnBenchmarkCapitalPct,
+    totalEconomicReturnPct,
+    cdiPeriodReturnPct,
+    excessPeriodPctPoints,
+
+    excessReturnOnReservedCapitalPct,
+    excessReturnOnMaxRiskPct,
+    extraProfitPer1000RiskReais,
+
+    optionPnlEquivalentCdiDU,
+
+    thetaReaisPerComparableDay,
+    cdiCarryReaisPerComparableDay,
+    thetaToCdiDailyMultiple,
+
+    monthlyEquivalentPct,
+    annualizedEquivalentPct,
+    annualizationQuality,
+
+    economicPerformanceQuality,
+    qualityNotes,
+  };
+}
+
+// ─── 9. POSITION METRICS & ENRICHMENT ───
 export interface PositionCalculatedMetrics {
   // Livro & Classificação
   book: StrategyBook;
@@ -800,7 +1120,9 @@ export interface EnrichedOptionStrategy {
     cdiMultiple: number | null;
     remainingTradingDays: number;
     elapsedTradingDays: number;
+    economicPerformance: StrategyEconomicPerformance;
   };
+  economicPerformance: StrategyEconomicPerformance;
 }
 
 export function enrichOptionStrategy(params: {
@@ -911,6 +1233,25 @@ export function enrichOptionStrategy(params: {
   const alphaReais = netPnlMtmReais - cdiRealizedReaisTotal;
   const cdiMultiple = Math.abs(cdiRealizedReaisTotal) >= 0.05 ? netPnlMtmReais / cdiRealizedReaisTotal : null;
 
+  // Performance Econômica da Estrutura (Double Yield Engine)
+  const openedAtBusinessDate = parseBusinessDate(params.openedAt.slice(0, 10));
+  const entryDates = new Set(params.legs.map((l) => l.position.entryDate));
+  const legsOpenedAtDifferentDates = entryDates.size > 1;
+
+  const economicPerformance = calculateStrategyEconomicPerformance({
+    startDate: openedAtBusinessDate,
+    capitalReservedReais: totalCapitalReserved,
+    capitalRemuneratedReais: params.collateralMode === 'IDLE_CASH' ? 0 : totalCapitalReserved,
+    benchmarkCapitalReais: totalCapitalReserved,
+    optionPnlReais: netPnlMtmReais,
+    collateralMode: params.collateralMode,
+    collateralPctCdi: params.collateralYieldPctCDI,
+    maxLossEconomicReais,
+    maxLossType: 'FINITE',
+    resultNature: params.status === 'CLOSED' ? 'REALIZED' : 'MTM',
+    legsOpenedAtDifferentDates,
+  });
+
   return {
     id: params.id,
     portfolio: params.portfolio,
@@ -925,6 +1266,7 @@ export function enrichOptionStrategy(params: {
     closedAt: params.closedAt ?? null,
     notes: params.notes ?? null,
     legs: params.legs,
+    economicPerformance,
     metrics: {
       netInitialCreditDebitReais,
       isNetCredit,
@@ -943,6 +1285,7 @@ export function enrichOptionStrategy(params: {
       cdiMultiple,
       remainingTradingDays: minRemainingDU,
       elapsedTradingDays: maxElapsedDU,
+      economicPerformance,
     },
   };
 }

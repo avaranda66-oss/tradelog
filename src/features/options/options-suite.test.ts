@@ -10,6 +10,7 @@ import {
 import {
   calculateRealizedDiFactor,
   calculateProjectedDiFactor,
+  calculateIndexedDiFactor,
   normalizeAnnualRate,
 } from './cdi-engine';
 import {
@@ -18,8 +19,10 @@ import {
   calculateEfficiencyScore,
   isActionFeedEligible,
   calculateCollateralReturn,
+  calculateStrategyEconomicPerformance,
   enrichOptionStrategy,
   type OptionMarketSnapshot,
+  type StrategyEconomicPerformance,
 } from './calculations';
 
 function assert(condition: boolean, msg: string) {
@@ -403,8 +406,196 @@ export function runAllTests() {
   assert(strat.metrics.downsideExposureUnits === 400, 'Exposição no Downside é de 400 ações equivalentes');
   assert(strat.metrics.upsideParticipationUnits === 200, 'Participação no Upside é de 200 ações equivalentes');
 
+  // ─── 7. STRATEGY ECONOMIC PERFORMANCE & DOUBLE YIELD RECONCILIATION SUITE (CENÁRIOS A a O) ───
+  console.log('\n7. Strategy Economic Performance & Double Yield Reconciliation Suite (Cenários A a O):');
+
+  // A. Cash-Secured Put + IDLE_CASH (Caixa não remunerado)
+  const perfA = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    collateralMode: 'IDLE_CASH',
+    maxLossEconomicReais: 15476.0,
+    maxLossType: 'FINITE',
+  });
+  assert(Math.abs(perfA.benchmarkCdiReais - 48.031468) < 0.01, 'Cenário A: Benchmark CDI 6 DU é rigorosamente R$ 48,03');
+  assert(perfA.collateralCarryReais === 0.0, 'Cenário A: IDLE_CASH gera rigorosamente R$ 0 de carrego de caixa');
+  assert(perfA.totalEconomicReturnReais === 300.0, 'Cenário A: Retorno Econômico Total é igual ao P&L das opções (+R$ 300,00)');
+  assert(Math.abs(perfA.excessReturnVsCdiReais - (300.0 - 48.031468)) < 0.01, 'Cenário A: Excesso vs CDI = P&L Opção - Custo de Oportunidade (+R$ 251,97)');
+
+  // B. Cash-Secured Put + 100% CDI
+  const perfB = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+    maxLossEconomicReais: 15476.0,
+    maxLossType: 'FINITE',
+  });
+  assert(Math.abs(perfB.collateralCarryReais - 48.031468) < 0.01, 'Cenário B: Carrego do Caixa a 100% CDI é rigorosamente R$ 48,03');
+  assert(Math.abs(perfB.totalEconomicReturnReais - 348.031468) < 0.01, 'Cenário B: Retorno Total com Double Yield é +R$ 348,03');
+  assert(Math.abs(perfB.excessReturnVsCdiReais - 300.0) < 0.00001, 'Cenário B Invariant: Em 100% CDI, excessReturnVsCdiReais === optionPnlReais (+R$ 300,00)');
+
+  // C. Cash-Secured Put + 110% CDI (Indexação diária oficial B3)
+  const perfC = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    collateralMode: 'CUSTOM',
+    collateralPctCdi: 110,
+    maxLossEconomicReais: 15476.0,
+    maxLossType: 'FINITE',
+  });
+  assert(Math.abs(perfC.collateralCarryReais - 52.841409) < 0.01, 'Cenário C: Carrego a 110% CDI com composição diária oficial é R$ 52,84');
+  assert(Math.abs(perfC.excessReturnVsCdiReais - 304.80994) < 0.01, 'Cenário C: Excesso vs CDI = Opções (+300) + Alpha do Caixa (+4.81) = +R$ 304,81');
+
+  // D. Estrutura Financiada ITUB4 2:1 (Reconciliação Completa do Storytelling)
+  const perfD = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    capitalRemuneratedReais: 15476.0,
+    benchmarkCapitalReais: 15476.0,
+    optionPnlReais: 478.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+    maxLossEconomicReais: 15296.0,
+    maxLossType: 'FINITE',
+    netThetaReaisPerDay: 18.40,
+    resultNature: 'MTM',
+  });
+  assert(Math.abs(perfD.totalEconomicReturnReais - 526.031468) < 0.01, 'Cenário D: Retorno Econômico Total ITUB 2:1 é rigorosamente +R$ 526,03 (+3,40%)');
+  assert(Math.abs(perfD.excessReturnVsCdiReais - 478.0) < 0.0001, 'Cenário D: Valor Gerado Acima do CDI é rigorosamente +R$ 478,00 (+3,09 p.p.)');
+  assert(Math.abs(perfD.optionPnlToCdiMultiple! - 9.9518) < 0.01, 'Cenário D: Múltiplo Opções / CDI é rigorosamente 9,95x');
+  assert(Math.abs(perfD.totalReturnToCdiMultiple! - 10.9518) < 0.01, 'Cenário D: Múltiplo Retorno Total / CDI é rigorosamente 10,95x');
+  assert(Math.abs(perfD.extraProfitPer1000RiskReais! - 31.25) < 0.01, 'Cenário D: Lucro Extra por R$ 1.000 de risco máximo é R$ 31,25');
+  assert(Math.abs(perfD.optionPnlEquivalentCdiDU! - 58.91) < 0.1, 'Cenário D: Dias de CDI Equivalentes por composição logarítmica é ~58,9 DU');
+  assert(perfD.annualizationQuality === 'VERY_SHORT_PERIOD', 'Cenário D: 6 DU classifica annualizationQuality como VERY_SHORT_PERIOD');
+
+  // E. Bull Put Spread (Trava com Risco Máximo Finito)
+  const perfE = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 2000.0,
+    optionPnlReais: 150.0,
+    collateralMode: 'IDLE_CASH',
+    maxLossEconomicReais: 1800.0,
+    maxLossType: 'FINITE',
+  });
+  assert(perfE.maxLossType === 'FINITE' && perfE.maxLossEconomicReais === 1800.0, 'Cenário E: Bull Put Spread define maxLossType FINITE');
+  assert(Math.abs(perfE.extraProfitPer1000RiskReais! - ((150.0 - 2000 * 0.00310356) / 1.8)) < 0.01, 'Cenário E: Calcula métrica por R$ 1.000 de risco sobre maxLoss da trava');
+
+  // F. Posição Parcialmente Alocada
+  const perfF = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 7738.0, // 50% de 15476
+    optionPnlReais: 150.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(Math.abs(perfF.benchmarkCdiReais - (7738.0 * 0.00310356)) < 0.001, 'Cenário F: Alocação parcial escala benchmark linearmente');
+  assert(Math.abs(perfF.excessReturnVsCdiReais - 150.0) < 0.001, 'Cenário F: Excesso de retorno proporcional preservado');
+
+  // G. Pernas com Datas de Abertura Diferentes
+  const perfG = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+    legsOpenedAtDifferentDates: true,
+  });
+  assert(perfG.capitalBasisMethod === 'DAILY_WEIGHTED', 'Cenário G: Marca capitalBasisMethod DAILY_WEIGHTED');
+  assert(perfG.economicPerformanceQuality === 'PARTIAL', 'Cenário G: Marca economicPerformanceQuality PARTIAL');
+
+  // H. Posição MTM Aberta
+  const perfH = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    resultNature: 'MTM',
+  });
+  assert(perfH.resultNature === 'MTM', 'Cenário H: Identifica resultado como MTM');
+
+  // I. Resultado Realizado (Posição Encerrada)
+  const perfI = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    resultNature: 'REALIZED',
+  });
+  assert(perfI.resultNature === 'REALIZED', 'Cenário I: Identifica resultado como REALIZED');
+
+  // J. Benchmark com 100% Dados Oficiais B3
+  const perfJ = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+  });
+  assert(perfJ.benchmarkQuality === 'OFFICIAL_DI', 'Cenário J: Série oficial marca benchmarkQuality OFFICIAL_DI');
+
+  // K. Benchmark Parcialmente Estimado (Fallback)
+  const emptySeries = new Map<string, { annualRateDecimal: number; source: string }>();
+  const perfK = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    customDiSeries: emptySeries as any,
+  });
+  assert(perfK.benchmarkQuality === 'ESTIMATED', 'Cenário K: Sem série oficial marca benchmarkQuality ESTIMATED');
+
+  // L. Max Loss UNBOUNDED (Venda Descoberta de Call)
+  const perfL = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 300.0,
+    maxLossType: 'UNBOUNDED',
+  });
+  assert(perfL.maxLossType === 'UNBOUNDED' && perfL.maxLossEconomicReais === null, 'Cenário L: Risco ilimitado define maxLoss null');
+  assert(perfL.excessReturnOnMaxRiskPct === null && perfL.extraProfitPer1000RiskReais === null, 'Cenário L: Não fabrica métricas de risco para UNBOUNDED');
+
+  // M. Valuation em Sábado / Feriado (Sem inflar DU nem CDI)
+  const perfM = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-28', // Sexta
+    valuationDate: '2026-08-29', // Sábado
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 50.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(perfM.elapsedDU === 0 && perfM.benchmarkCdiReais === 0.0, 'Cenário M: Sábado normaliza para 0 DU e 0 CDI');
+  assert(perfM.excessReturnVsCdiReais === 50.0, 'Cenário M: Retorno das opções preservado sem contaminação temporal');
+
+  // N. P&L Negativo das Opções
+  const perfN = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: -200.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(Math.abs(perfN.totalEconomicReturnReais - (-200.0 + 48.03069456)) < 0.001, 'Cenário N: Double Yield amortece P&L negativo com carrego do CDI (-R$ 151,97)');
+  assert(Math.abs(perfN.excessReturnVsCdiReais - (-200.0)) < 0.001, 'Cenário N: Excesso vs CDI negativo reflete perda estrita das opções');
+
+  // O. P&L Zero das Opções
+  const perfO = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 0.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(Math.abs(perfO.totalEconomicReturnReais - 48.03069456) < 0.001, 'Cenário O: Com P&L zero, retorno econômico total é exatamente o CDI do caixa');
+  assert(perfO.excessReturnVsCdiReais === 0.0, 'Cenário O: Valor gerado acima do CDI é rigorosamente R$ 0,00');
+
   console.log('\n========================================');
-  console.log('✅ ALL 30 UNIT TESTS PASSED SUCCESSFULLY!');
+  console.log('✅ ALL 50 UNIT TESTS & 15 ECONOMIC SCENARIOS PASSED SUCCESSFULLY!');
   console.log('========================================\n');
 }
 

@@ -25,11 +25,18 @@ import {
   type OptionMarketSnapshot,
   type StrategyBook,
   type CollateralMode,
+  type StrategyEconomicPerformance,
 } from './calculations';
 import { getBrazilTodayDate } from './b3-calendar';
 import { toAnnualRateDecimal } from './cdi-engine';
 
-export type { PositionCalculatedMetrics, EnrichedOptionPosition, EnrichedOptionStrategy, EnrichedStrategyLeg };
+export type {
+  PositionCalculatedMetrics,
+  EnrichedOptionPosition,
+  EnrichedOptionStrategy,
+  EnrichedStrategyLeg,
+  StrategyEconomicPerformance,
+};
 
 export interface ActionFeedItem {
   positionId: string;
