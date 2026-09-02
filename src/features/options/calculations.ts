@@ -405,7 +405,7 @@ export interface StrategyEconomicPerformance {
   capitalReservedReais: number;        // Capital bloqueado por margem / strikes de opções vendidas (ex: R$ 15.476)
   capitalRemuneratedReais: number;    // Saldo em garantia aplicado no CDI (ex: R$ 15.476 ou R$ 0)
   benchmarkCapitalReais: number;      // Custo de oportunidade de referência
-  capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED';
+  capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED' | 'SEGMENTED_TIMELINE';
 
   // Risco Econômico
   maxLossEconomicReais: number | null;
@@ -482,6 +482,15 @@ export interface StrategyEconomicPerformanceParams {
   customDiSeries?: Map<BusinessDate, { annualRateDecimal: AnnualRateDecimal; source: string }>;
   cdiFallbackAnnualRate?: number;
   legsOpenedAtDifferentDates?: boolean;
+  fundingSegments?: Array<{
+    startDate: string;
+    endDate: string | null;
+    benchmarkCapitalReais: number;
+    capitalRemuneratedReais: number;
+    collateralMode: string;
+    collateralPctCdi: number | null;
+    quality: string;
+  }>;
 }
 
 export function calculateStrategyEconomicPerformance(
@@ -538,12 +547,16 @@ export function calculateStrategyEconomicPerformance(
     ? 0
     : (params.capitalRemuneratedReais !== undefined ? Math.max(0, params.capitalRemuneratedReais) : capitalReservedReais);
 
-  const capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED' = params.legsOpenedAtDifferentDates
-    ? 'STATIC_APPROXIMATION'
-    : 'STATIC';
+  const isSegmentedTimeline = Boolean(params.fundingSegments && params.fundingSegments.length > 1);
+  const capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED' | 'SEGMENTED_TIMELINE' = isSegmentedTimeline
+    ? 'SEGMENTED_TIMELINE'
+    : (params.legsOpenedAtDifferentDates ? 'STATIC_APPROXIMATION' : 'STATIC');
 
-  if (params.legsOpenedAtDifferentDates) {
+  if (params.legsOpenedAtDifferentDates && !isSegmentedTimeline) {
     qualityNotes.push('Pernas com datas de abertura distintas: benchmark linear aproximado (STATIC_APPROXIMATION)');
+  }
+  if (isSegmentedTimeline) {
+    qualityNotes.push('Timeline de Funding Segmentada: capital e remuneração apurados por segmento cronológico');
   }
 
   // P0/P1 Fail-Safe: Se startDate não for dia útil de pregão B3, não chamar CDI Engine e retornar indisponível
@@ -596,37 +609,114 @@ export function calculateStrategyEconomicPerformance(
     };
   }
 
-  // 2. Benchmark CDI (100% CDI Puro)
-  const benchDi = calculateRealizedDiFactor(
-    startDate,
-    accrualValuationDate,
-    params.cdiFallbackAnnualRate ?? 0.14,
-    params.customDiSeries,
-    100
-  );
-  const benchmarkCdiAccumulatedFactor = benchDi.accumulatedFactor;
-  const benchmarkCdiYieldDecimal = benchDi.periodYieldDecimal;
-  const benchmarkCdiReais = benchmarkCapitalReais * benchmarkCdiYieldDecimal;
+  // 2. Benchmark CDI e Carrego de Caixa (Segmentado ou Estático)
+  let benchmarkCdiAccumulatedFactor: number | null = null;
+  let benchmarkCdiYieldDecimal: number | null = null;
+  let benchmarkCdiReais = 0;
+  let benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' | 'NOT_AVAILABLE' = 'OFFICIAL_DI';
 
-  let benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' = 'OFFICIAL_DI';
-  if (benchDi.isEstimated) {
-    benchmarkQuality = benchDi.observations.some((o) => o.source === 'B3_OFFICIAL')
-      ? 'PARTIAL_ESTIMATE'
-      : 'ESTIMATED';
-    qualityNotes.push('Benchmark CDI contém observações estimadas com taxa de referência');
+  let collateralAccumulatedFactor: number | null = null;
+  let collateralYieldDecimal: number | null = null;
+  let collateralCarryReais = 0;
+  let lastCollateralDailyFactor = 1.0;
+
+  let timelineHasInsufficient = false;
+  let timelineHasPartial = false;
+
+  if (isSegmentedTimeline && params.fundingSegments) {
+    let hasEstimated = false;
+    let hasPartialEst = false;
+
+    for (const seg of params.fundingSegments) {
+      const segStart = parseBusinessDate(seg.startDate);
+      const segEndRaw = seg.endDate ? parseBusinessDate(seg.endDate) : accrualValuationDate;
+      const segEnd = getPreviousOrSameB3TradingDay(segEndRaw);
+
+      if (!isB3TradingDay(segStart)) {
+        timelineHasInsufficient = true;
+        continue;
+      }
+      if (seg.quality === 'INSUFFICIENT_DATA') timelineHasInsufficient = true;
+      if (seg.quality === 'PARTIAL') timelineHasPartial = true;
+
+      // Benchmark CDI 100% para este segmento
+      const segBenchDi = calculateRealizedDiFactor(
+        segStart,
+        segEnd,
+        params.cdiFallbackAnnualRate ?? 0.14,
+        params.customDiSeries,
+        100
+      );
+      if (segBenchDi.isEstimated) {
+        if (segBenchDi.observations.some((o) => o.source === 'B3_OFFICIAL')) hasPartialEst = true;
+        else hasEstimated = true;
+      }
+      benchmarkCdiReais += seg.benchmarkCapitalReais * segBenchDi.periodYieldDecimal;
+
+      // Carrego de Caixa para este segmento
+      const segPct = seg.collateralMode === 'IDLE_CASH' ? 0 : (seg.collateralPctCdi ?? 100);
+      const segRemun = seg.collateralMode === 'IDLE_CASH' ? 0 : seg.capitalRemuneratedReais;
+      const segCollateralDi = calculateRealizedDiFactor(
+        segStart,
+        segEnd,
+        params.cdiFallbackAnnualRate ?? 0.14,
+        params.customDiSeries,
+        segPct
+      );
+      collateralCarryReais += segRemun * segCollateralDi.periodYieldDecimal;
+
+      if (segCollateralDi.observations.length > 0) {
+        lastCollateralDailyFactor = segCollateralDi.observations[segCollateralDi.observations.length - 1].dailyFactor;
+      }
+    }
+
+    if (timelineHasInsufficient) {
+      benchmarkQuality = 'NOT_AVAILABLE';
+    } else if (hasEstimated) {
+      benchmarkQuality = 'ESTIMATED';
+    } else if (hasPartialEst) {
+      benchmarkQuality = 'PARTIAL_ESTIMATE';
+    } else {
+      benchmarkQuality = 'OFFICIAL_DI';
+    }
+  } else {
+    // Benchmark CDI 100% Puro
+    const benchDi = calculateRealizedDiFactor(
+      startDate,
+      accrualValuationDate,
+      params.cdiFallbackAnnualRate ?? 0.14,
+      params.customDiSeries,
+      100
+    );
+    benchmarkCdiAccumulatedFactor = benchDi.accumulatedFactor;
+    benchmarkCdiYieldDecimal = benchDi.periodYieldDecimal;
+    benchmarkCdiReais = benchmarkCapitalReais * benchmarkCdiYieldDecimal;
+
+    if (benchDi.isEstimated) {
+      benchmarkQuality = benchDi.observations.some((o) => o.source === 'B3_OFFICIAL')
+        ? 'PARTIAL_ESTIMATE'
+        : 'ESTIMATED';
+      qualityNotes.push('Benchmark CDI contém observações estimadas com taxa de referência');
+    }
+
+    // Carrego Real do Caixa
+    const collateralDi = calculateRealizedDiFactor(
+      startDate,
+      accrualValuationDate,
+      params.cdiFallbackAnnualRate ?? 0.14,
+      params.customDiSeries,
+      collateralPctCdi
+    );
+    collateralAccumulatedFactor = collateralDi.accumulatedFactor;
+    collateralYieldDecimal = collateralDi.periodYieldDecimal;
+    collateralCarryReais = capitalRemuneratedReais * collateralYieldDecimal;
+
+    if (collateralDi.observations.length > 0) {
+      lastCollateralDailyFactor = collateralDi.observations[collateralDi.observations.length - 1].dailyFactor;
+    } else {
+      lastCollateralDailyFactor = calculateIndexedDailyFactor(params.cdiFallbackAnnualRate ?? 0.14, collateralPctCdi);
+    }
   }
-
-  // 3. Carrego Real do Caixa (Collateral Carry com indexação diária oficial B3)
-  const collateralDi = calculateRealizedDiFactor(
-    startDate,
-    accrualValuationDate,
-    params.cdiFallbackAnnualRate ?? 0.14,
-    params.customDiSeries,
-    collateralPctCdi
-  );
-  const collateralAccumulatedFactor = collateralDi.accumulatedFactor;
-  const collateralYieldDecimal = collateralDi.periodYieldDecimal;
-  const collateralCarryReais = capitalRemuneratedReais * collateralYieldDecimal;
 
   // 4. Resultados Financeiros & Excesso vs CDI
   const optionPnlReais = params.optionPnlReais;
@@ -642,15 +732,17 @@ export function calculateStrategyEconomicPerformance(
     ? totalEconomicReturnReais / benchmarkCdiReais
     : null;
 
-  // 6. Retornos do Período (%)
-  const optionReturnOnBenchmarkCapitalPct = benchmarkCapitalReais > 0
+  // 6. Retornos do Período (%) — Nulos sob timeline segmentada para evitar médias espúrias
+  const optionReturnOnBenchmarkCapitalPct = (!isSegmentedTimeline && benchmarkCapitalReais > 0)
     ? (optionPnlReais / benchmarkCapitalReais) * 100.0
     : null;
-  const totalEconomicReturnPct = benchmarkCapitalReais > 0
+  const totalEconomicReturnPct = (!isSegmentedTimeline && benchmarkCapitalReais > 0)
     ? (totalEconomicReturnReais / benchmarkCapitalReais) * 100.0
     : null;
-  const cdiPeriodReturnPct = benchmarkCdiYieldDecimal * 100.0;
-  const excessPeriodPctPoints = totalEconomicReturnPct !== null
+  const cdiPeriodReturnPct = (!isSegmentedTimeline && benchmarkCdiYieldDecimal !== null)
+    ? benchmarkCdiYieldDecimal * 100.0
+    : null;
+  const excessPeriodPctPoints = (totalEconomicReturnPct !== null && cdiPeriodReturnPct !== null)
     ? totalEconomicReturnPct - cdiPeriodReturnPct
     : null;
 
@@ -663,21 +755,21 @@ export function calculateStrategyEconomicPerformance(
     ? Math.max(0, params.maxLossEconomicReais)
     : null;
 
-  const excessReturnOnReservedCapitalPct = capitalReservedReais > 0
+  const excessReturnOnReservedCapitalPct = (!isSegmentedTimeline && capitalReservedReais > 0)
     ? (excessReturnVsCdiReais / capitalReservedReais) * 100.0
     : null;
 
   let excessReturnOnMaxRiskPct: number | null = null;
   let extraProfitPer1000RiskReais: number | null = null;
 
-  if (riskRecognitionQuality === 'EXACT' && maxLossType === 'FINITE' && maxLossEconomicReais !== null && maxLossEconomicReais > 0) {
+  if (!isSegmentedTimeline && riskRecognitionQuality === 'EXACT' && maxLossType === 'FINITE' && maxLossEconomicReais !== null && maxLossEconomicReais > 0) {
     excessReturnOnMaxRiskPct = (excessReturnVsCdiReais / maxLossEconomicReais) * 100.0;
     extraProfitPer1000RiskReais = (excessReturnVsCdiReais / maxLossEconomicReais) * 1000.0;
   }
 
   // 8. Dias de CDI Equivalentes (Composição Logarítmica)
   let optionPnlEquivalentCdiDU: number | null = null;
-  if (elapsedDU > 0 && benchmarkCapitalReais > 0 && benchmarkCdiAccumulatedFactor > 1.0) {
+  if (!isSegmentedTimeline && elapsedDU > 0 && benchmarkCapitalReais > 0 && benchmarkCdiAccumulatedFactor !== null && benchmarkCdiAccumulatedFactor > 1.0) {
     const equivalentDailyFactor = Math.pow(benchmarkCdiAccumulatedFactor, 1.0 / elapsedDU);
     const optionReturn = optionPnlReais / benchmarkCapitalReais;
     if (equivalentDailyFactor > 1.00000001 && 1.0 + optionReturn > 0) {
@@ -686,9 +778,6 @@ export function calculateStrategyEconomicPerformance(
   }
 
   // 9. Carry Diário (Theta vs CDI Normalizado em R$/DU baseado no collateral real indexado)
-  const lastCollateralDailyFactor = collateralDi.observations.length > 0
-    ? collateralDi.observations[collateralDi.observations.length - 1].dailyFactor
-    : calculateIndexedDailyFactor(params.cdiFallbackAnnualRate ?? 0.14, collateralPctCdi);
   const cdiCarryReaisPerComparableDay = capitalRemuneratedReais * (lastCollateralDailyFactor - 1.0);
   const thetaReaisPerComparableDay = params.netThetaReaisPerDay !== undefined && params.netThetaReaisPerDay !== null
     ? params.netThetaReaisPerDay * (365.0 / 252.0)
@@ -702,7 +791,7 @@ export function calculateStrategyEconomicPerformance(
   let monthlyEquivalentPct: number | null = null;
   let annualizedEquivalentPct: number | null = null;
 
-  if (elapsedDU < 5 || totalEconomicReturnPct === null || totalEconomicReturnPct <= -100) {
+  if (isSegmentedTimeline || elapsedDU < 5 || totalEconomicReturnPct === null || totalEconomicReturnPct <= -100) {
     annualizationQuality = 'NOT_AVAILABLE';
   } else {
     if (elapsedDU <= 15) {
@@ -721,7 +810,16 @@ export function calculateStrategyEconomicPerformance(
 
   // 11. Qualidade Global
   let economicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA' = 'FULL';
-  if (benchmarkCapitalReais <= 0 || elapsedDU <= 0) {
+  if (isSegmentedTimeline) {
+    if (timelineHasInsufficient) {
+      economicPerformanceQuality = 'INSUFFICIENT_DATA';
+      qualityNotes.push('Segmento de funding com dados insuficientes ou data inválida');
+    } else if (timelineHasPartial || benchmarkQuality !== 'OFFICIAL_DI') {
+      economicPerformanceQuality = 'PARTIAL';
+    } else {
+      economicPerformanceQuality = 'FULL';
+    }
+  } else if (benchmarkCapitalReais <= 0 || elapsedDU <= 0) {
     economicPerformanceQuality = 'INSUFFICIENT_DATA';
     qualityNotes.push('Capital insuficiente ou zero dias úteis decorridos');
   } else if (params.legsOpenedAtDifferentDates || benchmarkQuality !== 'OFFICIAL_DI') {
@@ -792,6 +890,27 @@ export interface PositionCalculatedMetrics {
   // Livro & Classificação
   book: StrategyBook;
   strategyType: StrategyType;
+
+  // Quantidades Segregadas & Ciclo de Vida
+  originalQuantity: number;
+  closedQuantity: number;
+  openQuantity: number;
+  closedPct: number;
+  lifecycleState: 'OPEN_FULL' | 'PARTIALLY_CLOSED' | 'CLOSED';
+
+  // Decomposição Tripla de P&L (Gross & Net)
+  realizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
+  realizedGrossPnlReais: number | null;
+  realizedNetPnlReais: number | null;
+  unrealizedPnlReais: number;
+  totalGrossPnlReais: number | null;
+  totalNetPnlReais: number | null;
+  realizedPnlReais: number; // Alias para compatibilidade
+  totalPnlReais: number; // Alias para compatibilidade
+
+  // Capitais Segregados
+  originalCapitalAllocated: number;
+  residualCapitalAllocated: number;
 
   // Contagem de Sessões B3
   elapsedTradingDays: number;
@@ -878,7 +997,33 @@ export function enrichOptionPosition(
   const isShort = normalizedSide === 'SHORT';
   const book: StrategyBook = isShort ? 'INCOME' : 'DIRECTIONAL';
 
-  const quantityUnits = pos.quantity;
+  const originalQuantity = pos.quantity;
+  const closedQuantity = pos.closedQuantity ?? (isClosed ? originalQuantity : 0);
+  const openQuantity = pos.openQuantity ?? Math.max(0, originalQuantity - closedQuantity);
+  const closedPct = originalQuantity > 0 ? (closedQuantity / originalQuantity) * 100 : 0;
+
+  let lifecycleState: 'OPEN_FULL' | 'PARTIALLY_CLOSED' | 'CLOSED' = 'OPEN_FULL';
+  if (openQuantity === 0 || pos.status === 'CLOSED' || pos.status === 'EXPIRED_WORTHLESS') {
+    lifecycleState = 'CLOSED';
+  } else if (closedQuantity > 0 && openQuantity < originalQuantity) {
+    lifecycleState = 'PARTIALLY_CLOSED';
+  }
+
+  // Decomposição Tripla de P&L (Gross & Net)
+  const isLegacyIncomplete = (pos as any).legacyQuality === 'LEGACY_INCOMPLETE';
+  let realizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE' = 'FULL';
+  let realizedGrossPnlReais: number | null = null;
+  let realizedNetPnlReais: number | null = null;
+
+  if (isLegacyIncomplete) {
+    realizedPnlQuality = 'LEGACY_INCOMPLETE';
+    realizedGrossPnlReais = null;
+    realizedNetPnlReais = null;
+  } else {
+    realizedGrossPnlReais = pos.realizedPnlReais ?? 0;
+    realizedNetPnlReais = pos.realizedPnlReais ?? 0;
+  }
+
   const currentPrice = isClosed && pos.exitPrice !== null ? pos.exitPrice : pos.currentPrice;
 
   // 3. Snapshot & Cotação de Saída
@@ -895,22 +1040,32 @@ export function enrichOptionPosition(
   const exitQuote = getConservativeExitQuote(snapshot, normalizedSide);
   const estimatedExitPrice = exitQuote.price ?? currentPrice;
 
-  // 4. P&L Assinado (MTM vs Saída Conservadora)
-  const pnlMtmReais = calculateSignedPnL({
+  // 4. P&L Assinado (MTM residual sobre openQuantity vs Saída Conservadora)
+  const unrealizedPnlReais = calculateSignedPnL({
     entryPrice: pos.entryPrice,
     currentPrice,
-    quantityUnderlyingUnits: quantityUnits,
+    quantityUnderlyingUnits: openQuantity,
     side: normalizedSide,
   });
+  const pnlMtmReais = unrealizedPnlReais;
 
   const pnlEstimatedExitReais = calculateSignedPnL({
     entryPrice: pos.entryPrice,
     currentPrice: estimatedExitPrice,
-    quantityUnderlyingUnits: quantityUnits,
+    quantityUnderlyingUnits: openQuantity,
     side: normalizedSide,
   });
 
-  // 5. % Capturado e ROI
+  const totalGrossPnlReais = realizedGrossPnlReais !== null
+    ? Math.round((realizedGrossPnlReais + unrealizedPnlReais) * 100) / 100
+    : null;
+  const totalNetPnlReais = realizedNetPnlReais !== null
+    ? Math.round((realizedNetPnlReais + unrealizedPnlReais) * 100) / 100
+    : null;
+  const realizedPnlReais = realizedGrossPnlReais ?? 0;
+  const totalPnlReais = totalGrossPnlReais ?? unrealizedPnlReais;
+
+  // 5. % Capturado e ROI (sobre contratos abertos vigentes)
   let premiumCapturedPct = 0;
   let roiOnPremiumPct = 0;
   let remainingCaptureReais = 0;
@@ -918,15 +1073,19 @@ export function enrichOptionPosition(
   if (pos.entryPrice > 0) {
     if (isShort) {
       premiumCapturedPct = ((pos.entryPrice - currentPrice) / pos.entryPrice) * 100;
-      remainingCaptureReais = Math.max(0, currentPrice) * quantityUnits;
+      remainingCaptureReais = Math.max(0, currentPrice) * openQuantity;
     } else {
       roiOnPremiumPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
     }
   }
 
-  // 6. Capital Alocado & Max Loss
-  const capitalAllocated = Math.max(1, pos.allocatedCapital);
-  const yieldOnCapitalPct = (pnlMtmReais / capitalAllocated) * 100;
+  // 6. Capital Alocado & Max Loss (Residual)
+  const originalCapitalAllocated = Math.max(0, pos.allocatedCapital);
+  const residualCapitalAllocated = originalQuantity > 0 && openQuantity > 0
+    ? (originalCapitalAllocated * openQuantity) / originalQuantity
+    : 0;
+  const capitalAllocated = Math.max(openQuantity > 0 ? 1 : 0, residualCapitalAllocated);
+  const yieldOnCapitalPct = capitalAllocated > 0 ? (unrealizedPnlReais / capitalAllocated) * 100 : 0;
 
   let maxLossReais = capitalAllocated;
   let maxLossType: 'FINITE' | 'UNBOUNDED' | 'NOT_APPLICABLE' = 'FINITE';
@@ -935,7 +1094,7 @@ export function enrichOptionPosition(
 
   if (pos.optionType === 'PUT' && isShort) {
     effectiveAcquisitionPrice = pos.strike - pos.entryPrice;
-    maxLossReais = effectiveAcquisitionPrice * quantityUnits;
+    maxLossReais = effectiveAcquisitionPrice * openQuantity;
     const spot = pos.underlyingCurrentSpot || pos.underlyingEntrySpot;
     if (spot && spot > 0) {
       discountToSpotPct = ((spot - effectiveAcquisitionPrice) / spot) * 100;
@@ -944,7 +1103,7 @@ export function enrichOptionPosition(
     effectiveAcquisitionPrice = pos.strike + pos.entryPrice;
     maxLossType = 'UNBOUNDED';
   } else {
-    maxLossReais = pos.entryPrice * quantityUnits;
+    maxLossReais = pos.entryPrice * openQuantity;
   }
 
   // 7. CDI Realizado Diário vs Projetado (com normalização estrita de unidade decimal)
@@ -986,12 +1145,12 @@ export function enrichOptionPosition(
     collateralMode: 'IDLE_CASH',
   });
 
-  // 9. Efficiency Analysis (MTM e Executável)
+  // 9. Efficiency Analysis (MTM e Executável sobre contratos abertos)
   const efficiencyMtm = calculateEfficiencyScore(
     {
       entryPrice: pos.entryPrice,
       referencePrice: currentPrice,
-      quantityUnderlyingUnits: quantityUnits,
+      quantityUnderlyingUnits: openQuantity,
       elapsedDU: elapsedTradingDays,
       totalDU: totalTradingDaysAtEntry,
       capitalReserved: capitalAllocated,
@@ -1004,7 +1163,7 @@ export function enrichOptionPosition(
     {
       entryPrice: pos.entryPrice,
       referencePrice: estimatedExitPrice,
-      quantityUnderlyingUnits: quantityUnits,
+      quantityUnderlyingUnits: openQuantity,
       elapsedDU: elapsedTradingDays,
       totalDU: totalTradingDaysAtEntry,
       capitalReserved: capitalAllocated,
@@ -1029,6 +1188,28 @@ export function enrichOptionPosition(
     metrics: {
       book,
       strategyType: isShort ? (pos.optionType === 'PUT' ? 'CASH_SECURED_PUT' : 'COVERED_CALL') : (pos.optionType === 'PUT' ? 'LONG_PUT' : 'LONG_CALL'),
+
+      // Quantidades Segregadas & Ciclo de Vida
+      originalQuantity,
+      closedQuantity,
+      openQuantity,
+      closedPct,
+      lifecycleState,
+
+      // Decomposição Tripla de P&L (Gross & Net)
+      realizedPnlQuality,
+      realizedGrossPnlReais,
+      realizedNetPnlReais,
+      unrealizedPnlReais,
+      totalGrossPnlReais,
+      totalNetPnlReais,
+      realizedPnlReais,
+      totalPnlReais,
+
+      // Capitais Segregados
+      originalCapitalAllocated,
+      residualCapitalAllocated,
+
       elapsedTradingDays,
       remainingTradingDays,
       totalTradingDaysAtEntry,
@@ -1188,6 +1369,9 @@ export interface EnrichedStrategyLeg {
   strategyId: string;
   positionId: string;
   allocatedQuantity: number;
+  originalAllocatedQuantity: number;
+  closedAllocatedQuantity: number;
+  openAllocatedQuantity: number;
   economicRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM';
   position: EnrichedOptionPosition;
 }
@@ -1208,6 +1392,9 @@ export interface StrategyRiskProfile {
 export function detectStrategyRiskAndPayoff(params: {
   legs: Array<{
     allocatedQuantity: number;
+    originalAllocatedQuantity?: number;
+    closedAllocatedQuantity?: number;
+    openAllocatedQuantity?: number;
     economicRole: string;
     position: EnrichedOptionPosition;
   }>;
@@ -1232,7 +1419,8 @@ export function detectStrategyRiskAndPayoff(params: {
     const pos = leg.position;
     const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
     const isLong = !isShort;
-    const qty = leg.allocatedQuantity;
+    const qty = leg.openAllocatedQuantity !== undefined ? leg.openAllocatedQuantity : leg.allocatedQuantity;
+    if (qty <= 0) continue; // Pular pernas já completamente encerradas
     const exp = pos.expirationDate;
 
     if (pos.optionType === 'PUT') {
@@ -1479,9 +1667,18 @@ export interface EnrichedOptionStrategy {
   metrics: {
     netInitialCreditDebitReais: number; // ex: +180.00
     isNetCredit: boolean;
-    netPnlMtmReais: number; // ex: +478.00
+
+    // Decomposição Tripla de P&L da Estrutura (Gross & Net)
+    strategyGrossRealizedPnlReais: number;
+    strategyFeesReais: number;
+    strategyNetRealizedPnlReais: number;
+    strategyUnrealizedPnlReais: number;
+    strategyTotalGrossPnlReais: number;
+    strategyTotalNetPnlReais: number;
+
+    netPnlMtmReais: number; // ex: +478.00 (alias compatível com telas)
     netEstimatedExitReais: number;
-    totalCapitalReserved: number; // ex: 15476.00 (cash-secured)
+    totalCapitalReserved: number; // ex: 15476.00 (cash-secured residual)
     maxLossEconomicReais: number | null; // ex: 15296.00 ou null se UNBOUNDED/UNKNOWN
     maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
     riskRecognitionQuality: 'EXACT' | 'APPROXIMATE' | 'UNKNOWN';
@@ -1521,42 +1718,82 @@ export function enrichOptionStrategy(params: {
     strategyId: string;
     positionId: string;
     allocatedQuantity: number;
+    originalAllocatedQuantity?: number;
+    closedAllocatedQuantity?: number;
+    openAllocatedQuantity?: number;
     economicRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM';
     position: EnrichedOptionPosition;
   }>;
+  executions?: Array<{
+    grossRealizedPnlReais: number;
+    feesReais: number;
+    netRealizedPnlReais: number;
+  }>;
+  fundingSegments?: Array<{
+    id: string;
+    startDate: string;
+    endDate: string | null;
+    benchmarkCapitalReais: number;
+    capitalRemuneratedReais: number;
+    collateralMode: string;
+    collateralPctCdi: number | null;
+    quality: string;
+  }>;
 }): EnrichedOptionStrategy {
+  const strategyGrossRealizedPnlReais = (params.executions || []).reduce((acc, x) => acc + x.grossRealizedPnlReais, 0);
+  const strategyFeesReais = (params.executions || []).reduce((acc, x) => acc + (x.feesReais || 0), 0);
+  const strategyNetRealizedPnlReais = (params.executions || []).reduce((acc, x) => acc + x.netRealizedPnlReais, 0);
+
   let netInitialCreditDebitReais = 0;
-  let netPnlMtmReais = 0;
+  let strategyUnrealizedPnlReais = 0;
   let netEstimatedExitReais = 0;
   let maxElapsedDU = 0;
   let minRemainingDU = 999;
 
-  for (const leg of params.legs) {
+  const normalizedLegs: EnrichedStrategyLeg[] = params.legs.map((leg) => {
+    const orig = leg.originalAllocatedQuantity ?? leg.allocatedQuantity;
+    const closed = leg.closedAllocatedQuantity ?? 0;
+    const open = leg.openAllocatedQuantity ?? Math.max(0, orig - closed);
+    return {
+      id: leg.id,
+      strategyId: leg.strategyId,
+      positionId: leg.positionId,
+      allocatedQuantity: leg.allocatedQuantity,
+      originalAllocatedQuantity: orig,
+      closedAllocatedQuantity: closed,
+      openAllocatedQuantity: open,
+      economicRole: leg.economicRole,
+      position: leg.position,
+    };
+  });
+
+  for (const leg of normalizedLegs) {
     const pos = leg.position;
     const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
     const isLong = !isShort;
-    const qty = leg.allocatedQuantity;
 
-    // Fluxo Inicial
+    // Fluxo Inicial com a quantidade original histórica
+    const origQty = leg.originalAllocatedQuantity;
     if (isShort) {
-      netInitialCreditDebitReais += pos.entryPrice * qty;
+      netInitialCreditDebitReais += pos.entryPrice * origQty;
     } else {
-      netInitialCreditDebitReais -= pos.entryPrice * qty;
+      netInitialCreditDebitReais -= pos.entryPrice * origQty;
     }
 
-    // P&L MTM Proporcional
+    // P&L MTM Proporcional sobre contratos abertos residuais
+    const openQty = leg.openAllocatedQuantity;
     const pnlMtmLeg = calculateSignedPnL({
       entryPrice: pos.entryPrice,
       currentPrice: pos.metrics.markPrice,
-      quantityUnderlyingUnits: qty,
+      quantityUnderlyingUnits: openQty,
       side: isLong ? 'LONG' : 'SHORT',
     });
-    netPnlMtmReais += pnlMtmLeg;
+    strategyUnrealizedPnlReais += pnlMtmLeg;
 
     const pnlExitLeg = calculateSignedPnL({
       entryPrice: pos.entryPrice,
       currentPrice: pos.metrics.estimatedExitPrice,
-      quantityUnderlyingUnits: qty,
+      quantityUnderlyingUnits: openQty,
       side: isLong ? 'LONG' : 'SHORT',
     });
     netEstimatedExitReais += pnlExitLeg;
@@ -1571,11 +1808,14 @@ export function enrichOptionStrategy(params: {
 
   if (minRemainingDU === 999) minRemainingDU = 0;
 
+  const netPnlMtmReais = strategyUnrealizedPnlReais;
+  const strategyTotalGrossPnlReais = Math.round((strategyGrossRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
+  const strategyTotalNetPnlReais = Math.round((strategyNetRealizedPnlReais + strategyUnrealizedPnlReais) * 100) / 100;
   const isNetCredit = netInitialCreditDebitReais >= 0;
 
-  // Reconhecimento de Risco e Payoff com Fail-Safe Institucional
+  // Reconhecimento de Risco e Payoff com Fail-Safe Institucional sobre pernas abertas
   const riskProfile = detectStrategyRiskAndPayoff({
-    legs: params.legs,
+    legs: normalizedLegs,
     netInitialCreditDebitReais,
   });
 
@@ -1762,6 +2002,7 @@ export function enrichOptionStrategy(params: {
       riskRecognitionQuality: riskProfile.riskRecognitionQuality,
       resultNature,
       legsOpenedAtDifferentDates,
+      fundingSegments: params.fundingSegments,
     });
 
     if (assumedCoverageNote && params.collateralMode !== 'IDLE_CASH') {
@@ -1785,11 +2026,17 @@ export function enrichOptionStrategy(params: {
     openedAt: params.openedAt,
     closedAt: params.closedAt ?? null,
     notes: params.notes ?? null,
-    legs: params.legs,
+    legs: normalizedLegs,
     economicPerformance,
     metrics: {
       netInitialCreditDebitReais,
       isNetCredit,
+      strategyGrossRealizedPnlReais,
+      strategyFeesReais,
+      strategyNetRealizedPnlReais,
+      strategyUnrealizedPnlReais,
+      strategyTotalGrossPnlReais,
+      strategyTotalNetPnlReais,
       netPnlMtmReais,
       netEstimatedExitReais,
       totalCapitalReserved,

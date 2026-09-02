@@ -22,7 +22,7 @@ import {
   strategyFundingSegments,
   optionPositionExecutions,
 } from '../../lib/db/schema';
-import { eq, inArray, and, isNull } from 'drizzle-orm';
+import { eq, inArray, and, isNull, asc } from 'drizzle-orm';
 import { calculateRealizedDiFactor } from './cdi-engine';
 
 function assert(condition: boolean, msg: string) {
@@ -43,6 +43,8 @@ export async function runActionsSuiteTests() {
     closeOptionPosition,
     ungroupOptionStrategyAction,
     rollOptionPosition,
+    partialCloseStrategyLegAction,
+    scaleDownOptionStrategyAction,
   } = await import('./actions');
 
   console.log('\n========================================');
@@ -1089,14 +1091,361 @@ export async function runActionsSuiteTests() {
     db.delete(optionStrategies).where(eq(optionStrategies.id, legacyStratId)).run();
     db.delete(optionPositions).where(inArray(optionPositions.id, [earlyExpPosId, legacyPosId])).run();
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 8. Phase 4.2 Residual Quantity Engine, Scale Down & Partial Close Tests
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n8. Phase 4.2 Residual Quantity Engine, Scale Down & Partial Close Tests:');
+
+    // 8.1. Boundary Pre-Validations for partialCloseStrategyLegAction
+    const rejectInvalidQty = await partialCloseStrategyLegAction({
+      strategyId: 'non_existent',
+      strategyLegId: 'non_existent',
+      quantity: -10,
+      price: 1.0,
+      executionDate: '2026-09-02',
+    });
+    assert(rejectInvalidQty.success === false, 'P0.8: Quantidade negativa rejeitada');
+    assert(Boolean(rejectInvalidQty.error?.includes('INVALID_QUANTITY')), 'P0.8: Erro INVALID_QUANTITY retornado');
+
+    const rejectInvalidPrice = await partialCloseStrategyLegAction({
+      strategyId: 'non_existent',
+      strategyLegId: 'non_existent',
+      quantity: 10,
+      price: -0.5,
+      executionDate: '2026-09-02',
+    });
+    assert(rejectInvalidPrice.success === false, 'P0.8: Preço negativo rejeitado');
+    assert(Boolean(rejectInvalidPrice.error?.includes('INVALID_PRICE')), 'P0.8: Erro INVALID_PRICE retornado');
+
+    const rejectSaturdayAction = await partialCloseStrategyLegAction({
+      strategyId: 'non_existent',
+      strategyLegId: 'non_existent',
+      quantity: 10,
+      price: 1.0,
+      executionDate: '2026-09-05', // Sábado
+    });
+    assert(rejectSaturdayAction.success === false, 'P0.8: Data em sábado rejeitada');
+    assert(Boolean(rejectSaturdayAction.error?.includes('INVALID_EXECUTION_DATE_NON_TRADING_DAY')), 'P0.8: Erro INVALID_EXECUTION_DATE_NON_TRADING_DAY retornado');
+
+    // 8.2. Boundary Pre-Validations for scaleDownOptionStrategyAction
+    const rejectZeroPct = await scaleDownOptionStrategyAction({
+      strategyId: 'non_existent',
+      percentageReduced: 0,
+      executionDate: '2026-09-02',
+      legs: [],
+    });
+    assert(rejectZeroPct.success === false, 'P0.7: Redução de 0% rejeitada');
+    assert(Boolean(rejectZeroPct.error?.includes('INVALID_SCALE_DOWN_PERCENTAGE')), 'P0.7: Erro INVALID_SCALE_DOWN_PERCENTAGE retornado para 0%');
+
+    const rejectHundredPct = await scaleDownOptionStrategyAction({
+      strategyId: 'non_existent',
+      percentageReduced: 100,
+      executionDate: '2026-09-02',
+      legs: [],
+    });
+    assert(rejectHundredPct.success === false, 'P0.7: Redução de 100% rejeitada');
+    assert(Boolean(rejectHundredPct.error?.includes('INVALID_SCALE_DOWN_PERCENTAGE')), 'P0.7: Erro INVALID_SCALE_DOWN_PERCENTAGE retornado para 100%');
+
+    // 8.3. Golden Case ITUB4 (+200C / -400P -> +100C / -200P) em 02/09/2026
+    const itubGoldenStratId = 'strat_itub_golden_42';
+    const itubGoldenPutPosId = 'pos_itub_golden_put';
+    const itubGoldenCallPosId = 'pos_itub_golden_call';
+    const itubGoldenPutLegId = 'leg_itub_golden_put';
+    const itubGoldenCallLegId = 'leg_itub_golden_call';
+
+    db.insert(optionPositions).values({
+      id: itubGoldenPutPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'ITUB4',
+      tickerOption: 'ITUB4U3869',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 400,
+      openQuantity: 400,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 38.69,
+      entryPrice: 1.04,
+      currentPrice: 0.30,
+      allocatedCapital: 15476.0,
+      entryDate: '2026-08-14',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      updatedAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: itubGoldenCallPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'ITUB4',
+      tickerOption: 'ITUB4I3869',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 200,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 38.69,
+      entryPrice: 1.18,
+      currentPrice: 0.70,
+      allocatedCapital: 236.0,
+      entryDate: '2026-08-14',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      updatedAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: itubGoldenStratId,
+      portfolio: 'Principal',
+      name: 'ITUB4 Ratio 2:1 Golden Case',
+      strategyType: 'RATIO_PUT_SPREAD',
+      book: 'HYBRID',
+      underlyingTicker: 'ITUB4',
+      collateralMode: 'IDLE_CASH',
+      status: 'OPEN',
+      openedAt: '2026-08-14',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      updatedAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: itubGoldenPutLegId,
+      strategyId: itubGoldenStratId,
+      positionId: itubGoldenPutPosId,
+      allocatedQuantity: 400,
+      openAllocatedQuantity: 400,
+      closedAllocatedQuantity: 0,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'FINANCING',
+      createdAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: itubGoldenCallLegId,
+      strategyId: itubGoldenStratId,
+      positionId: itubGoldenCallPosId,
+      allocatedQuantity: 200,
+      openAllocatedQuantity: 200,
+      closedAllocatedQuantity: 0,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'DIRECTIONAL',
+      createdAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_itub_golden_initial',
+      strategyId: itubGoldenStratId,
+      startDate: '2026-08-14',
+      endDate: null,
+      benchmarkCapitalReais: 15476.0,
+      capitalRemuneratedReais: 0,
+      collateralMode: 'IDLE_CASH',
+      collateralPctCdi: null,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-14T12:00:00.000Z',
+    }).run();
+
+    const rejectUnrepresentablePct = await scaleDownOptionStrategyAction({
+      strategyId: itubGoldenStratId,
+      percentageReduced: 33.33,
+      executionDate: '2026-09-02',
+      legs: [
+        { strategyLegId: itubGoldenPutLegId, price: 0.20 },
+        { strategyLegId: itubGoldenCallLegId, price: 0.60 },
+      ],
+    });
+    assert(rejectUnrepresentablePct.success === false, 'P0.7: Porcentagem não representável em contratos inteiros rejeitada');
+    assert(Boolean(rejectUnrepresentablePct.error?.includes('SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE')), 'P0.7: Erro SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE retornado');
+
+    const scaleDownRes = await scaleDownOptionStrategyAction({
+      strategyId: itubGoldenStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [
+        { strategyLegId: itubGoldenPutLegId, price: 0.20, feesReais: 0 },
+        { strategyLegId: itubGoldenCallLegId, price: 0.60, feesReais: 0 },
+      ],
+      notes: 'Redução de 50% da trava 2:1 ITUB4',
+    });
+
+    assert(scaleDownRes.success === true, 'P0 Golden Case: scaleDownOptionStrategyAction executado com sucesso');
+    assert(Boolean(scaleDownRes.maneuverEventId), 'P0 Golden Case: maneuverEventId retornado');
+
+    const mnvEvent = db.query.strategyManeuverEvents.findFirst({
+      where: eq(strategyManeuverEvents.id, scaleDownRes.maneuverEventId!),
+    }).sync()!;
+    assert(Boolean(mnvEvent), 'P0 Golden Case: Evento de manobra encontrado no banco');
+    assert(mnvEvent.maneuverType === 'SCALE_DOWN', 'P0 Golden Case: maneuverType === SCALE_DOWN');
+    assert(mnvEvent.percentageReduced === 50, 'P0 Golden Case: percentageReduced === 50');
+    assert(mnvEvent.unitsReduced === 100, 'P0 Golden Case: unitsReduced === 100');
+    assert(mnvEvent.preservesOriginalRatio === true, 'P0 Golden Case: preservesOriginalRatio === true');
+    assert(mnvEvent.auditRealizedPnlReais === 110.0, 'P0 Golden Case: auditRealizedPnlReais === 110.00 (+168 PUT - 58 CALL)');
+
+    const executions = db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.maneuverEventId, scaleDownRes.maneuverEventId!),
+    }).sync();
+    assert(executions.length === 2, 'P0 Golden Case: Exatamente 2 execuções geradas para a manobra');
+
+    const putExec = executions.find((e) => e.strategyLegId === itubGoldenPutLegId)!;
+    assert(Boolean(putExec), 'P0 Golden Case: Execução da perna PUT encontrada');
+    assert(putExec.quantity === 200, 'P0 Golden Case: PUT execution quantity === 200');
+    assert(putExec.price === 0.20, 'P0 Golden Case: PUT execution price === 0.20');
+    assert(putExec.executionType === 'BUY_TO_CLOSE', 'P0 Golden Case: PUT executionType === BUY_TO_CLOSE');
+    assert(putExec.grossRealizedPnlReais === 168.0, 'P0 Golden Case: PUT grossRealizedPnlReais === +R$ 168,00');
+
+    const callExec = executions.find((e) => e.strategyLegId === itubGoldenCallLegId)!;
+    assert(Boolean(callExec), 'P0 Golden Case: Execução da perna CALL encontrada');
+    assert(callExec.quantity === 100, 'P0 Golden Case: CALL execution quantity === 100');
+    assert(callExec.price === 0.60, 'P0 Golden Case: CALL execution price === 0.60');
+    assert(callExec.executionType === 'SELL_TO_CLOSE', 'P0 Golden Case: CALL executionType === SELL_TO_CLOSE');
+    assert(callExec.grossRealizedPnlReais === -58.0, 'P0 Golden Case: CALL grossRealizedPnlReais === -R$ 58,00');
+
+    const legsAfter = db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, itubGoldenStratId),
+    }).sync();
+    const putLegAfter = legsAfter.find((l) => l.id === itubGoldenPutLegId)!;
+    const callLegAfter = legsAfter.find((l) => l.id === itubGoldenCallLegId)!;
+    assert(putLegAfter.openAllocatedQuantity === 200, 'P0 Golden Case: PUT leg openAllocatedQuantity === 200');
+    assert(putLegAfter.closedAllocatedQuantity === 200, 'P0 Golden Case: PUT leg closedAllocatedQuantity === 200');
+    assert(callLegAfter.openAllocatedQuantity === 100, 'P0 Golden Case: CALL leg openAllocatedQuantity === 100');
+    assert(callLegAfter.closedAllocatedQuantity === 100, 'P0 Golden Case: CALL leg closedAllocatedQuantity === 100');
+
+    const putPosAfter = db.query.optionPositions.findFirst({ where: eq(optionPositions.id, itubGoldenPutPosId) }).sync()!;
+    const callPosAfter = db.query.optionPositions.findFirst({ where: eq(optionPositions.id, itubGoldenCallPosId) }).sync()!;
+    assert(putPosAfter.openQuantity === 200, 'P0 Golden Case: PUT position openQuantity === 200');
+    assert(putPosAfter.closedQuantity === 200, 'P0 Golden Case: PUT position closedQuantity === 200');
+    assert(putPosAfter.realizedPnlReais === 168.0, 'P0 Golden Case: PUT position realizedPnlReais === 168.0');
+    assert(putPosAfter.status === 'OPEN', 'P0 Golden Case: PUT position status continua OPEN');
+
+    assert(callPosAfter.openQuantity === 100, 'P0 Golden Case: CALL position openQuantity === 100');
+    assert(callPosAfter.closedQuantity === 100, 'P0 Golden Case: CALL position closedQuantity === 100');
+    assert(callPosAfter.realizedPnlReais === -58.0, 'P0 Golden Case: CALL position realizedPnlReais === -58.0');
+    assert(callPosAfter.status === 'OPEN', 'P0 Golden Case: CALL position status continua OPEN');
+
+    const segmentsAfter = db.query.strategyFundingSegments.findMany({
+      where: eq(strategyFundingSegments.strategyId, itubGoldenStratId),
+      orderBy: [asc(strategyFundingSegments.startDate)],
+    }).sync();
+    assert(segmentsAfter.length === 2, 'P0 Golden Case: Exatamente 2 segmentos de funding (fechado + novo aberto)');
+    assert(segmentsAfter[0].endDate === '2026-09-02', 'P0 Golden Case: Segmento inicial encerrado em 2026-09-02');
+    assert(segmentsAfter[1].startDate === '2026-09-02', 'P0 Golden Case: Novo segmento aberto em 2026-09-02');
+    assert(segmentsAfter[1].endDate === null, 'P0 Golden Case: Novo segmento vigente (endDate === null)');
+    assert(segmentsAfter[1].benchmarkCapitalReais === 7738.0, 'P0 Golden Case: Novo capital de referência === R$ 7.738,00 (200 * 38.69)');
+    assert(segmentsAfter[1].sourceType === 'MANEUVER', 'P0 Golden Case: sourceType === MANEUVER');
+    assert(segmentsAfter[1].maneuverEventId === scaleDownRes.maneuverEventId, 'P0 Golden Case: maneuverEventId corresponde ao evento da manobra');
+
+    const posRes1 = await getOptionPositions();
+    const stratEnriched1 = posRes1.strategies?.find((s) => s.id === itubGoldenStratId)!;
+    assert(Boolean(stratEnriched1), 'P0 Golden Case: Estratégia enriquecida carregada');
+    assert(stratEnriched1.metrics.strategyGrossRealizedPnlReais === 110.0, 'P0 Golden Case: strategyGrossRealizedPnlReais === +R$ 110,00');
+    assert(stratEnriched1.metrics.totalCapitalReserved === 7738.0, 'P0 Golden Case: totalCapitalReserved residual === R$ 7.738,00');
+
+    // Provar imutabilidade do Realized perante alteração de cotação MTM
+    db.update(optionPositions).set({ currentPrice: 5.00 }).where(eq(optionPositions.id, itubGoldenPutPosId)).run();
+    db.update(optionPositions).set({ currentPrice: 10.00 }).where(eq(optionPositions.id, itubGoldenCallPosId)).run();
+
+    const posRes2 = await getOptionPositions();
+    const stratEnriched2 = posRes2.strategies?.find((s) => s.id === itubGoldenStratId)!;
+    assert(stratEnriched2.metrics.strategyGrossRealizedPnlReais === 110.0, 'P0 Golden Case: Realized P&L IMUTÁVEL após choque de cotação MTM (+R$ 110,00)');
+    assert(stratEnriched2.metrics.strategyUnrealizedPnlReais !== stratEnriched1.metrics.strategyUnrealizedPnlReais, 'P0 Golden Case: Unrealized P&L variou conforme esperado');
+
+    // 8.4. Múltiplos Parciais Consecutivos (200 -> 150 -> 100 e overdraw rejection)
+    const partClose1 = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 50,
+      price: 0.15,
+      executionDate: '2026-09-02',
+    });
+    assert(partClose1.success === true, 'P0 Multi-Partial: Redução 1 de 50 contratos aceita');
+    const legAfterPart1 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
+    assert(legAfterPart1.openAllocatedQuantity === 150, 'P0 Multi-Partial: Saldo da perna PUT === 150');
+
+    const partClose2 = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 50,
+      price: 0.10,
+      executionDate: '2026-09-02',
+    });
+    assert(partClose2.success === true, 'P0 Multi-Partial: Redução 2 de 50 contratos aceita');
+    const legAfterPart2 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
+    assert(legAfterPart2.openAllocatedQuantity === 100, 'P0 Multi-Partial: Saldo da perna PUT === 100');
+
+    const rejectOverdraw = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 150,
+      price: 0.10,
+      executionDate: '2026-09-02',
+    });
+    assert(rejectOverdraw.success === false, 'P0 Multi-Partial: Tentativa de redução acima do saldo (150 > 100) rejeitada');
+    assert(Boolean(rejectOverdraw.error?.includes('INSUFFICIENT_LEG_OPEN_QUANTITY')), 'P0 Multi-Partial: Erro INSUFFICIENT_LEG_OPEN_QUANTITY retornado');
+
+    // 8.5. Concorrência DB-Level com 2 Conexões SQLite Independentes
+    const Database = require('better-sqlite3');
+    const path = require('path');
+    const fs = require('fs');
+    const tempDbFile = path.join(process.cwd(), 'temp_concurrency_test.db');
+    if (fs.existsSync(tempDbFile)) fs.unlinkSync(tempDbFile);
+
+    const conn1 = new Database(tempDbFile);
+    const conn2 = new Database(tempDbFile);
+
+    try {
+      conn1.exec(`
+        CREATE TABLE test_legs (
+          id TEXT PRIMARY KEY,
+          open_allocated_quantity INTEGER NOT NULL,
+          closed_allocated_quantity INTEGER NOT NULL
+        );
+        INSERT INTO test_legs (id, open_allocated_quantity, closed_allocated_quantity)
+        VALUES ('leg_conc', 100, 0);
+      `);
+
+      const stmt1 = conn1.prepare(`
+        UPDATE test_legs
+        SET open_allocated_quantity = open_allocated_quantity - 70,
+            closed_allocated_quantity = closed_allocated_quantity + 70
+        WHERE id = 'leg_conc' AND open_allocated_quantity >= 70
+      `);
+      const res1 = stmt1.run();
+      assert(res1.changes === 1, 'P0 Concurrency: Conn 1 deduziu 70 com sucesso (changes === 1)');
+
+      const stmt2 = conn2.prepare(`
+        UPDATE test_legs
+        SET open_allocated_quantity = open_allocated_quantity - 70,
+            closed_allocated_quantity = closed_allocated_quantity + 70
+        WHERE id = 'leg_conc' AND open_allocated_quantity >= 70
+      `);
+      const res2 = stmt2.run();
+      assert(res2.changes === 0, 'P0 Concurrency: Conn 2 rejeitada atomicamente a nível de SQL (changes === 0)');
+
+      const rowFinal = conn1.prepare('SELECT open_allocated_quantity, closed_allocated_quantity FROM test_legs WHERE id = ?').get('leg_conc');
+      assert(rowFinal.open_allocated_quantity === 30, 'P0 Concurrency: Saldo remanescente no banco é exatamente 30 contratos');
+      assert(rowFinal.closed_allocated_quantity === 70, 'P0 Concurrency: Saldo encerrado é exatamente 70 contratos');
+    } finally {
+      conn1.close();
+      conn2.close();
+      if (fs.existsSync(tempDbFile)) fs.unlinkSync(tempDbFile);
+    }
+
   } finally {
-    // Limpeza Final de Segurança
+    // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
+    db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, [itubPutId, itubCallId, lrenPutId, dirCallId, 'pos_itub_golden_put', 'pos_itub_golden_call'])).run();
+    db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
+    db.delete(strategyFundingEvents).where(inArray(strategyFundingEvents.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
+    db.delete(strategyManeuverEvents).where(inArray(strategyManeuverEvents.strategyId, ['strat_itub_golden_42'])).run();
     db.delete(strategyAllocationEvents).where(inArray(strategyAllocationEvents.positionId, [itubPutId, itubCallId, lrenPutId, dirCallId])).run();
-    db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, [itubStratId])).run();
-    db.delete(strategyFundingEvents).where(inArray(strategyFundingEvents.strategyId, [itubStratId])).run();
-    db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.strategyId, [itubStratId])).run();
-    db.delete(optionStrategies).where(inArray(optionStrategies.id, [itubStratId])).run();
-    db.delete(optionPositions).where(inArray(optionPositions.id, [itubPutId, itubCallId, lrenPutId, dirCallId])).run();
+    db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.strategyId, [itubStratId, 'strat_itub_golden_42'])).run();
+    db.delete(optionStrategies).where(inArray(optionStrategies.id, [itubStratId, 'strat_itub_golden_42'])).run();
+    db.delete(optionPositions).where(inArray(optionPositions.id, [itubPutId, itubCallId, lrenPutId, dirCallId, 'pos_itub_golden_put', 'pos_itub_golden_call'])).run();
   }
 
   console.log('\n========================================');

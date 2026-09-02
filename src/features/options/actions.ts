@@ -16,7 +16,7 @@ import {
   type OptionStrategyLeg,
 } from '@/lib/db/schema';
 import { generateId } from '@/lib/utils';
-import { eq, desc, inArray, and, isNull } from 'drizzle-orm';
+import { eq, desc, asc, inArray, and, isNull, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import {
   enrichOptionPosition,
@@ -70,6 +70,15 @@ export interface OptionsPortfolioSummary {
   openPositionsCount: number;
   closedPositionsCount: number;
   openStrategiesCount: number;
+
+  // Decomposição Tripla de P&L da Carteira (Gross & Net)
+  portfolioGrossRealizedPnlReais: number;
+  portfolioNetRealizedPnlReais: number;
+  portfolioUnrealizedPnlReais: number;
+  portfolioTotalGrossPnlReais: number;
+  portfolioTotalNetPnlReais: number;
+  realizedPnlReais: number; // Alias para compatibilidade
+  totalPnlReais: number; // Alias para compatibilidade
 
   // Gregas Totais Consolidadas
   totalThetaReaisPerDay: number;
@@ -239,6 +248,12 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     });
 
     const rawLegs = await db.query.optionStrategyLegs.findMany();
+    const rawExecutions = await db.query.optionPositionExecutions.findMany({
+      orderBy: [desc(optionPositionExecutions.executionDate), desc(optionPositionExecutions.createdAt)],
+    });
+    const rawFundingSegments = await db.query.strategyFundingSegments.findMany({
+      orderBy: [asc(strategyFundingSegments.startDate), asc(strategyFundingSegments.createdAt)],
+    });
 
     let filteredPositions = rawPositions;
     if (filterStatus === 'OPEN') {
@@ -253,17 +268,44 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       enrichedPosMap.set(p.id, enrichOptionPosition(p, undefined, valuationDate));
     }
 
-    // Mapa de Alocações por Posição
-    const allocatedQtyByPosition = new Map<string, { totalAllocated: number; strategyId?: string; economicRole?: string }>();
-    for (const leg of rawLegs) {
-      const current = allocatedQtyByPosition.get(leg.positionId) || { totalAllocated: 0 };
-      current.totalAllocated += leg.allocatedQuantity;
-      current.strategyId = leg.strategyId;
-      current.economicRole = leg.economicRole;
-      allocatedQtyByPosition.set(leg.positionId, current);
+    // Índices em Memória para Performance O(1) sem N+1 queries
+    const executionsByStrategyId = new Map<string, typeof rawExecutions>();
+    for (const exec of rawExecutions) {
+      if (exec.strategyId) {
+        const list = executionsByStrategyId.get(exec.strategyId) || [];
+        list.push(exec);
+        executionsByStrategyId.set(exec.strategyId, list);
+      }
     }
 
-    // Montagem das Estruturas Enriquecidas
+    const fundingSegmentsByStrategyId = new Map<string, typeof rawFundingSegments>();
+    for (const seg of rawFundingSegments) {
+      const list = fundingSegmentsByStrategyId.get(seg.strategyId) || [];
+      list.push(seg);
+      fundingSegmentsByStrategyId.set(seg.strategyId, list);
+    }
+
+    // Mapa de Alocações ABERTAS por Posição (Anti-Double-Counting Canônico)
+    const openAllocatedByPosition = new Map<string, number>();
+    const allocatedInfoByPosition = new Map<string, { totalAllocated: number; strategyId?: string; economicRole?: string }>();
+    for (const leg of rawLegs) {
+      const origAlloc = leg.allocatedQuantity;
+      const closedAlloc = leg.closedAllocatedQuantity ?? 0;
+      const openAlloc = leg.openAllocatedQuantity ?? Math.max(0, origAlloc - closedAlloc);
+
+      openAllocatedByPosition.set(
+        leg.positionId,
+        (openAllocatedByPosition.get(leg.positionId) || 0) + openAlloc
+      );
+
+      const current = allocatedInfoByPosition.get(leg.positionId) || { totalAllocated: 0 };
+      current.totalAllocated += openAlloc;
+      current.strategyId = leg.strategyId;
+      current.economicRole = leg.economicRole;
+      allocatedInfoByPosition.set(leg.positionId, current);
+    }
+
+    // Montagem das Estruturas Enriquecidas com Pernas Residuais
     const enrichedStrategies: EnrichedOptionStrategy[] = [];
     for (const st of rawStrategies) {
       const strategyLegs = rawLegs.filter((l) => l.strategyId === st.id);
@@ -272,11 +314,17 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       for (const leg of strategyLegs) {
         const p = enrichedPosMap.get(leg.positionId);
         if (p) {
+          const origAlloc = leg.allocatedQuantity;
+          const closedAlloc = leg.closedAllocatedQuantity ?? 0;
+          const openAlloc = leg.openAllocatedQuantity ?? Math.max(0, origAlloc - closedAlloc);
           legItems.push({
             id: leg.id,
             strategyId: leg.strategyId,
             positionId: leg.positionId,
             allocatedQuantity: leg.allocatedQuantity,
+            originalAllocatedQuantity: origAlloc,
+            closedAllocatedQuantity: closedAlloc,
+            openAllocatedQuantity: openAlloc,
             economicRole: leg.economicRole as any,
             position: p,
           });
@@ -301,21 +349,24 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             closedAt: st.closedAt,
             notes: st.notes,
             legs: legItems,
+            executions: executionsByStrategyId.get(st.id) || [],
+            fundingSegments: fundingSegmentsByStrategyId.get(st.id) || [],
           })
         );
       }
     }
 
-    // Posições com metadados de alocação
+    // Posições com metadados de alocação residual estrita
     const finalPositions = filteredPositions.map((pos) => {
       const enriched = enrichedPosMap.get(pos.id)!;
-      const allocInfo = allocatedQtyByPosition.get(pos.id) || { totalAllocated: 0 };
-      const allocatedQuantity = Math.min(pos.quantity, allocInfo.totalAllocated);
-      const unallocatedQuantity = Math.max(0, pos.quantity - allocatedQuantity);
+      const openAlloc = openAllocatedByPosition.get(pos.id) || 0;
+      const freeOpenQuantity = Math.max(0, enriched.metrics.openQuantity - openAlloc);
+      const allocInfo = allocatedInfoByPosition.get(pos.id) || { totalAllocated: 0 };
       return {
         ...enriched,
-        allocatedQuantity,
-        unallocatedQuantity,
+        allocatedQuantity: openAlloc,
+        unallocatedQuantity: freeOpenQuantity,
+        freeOpenQuantity,
         strategyId: allocInfo.strategyId,
       };
     });
@@ -429,11 +480,11 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       const m = pos.metrics;
       if (pos.status === 'OPEN') {
         openPositionsCount++;
-        const unallocRatio = pos.quantity > 0 ? pos.unallocatedQuantity / pos.quantity : 0;
+        const unallocRatio = m.openQuantity > 0 ? pos.unallocatedQuantity / m.openQuantity : 0;
 
         if (unallocRatio > 0) {
-          const unallocCapital = m.capitalAllocated * unallocRatio;
-          const unallocPnl = m.pnlMtmReais * unallocRatio;
+          const unallocCapital = m.residualCapitalAllocated * unallocRatio;
+          const unallocPnl = m.unrealizedPnlReais * unallocRatio;
           const unallocCdi = m.cdiRealizedReais * unallocRatio;
 
           totalCapitalAllocated += unallocCapital;
@@ -501,6 +552,19 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
 
     const overallRoicPct = totalCapitalAllocated > 0 ? (totalPnlMtmReais / totalCapitalAllocated) * 100 : 0;
 
+    // Realized P&L Canônico da Carteira (Cada execução canônica entra EXATAMENTE UMA VEZ)
+    let portfolioGrossRealizedPnlReais = 0;
+    let portfolioNetRealizedPnlReais = 0;
+    for (const exec of rawExecutions) {
+      portfolioGrossRealizedPnlReais += exec.grossRealizedPnlReais;
+      portfolioNetRealizedPnlReais += exec.netRealizedPnlReais;
+    }
+    portfolioGrossRealizedPnlReais = Math.round(portfolioGrossRealizedPnlReais * 100) / 100;
+    portfolioNetRealizedPnlReais = Math.round(portfolioNetRealizedPnlReais * 100) / 100;
+    const portfolioUnrealizedPnlReais = Math.round(totalPnlMtmReais * 100) / 100;
+    const portfolioTotalGrossPnlReais = Math.round((portfolioGrossRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100;
+    const portfolioTotalNetPnlReais = Math.round((portfolioNetRealizedPnlReais + portfolioUnrealizedPnlReais) * 100) / 100;
+
     // Métricas Canônicas Derivadas do Double Yield Consolidado
     const totalAlphaReais = portfolioExcessReturnVsCdiReais;
     const totalCdiRealizedReais = portfolioBenchmarkCdiReais;
@@ -528,19 +592,19 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     const totalNetAlphaReais = totalNetPnlReais - totalNetCdiBenchmarkReais;
     const totalNetCdiMultiple = Math.abs(totalNetCdiBenchmarkReais) >= 0.05 ? totalNetPnlReais / totalNetCdiBenchmarkReais : null;
 
-    // Cálculo Consolidado de Gregas Totais da Carteira
+    // Cálculo Consolidado de Gregas Totais da Carteira (sobre contratos abertos)
     let totalThetaReaisPerDay = 0;
     let totalDeltaEquivUnits = 0;
 
     for (const pos of finalPositions) {
-      if (pos.status === 'OPEN') {
+      if (pos.status === 'OPEN' && pos.metrics.openQuantity > 0) {
         const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
         const sign = isShort ? -1 : 1;
         if (typeof pos.theta === 'number' && !isNaN(pos.theta)) {
-          totalThetaReaisPerDay += pos.theta * pos.quantity * sign;
+          totalThetaReaisPerDay += pos.theta * pos.metrics.openQuantity * sign;
         }
         if (typeof pos.delta === 'number' && !isNaN(pos.delta)) {
-          totalDeltaEquivUnits += pos.delta * pos.quantity * sign;
+          totalDeltaEquivUnits += pos.delta * pos.metrics.openQuantity * sign;
         }
       }
     }
@@ -567,6 +631,16 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         openPositionsCount,
         closedPositionsCount,
         openStrategiesCount: enrichedStrategies.filter((s) => s.status === 'OPEN').length,
+
+        // Decomposição Tripla de P&L da Carteira (Gross & Net)
+        portfolioGrossRealizedPnlReais,
+        portfolioNetRealizedPnlReais,
+        portfolioUnrealizedPnlReais,
+        portfolioTotalGrossPnlReais,
+        portfolioTotalNetPnlReais,
+        realizedPnlReais: portfolioGrossRealizedPnlReais,
+        totalPnlReais: portfolioTotalGrossPnlReais,
+
         totalThetaReaisPerDay,
         totalDeltaEquivUnits,
 
@@ -1482,6 +1556,585 @@ export async function closeOptionPosition(params: {
   } catch (err: any) {
     console.error('[Options Actions] Erro ao encerrar posição canonicamente:', err);
     return { success: false, error: err.message || 'Erro ao encerrar posição' };
+  }
+}
+
+// ─── Proportional & GCD Helpers para Maneuvers ──────────────────────
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y) {
+    const t = y;
+    y = x % y;
+    x = t;
+  }
+  return x;
+}
+
+function calculateLegsGcd(quantities: number[]): number {
+  if (quantities.length === 0) return 0;
+  return quantities.reduce((acc, q) => gcd(acc, q));
+}
+
+function formatLegsRatio(legs: Array<{ quantity: number }>): string {
+  if (legs.length === 0) return '';
+  const g = calculateLegsGcd(legs.map((l) => l.quantity));
+  if (g === 0) return legs.map(() => '0').join(':');
+  return legs.map((l) => (l.quantity / g).toString()).join(':');
+}
+
+export interface PartialCloseStrategyLegParams {
+  strategyId: string;
+  strategyLegId: string;
+  quantity: number;
+  price: number;
+  executionDate?: string;
+  feesReais?: number;
+  notes?: string;
+}
+
+/**
+ * Encerra parcial ou totalmente uma perna específica de uma estratégia (LEG_CLOSE)
+ */
+export async function partialCloseStrategyLegAction(
+  params: PartialCloseStrategyLegParams
+): Promise<{ success: boolean; maneuverEventId?: string; executionId?: string; error?: string }> {
+  try {
+    // 1. Validações de Boundary
+    if (!Number.isInteger(params.quantity) || params.quantity <= 0) {
+      return { success: false, error: 'INVALID_QUANTITY: Quantidade deve ser um número inteiro positivo.' };
+    }
+    if (!Number.isFinite(params.price) || params.price < 0) {
+      return { success: false, error: 'INVALID_PRICE: Preço deve ser um número finito não negativo.' };
+    }
+    const fees = params.feesReais !== undefined ? params.feesReais : 0;
+    if (!Number.isFinite(fees) || fees < 0) {
+      return { success: false, error: 'INVALID_FEES: Custos devem ser um número finito não negativo.' };
+    }
+
+    const executionDate = params.executionDate || getBrazilTodayDate();
+    if (!isB3TradingDay(executionDate as BusinessDate)) {
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.' };
+    }
+
+    // 2. Busca e validação da estratégia
+    const strategy = await db.query.optionStrategies.findFirst({
+      where: eq(optionStrategies.id, params.strategyId),
+    });
+    if (!strategy) {
+      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.' };
+    }
+    if (strategy.status !== 'OPEN') {
+      return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.' };
+    }
+
+    // 3. Busca e validação das pernas
+    const allLegs = await db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, params.strategyId),
+      orderBy: [asc(optionStrategyLegs.id)],
+    });
+    const targetLeg = allLegs.find((l) => l.id === params.strategyLegId);
+    if (!targetLeg) {
+      return { success: false, error: 'STRATEGY_LEG_NOT_FOUND: Perna não encontrada na estratégia.' };
+    }
+
+    const legOpenQty = targetLeg.openAllocatedQuantity ?? Math.max(0, targetLeg.allocatedQuantity - (targetLeg.closedAllocatedQuantity ?? 0));
+    if (params.quantity > legOpenQty) {
+      return { success: false, error: `INSUFFICIENT_LEG_OPEN_QUANTITY: Quantidade solicitada (${params.quantity}) excede o saldo aberto da perna (${legOpenQty}).` };
+    }
+
+    // 4. Busca e validação da posição correspondente
+    const targetPosition = await db.query.optionPositions.findFirst({
+      where: eq(optionPositions.id, targetLeg.positionId),
+    });
+    if (!targetPosition) {
+      return { success: false, error: 'POSITION_NOT_FOUND: Posição correspondente à perna não encontrada.' };
+    }
+    if (targetPosition.status !== 'OPEN') {
+      return { success: false, error: 'POSITION_NOT_OPEN: Posição correspondente não está aberta.' };
+    }
+    if (executionDate < targetPosition.entryDate) {
+      return { success: false, error: `EXECUTION_DATE_BEFORE_ENTRY_DATE: Data de execução (${executionDate}) não pode ser anterior à data de entrada (${targetPosition.entryDate}).` };
+    }
+    const posOpenQty = targetPosition.openQuantity ?? targetPosition.quantity;
+    if (params.quantity > posOpenQty) {
+      return { success: false, error: `INSUFFICIENT_POSITION_OPEN_QUANTITY: Quantidade solicitada (${params.quantity}) excede o saldo aberto da posição (${posOpenQty}).` };
+    }
+
+    // 5. Cálculo de Ratios de Auditoria
+    const originalRatio = formatLegsRatio(allLegs.map((l) => ({ quantity: l.allocatedQuantity })));
+    const ratioBefore = formatLegsRatio(allLegs.map((l) => ({ quantity: l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)) })));
+    const postQuantities = allLegs.map((l) => {
+      const curOpen = l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0));
+      return { quantity: l.id === targetLeg.id ? curOpen - params.quantity : curOpen };
+    });
+    const ratioAfter = formatLegsRatio(postQuantities);
+    const preservesOriginalRatio = ratioAfter !== '' && ratioAfter === originalRatio;
+
+    // 6. Cálculo Financeiro da Execução
+    const isSell = targetPosition.side === 'SELL' || targetPosition.side === 'SHORT';
+    const executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
+    const unitGrossPnl = isSell ? (targetPosition.entryPrice - params.price) : (params.price - targetPosition.entryPrice);
+    const grossRealizedPnlReais = Math.round(unitGrossPnl * params.quantity * 100) / 100;
+    const netRealizedPnlReais = Math.round((grossRealizedPnlReais - fees) * 100) / 100;
+
+    const maneuverEventId = generateId('strat_mnv');
+    const execId = generateId('opt_pos_exec');
+    const now = new Date().toISOString();
+
+    db.transaction((tx) => {
+      // 6.1 Criar Strategy Maneuver Event PRIMEIRO (Precedência estrita)
+      tx.insert(strategyManeuverEvents).values({
+        id: maneuverEventId,
+        strategyId: params.strategyId,
+        maneuverType: 'LEG_CLOSE',
+        percentageReduced: null,
+        unitsReduced: null,
+        executionDate,
+        auditRealizedPnlReais: grossRealizedPnlReais,
+        auditCapitalReleasedReais: null,
+        auditRatioBefore: ratioBefore,
+        auditRatioAfter: ratioAfter,
+        preservesOriginalRatio,
+        notes: params.notes || 'Encerramento parcial de perna',
+        createdAt: now,
+      }).run();
+
+      // 6.2 Criar Option Position Execution vinculada ao Maneuver
+      tx.insert(optionPositionExecutions).values({
+        id: execId,
+        positionId: targetPosition.id,
+        strategyId: params.strategyId,
+        strategyLegId: targetLeg.id,
+        maneuverEventId,
+        executionType,
+        quantity: params.quantity,
+        price: params.price,
+        executionDate,
+        entryPriceBasisReais: targetPosition.entryPrice,
+        grossRealizedPnlReais,
+        feesReais: fees,
+        netRealizedPnlReais,
+        source: 'USER_MANUAL',
+        notes: params.notes,
+        createdAt: now,
+      }).run();
+
+      // 6.3 Atualização atômica condicional da perna
+      const legRes = tx.run(sql`
+        UPDATE option_strategy_legs
+        SET open_allocated_quantity = open_allocated_quantity - ${params.quantity},
+            closed_allocated_quantity = closed_allocated_quantity + ${params.quantity}
+        WHERE id = ${targetLeg.id} AND open_allocated_quantity >= ${params.quantity}
+      `);
+      if (legRes.changes !== 1) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na perna.');
+      }
+
+      // 6.4 Atualização atômica condicional da posição
+      const posRes = tx.run(sql`
+        UPDATE option_positions
+        SET open_quantity = open_quantity - ${params.quantity},
+            closed_quantity = closed_quantity + ${params.quantity},
+            realized_pnl_reais = realized_pnl_reais + ${netRealizedPnlReais},
+            status = CASE WHEN open_quantity - ${params.quantity} = 0 THEN 'CLOSED' ELSE status END,
+            exit_date = CASE WHEN open_quantity - ${params.quantity} = 0 THEN ${executionDate} ELSE exit_date END,
+            exit_price = CASE WHEN open_quantity - ${params.quantity} = 0 THEN ${params.price} ELSE exit_price END,
+            updated_at = ${now}
+        WHERE id = ${targetPosition.id} AND open_quantity >= ${params.quantity}
+      `);
+      if (posRes.changes !== 1) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na posição.');
+      }
+
+      // 6.5 Reconciliação da estratégia e evolução do segmento de funding
+      const remainingLegs = tx.query.optionStrategyLegs.findMany({
+        where: eq(optionStrategyLegs.strategyId, params.strategyId),
+      }).sync();
+      const totalRemainingOpen = remainingLegs.reduce((acc, l) => acc + (l.openAllocatedQuantity ?? 0), 0);
+
+      const openSegment = tx.query.strategyFundingSegments.findFirst({
+        where: and(
+          eq(strategyFundingSegments.strategyId, params.strategyId),
+          isNull(strategyFundingSegments.endDate)
+        ),
+      }).sync();
+
+      if (totalRemainingOpen === 0) {
+        // Todas as pernas foram zeradas: estratégia torna-se terminal CLOSED
+        tx.update(optionStrategies).set({
+          status: 'CLOSED',
+          closedAt: executionDate,
+          updatedAt: now,
+        }).where(eq(optionStrategies.id, params.strategyId)).run();
+
+        if (openSegment) {
+          tx.update(strategyFundingSegments)
+            .set({ endDate: executionDate })
+            .where(eq(strategyFundingSegments.id, openSegment.id))
+            .run();
+        }
+      } else {
+        // Ainda há contratos abertos: recalcular benchmark capital e abrir novo segmento
+        if (openSegment) {
+          tx.update(strategyFundingSegments)
+            .set({ endDate: executionDate })
+            .where(eq(strategyFundingSegments.id, openSegment.id))
+            .run();
+        }
+
+        const remainingOpenLegs = remainingLegs.filter((l) => (l.openAllocatedQuantity ?? 0) > 0);
+        const remainingLegsForBenchmark = remainingOpenLegs.map((l) => {
+          const p = tx.query.optionPositions.findFirst({ where: eq(optionPositions.id, l.positionId) }).sync()!;
+          return {
+            allocatedQuantity: l.openAllocatedQuantity ?? 0,
+            economicRole: l.economicRole,
+            position: {
+              ...p,
+              optionType: p.optionType as 'CALL' | 'PUT',
+              side: p.side as 'SELL' | 'SHORT' | 'BUY' | 'LONG',
+            },
+          };
+        });
+
+        const newBenchmarkCapital = calculateStrategyCanonicalBenchmarkCapital(remainingLegsForBenchmark);
+        let newCapitalRemunerated = 0;
+        const currentMode = openSegment ? openSegment.collateralMode : (strategy.collateralMode || 'IDLE_CASH');
+        const currentCoveragePct = strategy.collateralCoveragePct;
+
+        if (currentMode === 'IDLE_CASH') {
+          newCapitalRemunerated = 0;
+        } else if (currentCoveragePct !== null && currentCoveragePct !== undefined) {
+          newCapitalRemunerated = (newBenchmarkCapital * currentCoveragePct) / 100.0;
+        } else if (openSegment) {
+          newCapitalRemunerated = Math.min(openSegment.capitalRemuneratedReais, newBenchmarkCapital);
+        } else {
+          newCapitalRemunerated = newBenchmarkCapital;
+        }
+
+        tx.insert(strategyFundingSegments).values({
+          id: generateId('strat_fnd_seg'),
+          strategyId: params.strategyId,
+          startDate: executionDate,
+          endDate: null,
+          benchmarkCapitalReais: newBenchmarkCapital,
+          capitalRemuneratedReais: newCapitalRemunerated,
+          collateralMode: currentMode,
+          collateralPctCdi: openSegment ? openSegment.collateralPctCdi : strategy.collateralYieldPctCDI,
+          sourceType: 'MANEUVER',
+          maneuverEventId,
+          quality: openSegment ? openSegment.quality : 'FULL',
+          createdAt: now,
+        }).run();
+      }
+    });
+
+    safeRevalidate('/opcoes');
+    return { success: true, maneuverEventId, executionId: execId };
+  } catch (err: any) {
+    console.error('[Options Actions] Erro em partialCloseStrategyLegAction:', err);
+    return { success: false, error: err.message || 'Erro ao fechar perna da estratégia' };
+  }
+}
+
+export interface ScaleDownOptionStrategyParams {
+  strategyId: string;
+  percentageReduced: number;
+  executionDate?: string;
+  legs: Array<{
+    strategyLegId: string;
+    price: number;
+    feesReais?: number;
+  }>;
+  notes?: string;
+}
+
+/**
+ * Reduz proporcionalmente todas as pernas abertas de uma estratégia (SCALE_DOWN)
+ */
+export async function scaleDownOptionStrategyAction(
+  params: ScaleDownOptionStrategyParams
+): Promise<{ success: boolean; maneuverEventId?: string; error?: string }> {
+  try {
+    // 1. Validação da porcentagem
+    if (!Number.isFinite(params.percentageReduced) || params.percentageReduced <= 0 || params.percentageReduced >= 100) {
+      return {
+        success: false,
+        error: 'INVALID_SCALE_DOWN_PERCENTAGE: A porcentagem de redução deve estar entre 0% e 100% (exclusivos). Para encerramento total (100%), utilize o fechamento completo da estratégia.',
+      };
+    }
+
+    const executionDate = params.executionDate || getBrazilTodayDate();
+    if (!isB3TradingDay(executionDate as BusinessDate)) {
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.' };
+    }
+
+    // 2. Busca e validação da estratégia
+    const strategy = await db.query.optionStrategies.findFirst({
+      where: eq(optionStrategies.id, params.strategyId),
+    });
+    if (!strategy) {
+      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.' };
+    }
+    if (strategy.status !== 'OPEN') {
+      return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.' };
+    }
+
+    // 3. Busca e validação das pernas abertas
+    const allLegs = await db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, params.strategyId),
+      orderBy: [asc(optionStrategyLegs.id)],
+    });
+
+    const openLegs = allLegs.filter((l) => {
+      const openQty = l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0));
+      return openQty > 0;
+    });
+
+    if (openLegs.length === 0) {
+      return { success: false, error: 'NO_OPEN_LEGS_IN_STRATEGY: Não há pernas abertas na estratégia para redução.' };
+    }
+
+    if (!Array.isArray(params.legs) || params.legs.length !== openLegs.length) {
+      return {
+        success: false,
+        error: `MISSING_LEG_INPUT: O cliente deve fornecer exatamente uma entrada de execução para cada perna aberta da estratégia (esperado: ${openLegs.length}, recebido: ${params.legs?.length ?? 0}).`,
+      };
+    }
+
+    const legInputMap = new Map<string, { price: number; feesReais?: number }>();
+    const seenLegIds = new Set<string>();
+
+    for (const legInput of params.legs) {
+      if (seenLegIds.has(legInput.strategyLegId)) {
+        return { success: false, error: `DUPLICATE_LEG_INPUT: Perna '${legInput.strategyLegId}' fornecida em duplicidade.` };
+      }
+      seenLegIds.add(legInput.strategyLegId);
+
+      if (!openLegs.some((l) => l.id === legInput.strategyLegId)) {
+        return { success: false, error: `INVALID_LEG_INPUT: Perna '${legInput.strategyLegId}' não pertence à estratégia ou já se encontra fechada.` };
+      }
+      if (!Number.isFinite(legInput.price) || legInput.price < 0) {
+        return { success: false, error: `INVALID_PRICE: Preço inválido para a perna '${legInput.strategyLegId}'.` };
+      }
+      if (legInput.feesReais !== undefined && (!Number.isFinite(legInput.feesReais) || legInput.feesReais < 0)) {
+        return { success: false, error: `INVALID_FEES: Custos inválidos para a perna '${legInput.strategyLegId}'.` };
+      }
+      legInputMap.set(legInput.strategyLegId, { price: legInput.price, feesReais: legInput.feesReais || 0 });
+    }
+
+    // 4. Algoritmo GCD / MDC para derivação estrita das quantidades pelo Servidor
+    const openQuantities = openLegs.map((l) => l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)));
+    const strategyGcd = calculateLegsGcd(openQuantities);
+    const unitsToReduce = (strategyGcd * params.percentageReduced) / 100.0;
+
+    if (!Number.isInteger(unitsToReduce) || unitsToReduce < 1) {
+      return {
+        success: false,
+        error: `SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE: A porcentagem ${params.percentageReduced}% sobre a unidade base da estratégia (MDC: ${strategyGcd}) resulta em ${unitsToReduce} unidades, que não é um número inteiro de contratos.`,
+      };
+    }
+
+    const qtyToCloseByLegId = new Map<string, number>();
+    const newOpenByLegId = new Map<string, number>();
+
+    for (let i = 0; i < openLegs.length; i++) {
+      const leg = openLegs[i];
+      const curOpen = openQuantities[i];
+      const legRatioMultiplier = curOpen / strategyGcd;
+      const legQtyToClose = legRatioMultiplier * unitsToReduce;
+      qtyToCloseByLegId.set(leg.id, legQtyToClose);
+      newOpenByLegId.set(leg.id, curOpen - legQtyToClose);
+    }
+
+    // 5. Ratios de Auditoria e Preservação de Razão
+    const originalRatio = formatLegsRatio(allLegs.map((l) => ({ quantity: l.allocatedQuantity })));
+    const auditRatioBefore = formatLegsRatio(openLegs.map((l) => ({ quantity: l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)) })));
+    const auditRatioAfter = formatLegsRatio(openLegs.map((l) => ({ quantity: newOpenByLegId.get(l.id)! })));
+    const preservesOriginalRatio = auditRatioAfter !== '' && auditRatioAfter === originalRatio;
+
+    // 6. Pré-validação das posições
+    const positionsMap = new Map<string, OptionPosition>();
+    for (const leg of openLegs) {
+      const pos = await db.query.optionPositions.findFirst({
+        where: eq(optionPositions.id, leg.positionId),
+      });
+      if (!pos) {
+        return { success: false, error: `POSITION_NOT_FOUND: Posição para a perna '${leg.id}' não encontrada.` };
+      }
+      if (pos.status !== 'OPEN') {
+        return { success: false, error: `POSITION_NOT_OPEN: Posição '${pos.tickerOption}' não está aberta.` };
+      }
+      if (executionDate < pos.entryDate) {
+        return { success: false, error: `EXECUTION_DATE_BEFORE_ENTRY_DATE: Data de execução (${executionDate}) não pode ser anterior à data de entrada (${pos.entryDate}).` };
+      }
+      const posOpenQty = pos.openQuantity ?? pos.quantity;
+      const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
+      if (qtyToClose > posOpenQty) {
+        return { success: false, error: `INSUFFICIENT_POSITION_OPEN_QUANTITY: Quantidade a encerrar (${qtyToClose}) excede saldo da posição (${posOpenQty}).` };
+      }
+      positionsMap.set(leg.positionId, pos);
+    }
+
+    // 7. Cálculo preliminar de P&L de auditoria
+    let totalAuditGrossRealizedPnl = 0;
+    for (const leg of openLegs) {
+      const pos = positionsMap.get(leg.positionId)!;
+      const legInput = legInputMap.get(leg.id)!;
+      const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
+      const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
+      const unitPnl = isSell ? (pos.entryPrice - legInput.price) : (legInput.price - pos.entryPrice);
+      totalAuditGrossRealizedPnl += Math.round(unitPnl * qtyToClose * 100) / 100;
+    }
+    totalAuditGrossRealizedPnl = Math.round(totalAuditGrossRealizedPnl * 100) / 100;
+
+    const maneuverEventId = generateId('strat_mnv');
+    const now = new Date().toISOString();
+
+    db.transaction((tx) => {
+      // 7.1 Criar Strategy Maneuver Event PRIMEIRO (Precedência estrita)
+      tx.insert(strategyManeuverEvents).values({
+        id: maneuverEventId,
+        strategyId: params.strategyId,
+        maneuverType: 'SCALE_DOWN',
+        percentageReduced: params.percentageReduced,
+        unitsReduced: unitsToReduce,
+        executionDate,
+        auditRealizedPnlReais: totalAuditGrossRealizedPnl,
+        auditCapitalReleasedReais: null,
+        auditRatioBefore,
+        auditRatioAfter,
+        preservesOriginalRatio,
+        notes: params.notes || `Redução proporcional de ${params.percentageReduced}% da estrutura`,
+        createdAt: now,
+      }).run();
+
+      // 7.2 Gerar Execuções e Atualizar Pernas e Posições Condicionalmente
+      for (const leg of openLegs) {
+        const pos = positionsMap.get(leg.positionId)!;
+        const legInput = legInputMap.get(leg.id)!;
+        const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
+
+        const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
+        const executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
+        const unitGrossPnl = isSell ? (pos.entryPrice - legInput.price) : (legInput.price - pos.entryPrice);
+        const grossRealizedPnlReais = Math.round(unitGrossPnl * qtyToClose * 100) / 100;
+        const fees = legInput.feesReais || 0;
+        const netRealizedPnlReais = Math.round((grossRealizedPnlReais - fees) * 100) / 100;
+
+        // Inserir execution com mesmo maneuverEventId
+        tx.insert(optionPositionExecutions).values({
+          id: generateId('opt_pos_exec'),
+          positionId: pos.id,
+          strategyId: params.strategyId,
+          strategyLegId: leg.id,
+          maneuverEventId,
+          executionType,
+          quantity: qtyToClose,
+          price: legInput.price,
+          executionDate,
+          entryPriceBasisReais: pos.entryPrice,
+          grossRealizedPnlReais,
+          feesReais: fees,
+          netRealizedPnlReais,
+          source: 'USER_MANUAL',
+          notes: params.notes,
+          createdAt: now,
+        }).run();
+
+        // Atualização atômica condicional da perna
+        const legRes = tx.run(sql`
+          UPDATE option_strategy_legs
+          SET open_allocated_quantity = open_allocated_quantity - ${qtyToClose},
+              closed_allocated_quantity = closed_allocated_quantity + ${qtyToClose}
+          WHERE id = ${leg.id} AND open_allocated_quantity >= ${qtyToClose}
+        `);
+        if (legRes.changes !== 1) {
+          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na perna.');
+        }
+
+        // Atualização atômica condicional da posição
+        const posRes = tx.run(sql`
+          UPDATE option_positions
+          SET open_quantity = open_quantity - ${qtyToClose},
+              closed_quantity = closed_quantity + ${qtyToClose},
+              realized_pnl_reais = realized_pnl_reais + ${netRealizedPnlReais},
+              status = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN 'CLOSED' ELSE status END,
+              exit_date = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN ${executionDate} ELSE exit_date END,
+              exit_price = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN ${legInput.price} ELSE exit_price END,
+              updated_at = ${now}
+          WHERE id = ${pos.id} AND open_quantity >= ${qtyToClose}
+        `);
+        if (posRes.changes !== 1) {
+          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na posição.');
+        }
+      }
+
+      // 7.3 Evolução do Segmento de Funding (Transição Limpa)
+      const openSegment = tx.query.strategyFundingSegments.findFirst({
+        where: and(
+          eq(strategyFundingSegments.strategyId, params.strategyId),
+          isNull(strategyFundingSegments.endDate)
+        ),
+      }).sync();
+
+      if (openSegment) {
+        tx.update(strategyFundingSegments)
+          .set({ endDate: executionDate })
+          .where(eq(strategyFundingSegments.id, openSegment.id))
+          .run();
+      }
+
+      // Recalcular novo benchmark capital para as pernas com saldos abertos residuais
+      const remainingLegsForBenchmark = openLegs.map((l) => {
+        const p = positionsMap.get(l.positionId)!;
+        return {
+          allocatedQuantity: newOpenByLegId.get(l.id)!,
+          economicRole: l.economicRole,
+          position: {
+            ...p,
+            optionType: p.optionType as 'CALL' | 'PUT',
+            side: p.side as 'SELL' | 'SHORT' | 'BUY' | 'LONG',
+          },
+        };
+      });
+
+      const newBenchmarkCapital = calculateStrategyCanonicalBenchmarkCapital(remainingLegsForBenchmark);
+      let newCapitalRemunerated = 0;
+      const currentMode = openSegment ? openSegment.collateralMode : (strategy.collateralMode || 'IDLE_CASH');
+      const currentCoveragePct = strategy.collateralCoveragePct;
+
+      if (currentMode === 'IDLE_CASH') {
+        newCapitalRemunerated = 0;
+      } else if (currentCoveragePct !== null && currentCoveragePct !== undefined) {
+        newCapitalRemunerated = (newBenchmarkCapital * currentCoveragePct) / 100.0;
+      } else if (openSegment) {
+        newCapitalRemunerated = Math.min(openSegment.capitalRemuneratedReais, newBenchmarkCapital);
+      } else {
+        newCapitalRemunerated = newBenchmarkCapital;
+      }
+
+      tx.insert(strategyFundingSegments).values({
+        id: generateId('strat_fnd_seg'),
+        strategyId: params.strategyId,
+        startDate: executionDate,
+        endDate: null,
+        benchmarkCapitalReais: newBenchmarkCapital,
+        capitalRemuneratedReais: newCapitalRemunerated,
+        collateralMode: currentMode,
+        collateralPctCdi: openSegment ? openSegment.collateralPctCdi : strategy.collateralYieldPctCDI,
+        sourceType: 'MANEUVER',
+        maneuverEventId,
+        quality: openSegment ? openSegment.quality : 'FULL',
+        createdAt: now,
+      }).run();
+    });
+
+    safeRevalidate('/opcoes');
+    return { success: true, maneuverEventId };
+  } catch (err: any) {
+    console.error('[Options Actions] Erro em scaleDownOptionStrategyAction:', err);
+    return { success: false, error: err.message || 'Erro ao reduzir estratégia proporcionalmente' };
   }
 }
 
