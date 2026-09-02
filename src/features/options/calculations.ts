@@ -17,6 +17,7 @@ import {
   calculateRealizedDiFactor,
   calculateProjectedDiFactor,
   calculateIndexedDiFactor,
+  calculateIndexedDailyFactor,
   calculateB3DailyFactor,
   type RealizedDiResult,
   type ProjectedDiResult,
@@ -399,11 +400,11 @@ export interface StrategyEconomicPerformance {
   elapsedDU: number;
   resultNature: 'MTM' | 'REALIZED';
 
-  // Bases de Capital
+  // Bases de Capital Segregadas
   capitalReservedReais: number;        // Capital bloqueado por margem / strikes de opções vendidas (ex: R$ 15.476)
   capitalRemuneratedReais: number;    // Saldo em garantia aplicado no CDI (ex: R$ 15.476 ou R$ 0)
   benchmarkCapitalReais: number;      // Custo de oportunidade de referência
-  capitalBasisMethod: 'STATIC' | 'DAILY_WEIGHTED';
+  capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED';
 
   // Risco Econômico
   maxLossEconomicReais: number | null;
@@ -498,9 +499,17 @@ export function calculateStrategyEconomicPerformance(
   if (collateralMode === 'REMUNERATED_100_CDI') {
     collateralPctCdi = 100;
   } else if (collateralMode === 'CUSTOM') {
-    collateralPctCdi = params.collateralPctCdi !== undefined && params.collateralPctCdi !== null && Number.isFinite(params.collateralPctCdi)
-      ? params.collateralPctCdi
-      : 100;
+    if (
+      params.collateralPctCdi === undefined ||
+      params.collateralPctCdi === null ||
+      !Number.isFinite(params.collateralPctCdi) ||
+      params.collateralPctCdi < 0
+    ) {
+      throw new Error(
+        'CUSTOM_COLLATERAL_PERCENT_REQUIRED: Informe um percentual válido e não-negativo (>= 0) para o collateral customizado.'
+      );
+    }
+    collateralPctCdi = params.collateralPctCdi;
   }
 
   const capitalRemuneratedReais = collateralMode === 'IDLE_CASH'
@@ -511,12 +520,12 @@ export function calculateStrategyEconomicPerformance(
     ? Math.max(0, params.benchmarkCapitalReais)
     : capitalReservedReais;
 
-  const capitalBasisMethod: 'STATIC' | 'DAILY_WEIGHTED' = params.legsOpenedAtDifferentDates
-    ? 'DAILY_WEIGHTED'
+  const capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED' = params.legsOpenedAtDifferentDates
+    ? 'STATIC_APPROXIMATION'
     : 'STATIC';
 
   if (params.legsOpenedAtDifferentDates) {
-    qualityNotes.push('Pernas com datas de abertura distintas: benchmark linear simplificado para STATIC');
+    qualityNotes.push('Pernas com datas de abertura distintas: benchmark linear aproximado (STATIC_APPROXIMATION)');
   }
 
   // 2. Benchmark CDI (100% CDI Puro)
@@ -607,11 +616,11 @@ export function calculateStrategyEconomicPerformance(
     }
   }
 
-  // 9. Carry Diário (Theta vs CDI Normalizado em R$/DU)
-  const lastDailyFactor = benchDi.observations.length > 0
-    ? benchDi.observations[benchDi.observations.length - 1].dailyFactor
-    : calculateB3DailyFactor(params.cdiFallbackAnnualRate ?? 0.14);
-  const cdiCarryReaisPerComparableDay = capitalRemuneratedReais * (lastDailyFactor - 1.0);
+  // 9. Carry Diário (Theta vs CDI Normalizado em R$/DU baseado no collateral real indexado)
+  const lastCollateralDailyFactor = collateralDi.observations.length > 0
+    ? collateralDi.observations[collateralDi.observations.length - 1].dailyFactor
+    : calculateIndexedDailyFactor(params.cdiFallbackAnnualRate ?? 0.14, collateralPctCdi);
+  const cdiCarryReaisPerComparableDay = capitalRemuneratedReais * (lastCollateralDailyFactor - 1.0);
   const thetaReaisPerComparableDay = params.netThetaReaisPerDay !== undefined && params.netThetaReaisPerDay !== null
     ? params.netThetaReaisPerDay * (365.0 / 252.0)
     : null;
@@ -1086,6 +1095,156 @@ export interface EnrichedStrategyLeg {
   position: EnrichedOptionPosition;
 }
 
+// ─── 11. STRATEGY RISK & PAYOFF RECOGNIZER ───
+export interface StrategyRiskProfile {
+  maxLossEconomicReais: number | null;
+  maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
+  capitalReservedReais: number;
+  breakEvenInferior: number | null;
+  breakEvenSuperior: number | null;
+  downsideExposureUnits: number;
+  upsideParticipationUnits: number;
+  putToCallRatio: number | null;
+}
+
+export function detectStrategyRiskAndPayoff(params: {
+  legs: Array<{
+    allocatedQuantity: number;
+    economicRole: string;
+    position: EnrichedOptionPosition;
+  }>;
+  netInitialCreditDebitReais: number;
+}): StrategyRiskProfile {
+  let shortPutUnits = 0;
+  let longPutUnits = 0;
+  let shortCallUnits = 0;
+  let longCallUnits = 0;
+
+  let totalShortPutStrikeVal = 0;
+  let totalLongPutStrikeVal = 0;
+  let totalShortCallStrikeVal = 0;
+  let totalLongCallStrikeVal = 0;
+
+  const shortPuts: Array<{ strike: number; qty: number }> = [];
+  const longPuts: Array<{ strike: number; qty: number }> = [];
+  const shortCalls: Array<{ strike: number; qty: number; spot: number }> = [];
+  const longCalls: Array<{ strike: number; qty: number }> = [];
+
+  for (const leg of params.legs) {
+    const pos = leg.position;
+    const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
+    const isLong = !isShort;
+    const qty = leg.allocatedQuantity;
+
+    if (pos.optionType === 'PUT') {
+      if (isShort) {
+        shortPutUnits += qty;
+        totalShortPutStrikeVal += pos.strike * qty;
+        shortPuts.push({ strike: pos.strike, qty });
+      } else {
+        longPutUnits += qty;
+        totalLongPutStrikeVal += pos.strike * qty;
+        longPuts.push({ strike: pos.strike, qty });
+      }
+    } else if (pos.optionType === 'CALL') {
+      if (isShort) {
+        shortCallUnits += qty;
+        totalShortCallStrikeVal += pos.strike * qty;
+        shortCalls.push({ strike: pos.strike, qty, spot: pos.underlyingCurrentSpot || pos.strike });
+      } else {
+        longCallUnits += qty;
+        totalLongCallStrikeVal += pos.strike * qty;
+        longCalls.push({ strike: pos.strike, qty });
+      }
+    }
+  }
+
+  const putToCallRatio = longCallUnits > 0 ? shortPutUnits / longCallUnits : null;
+  const netCredit = params.netInitialCreditDebitReais; // positivo = crédito, negativo = débito
+
+  let maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN' = 'FINITE';
+  let maxLossEconomicReais: number | null = null;
+  let capitalReservedReais = 0;
+  let breakEvenInferior: number | null = null;
+  let breakEvenSuperior: number | null = null;
+
+  // 1. Naked Short Call (Venda Descoberta de Call sem cobertura de Long Call suficiente)
+  if (shortCallUnits > longCallUnits) {
+    maxLossType = 'UNBOUNDED';
+    maxLossEconomicReais = null;
+    capitalReservedReais = shortCalls.reduce((acc, c) => acc + c.spot * c.qty, 0);
+    if (shortPutUnits > 0) {
+      capitalReservedReais += totalShortPutStrikeVal;
+    }
+  }
+  // 2. Trava de Alta com Put (Bull Put Spread)
+  else if (shortPuts.length === 1 && longPuts.length === 1 && shortCallUnits === 0 && longCallUnits === 0) {
+    const sp = shortPuts[0];
+    const lp = longPuts[0];
+    if (sp.qty === lp.qty && lp.strike < sp.strike) {
+      const spreadWidthReais = (sp.strike - lp.strike) * sp.qty;
+      maxLossType = 'FINITE';
+      maxLossEconomicReais = Math.max(0, spreadWidthReais - netCredit);
+      capitalReservedReais = spreadWidthReais;
+      breakEvenInferior = sp.strike - (netCredit / sp.qty);
+    } else {
+      maxLossType = 'FINITE';
+      maxLossEconomicReais = Math.max(0, totalShortPutStrikeVal - totalLongPutStrikeVal - netCredit);
+      capitalReservedReais = Math.max(1, totalShortPutStrikeVal - totalLongPutStrikeVal);
+    }
+  }
+  // 3. Trava de Baixa com Call (Bear Call Spread)
+  else if (shortCalls.length === 1 && longCalls.length === 1 && shortPutUnits === 0 && longPutUnits === 0) {
+    const sc = shortCalls[0];
+    const lc = longCalls[0];
+    if (sc.qty === lc.qty && lc.strike > sc.strike) {
+      const spreadWidthReais = (lc.strike - sc.strike) * sc.qty;
+      maxLossType = 'FINITE';
+      maxLossEconomicReais = Math.max(0, spreadWidthReais - netCredit);
+      capitalReservedReais = spreadWidthReais;
+      breakEvenSuperior = sc.strike + (netCredit / sc.qty);
+    } else {
+      maxLossType = 'FINITE';
+      maxLossEconomicReais = Math.max(0, (lc.strike - sc.strike) * sc.qty - netCredit);
+      capitalReservedReais = Math.max(1, (lc.strike - sc.strike) * sc.qty);
+    }
+  }
+  // 4. Estruturas com Short Put (ex: CSP, Put Financiando Call 2:1, etc.)
+  else if (shortPutUnits > 0 && shortCallUnits === 0) {
+    maxLossType = 'FINITE';
+    maxLossEconomicReais = Math.max(0, totalShortPutStrikeVal - netCredit);
+    capitalReservedReais = totalShortPutStrikeVal;
+    breakEvenInferior = (totalShortPutStrikeVal - netCredit) / shortPutUnits;
+  }
+  // 5. Estruturas Long Only (Compra de Call, Compra de Put, Trava de Débito)
+  else if (shortPutUnits === 0 && shortCallUnits === 0) {
+    maxLossType = 'FINITE';
+    maxLossEconomicReais = Math.max(0, Math.abs(netCredit));
+    capitalReservedReais = Math.max(1, Math.abs(netCredit));
+  }
+  // 6. Genérico
+  else {
+    maxLossType = 'FINITE';
+    capitalReservedReais = totalShortPutStrikeVal + shortCalls.reduce((acc, c) => acc + c.spot * c.qty, 0);
+    maxLossEconomicReais = Math.max(0, capitalReservedReais - netCredit);
+  }
+
+  if (capitalReservedReais <= 0) {
+    capitalReservedReais = Math.max(1, Math.abs(netCredit));
+  }
+
+  return {
+    maxLossEconomicReais,
+    maxLossType,
+    capitalReservedReais,
+    breakEvenInferior,
+    breakEvenSuperior,
+    downsideExposureUnits: shortPutUnits,
+    upsideParticipationUnits: longCallUnits,
+    putToCallRatio,
+  };
+}
+
 export interface EnrichedOptionStrategy {
   id: string;
   portfolio: string;
@@ -1108,7 +1267,8 @@ export interface EnrichedOptionStrategy {
     netPnlMtmReais: number; // ex: +478.00
     netEstimatedExitReais: number;
     totalCapitalReserved: number; // ex: 15476.00 (cash-secured)
-    maxLossEconomicReais: number; // ex: 15296.00
+    maxLossEconomicReais: number | null; // ex: 15296.00 ou null se UNBOUNDED
+    maxLossType: 'FINITE' | 'UNBOUNDED' | 'UNKNOWN';
     breakEvenInferior: number | null; // ex: 38.24
     breakEvenSuperior: number | null;
     roicPct: number; // ex: +3.09%
@@ -1150,10 +1310,6 @@ export function enrichOptionStrategy(params: {
   let netInitialCreditDebitReais = 0;
   let netPnlMtmReais = 0;
   let netEstimatedExitReais = 0;
-  let totalCapitalReserved = 0;
-  let shortPutStrike = 0;
-  let shortPutUnits = 0;
-  let longCallUnits = 0;
   let maxElapsedDU = 0;
   let minRemainingDU = 999;
   let cdiRealizedReaisTotal = 0;
@@ -1189,19 +1345,6 @@ export function enrichOptionStrategy(params: {
     });
     netEstimatedExitReais += pnlExitLeg;
 
-    // Capital Reservado
-    if (pos.optionType === 'PUT' && isShort) {
-      totalCapitalReserved += pos.strike * qty;
-      shortPutStrike = pos.strike;
-      shortPutUnits += qty;
-    } else if (pos.optionType === 'CALL' && isShort) {
-      totalCapitalReserved += (pos.underlyingCurrentSpot || pos.strike) * qty;
-    }
-
-    if (pos.optionType === 'CALL' && isLong) {
-      longCallUnits += qty;
-    }
-
     if (pos.metrics.elapsedTradingDays > maxElapsedDU) {
       maxElapsedDU = pos.metrics.elapsedTradingDays;
     }
@@ -1213,33 +1356,37 @@ export function enrichOptionStrategy(params: {
   }
 
   if (minRemainingDU === 999) minRemainingDU = 0;
-  if (totalCapitalReserved <= 0) {
-    totalCapitalReserved = Math.max(1, Math.abs(netInitialCreditDebitReais));
-  }
 
   const isNetCredit = netInitialCreditDebitReais >= 0;
+
+  // Reconhecimento de Risco e Payoff Genérico da Estrutura
+  const riskProfile = detectStrategyRiskAndPayoff({
+    legs: params.legs,
+    netInitialCreditDebitReais,
+  });
+
+  const totalCapitalReserved = riskProfile.capitalReservedReais;
+  const maxLossEconomicReais = riskProfile.maxLossEconomicReais;
+  const maxLossType = riskProfile.maxLossType;
+  const breakEvenInferior = riskProfile.breakEvenInferior;
+  const breakEvenSuperior = riskProfile.breakEvenSuperior;
+
   const roicPct = totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : 0;
-
-  // Max loss econômico aproximado
-  let maxLossEconomicReais = totalCapitalReserved;
-  let breakEvenInferior: number | null = null;
-
-  if (shortPutUnits > 0 && shortPutStrike > 0) {
-    maxLossEconomicReais = (shortPutUnits * shortPutStrike) - netInitialCreditDebitReais;
-    breakEvenInferior = shortPutStrike - (netInitialCreditDebitReais / shortPutUnits);
-  }
-
-  const putToCallRatio = longCallUnits > 0 ? shortPutUnits / longCallUnits : null;
   const alphaReais = netPnlMtmReais - cdiRealizedReaisTotal;
   const cdiMultiple = Math.abs(cdiRealizedReaisTotal) >= 0.05 ? netPnlMtmReais / cdiRealizedReaisTotal : null;
 
   // Performance Econômica da Estrutura (Double Yield Engine)
   const openedAtBusinessDate = parseBusinessDate(params.openedAt.slice(0, 10));
+  const valuationDateStr: BusinessDate = (params.status === 'CLOSED' || params.status === 'ROLLED') && params.closedAt
+    ? parseBusinessDate(params.closedAt.slice(0, 10))
+    : getBrazilTodayDate();
+
   const entryDates = new Set(params.legs.map((l) => l.position.entryDate));
   const legsOpenedAtDifferentDates = entryDates.size > 1;
 
   const economicPerformance = calculateStrategyEconomicPerformance({
     startDate: openedAtBusinessDate,
+    valuationDate: valuationDateStr,
     capitalReservedReais: totalCapitalReserved,
     capitalRemuneratedReais: params.collateralMode === 'IDLE_CASH' ? 0 : totalCapitalReserved,
     benchmarkCapitalReais: totalCapitalReserved,
@@ -1247,7 +1394,7 @@ export function enrichOptionStrategy(params: {
     collateralMode: params.collateralMode,
     collateralPctCdi: params.collateralYieldPctCDI,
     maxLossEconomicReais,
-    maxLossType: 'FINITE',
+    maxLossType,
     resultNature: params.status === 'CLOSED' ? 'REALIZED' : 'MTM',
     legsOpenedAtDifferentDates,
   });
@@ -1274,12 +1421,13 @@ export function enrichOptionStrategy(params: {
       netEstimatedExitReais,
       totalCapitalReserved,
       maxLossEconomicReais,
+      maxLossType,
       breakEvenInferior,
-      breakEvenSuperior: null,
+      breakEvenSuperior,
       roicPct,
-      putToCallRatio,
-      downsideExposureUnits: shortPutUnits,
-      upsideParticipationUnits: longCallUnits,
+      putToCallRatio: riskProfile.putToCallRatio,
+      downsideExposureUnits: riskProfile.downsideExposureUnits,
+      upsideParticipationUnits: riskProfile.upsideParticipationUnits,
       cdiRealizedReais: cdiRealizedReaisTotal,
       alphaReais,
       cdiMultiple,

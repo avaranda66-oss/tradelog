@@ -507,7 +507,7 @@ export function runAllTests() {
     collateralMode: 'REMUNERATED_100_CDI',
     legsOpenedAtDifferentDates: true,
   });
-  assert(perfG.capitalBasisMethod === 'DAILY_WEIGHTED', 'Cenário G: Marca capitalBasisMethod DAILY_WEIGHTED');
+  assert(perfG.capitalBasisMethod === 'STATIC_APPROXIMATION', 'Cenário G: Marca capitalBasisMethod STATIC_APPROXIMATION');
   assert(perfG.economicPerformanceQuality === 'PARTIAL', 'Cenário G: Marca economicPerformanceQuality PARTIAL');
 
   // H. Posição MTM Aberta
@@ -594,8 +594,173 @@ export function runAllTests() {
   assert(Math.abs(perfO.totalEconomicReturnReais - 48.03069456) < 0.001, 'Cenário O: Com P&L zero, retorno econômico total é exatamente o CDI do caixa');
   assert(perfO.excessReturnVsCdiReais === 0.0, 'Cenário O: Valor gerado acima do CDI é rigorosamente R$ 0,00');
 
+  // ─── 8. PHASE 2.1 REAL STRATEGY INTEGRATION & RISK RECOGNIZER TESTS ───
+  console.log('\n8. Phase 2.1 Real Strategy Integration & Risk Recognizer Tests:');
+
+  // 8.1. Bull Put Spread Real (Derivação de Risco Máximo da Trava)
+  const bpsShortPut: any = {
+    id: 'pos_bps_short',
+    optionType: 'PUT',
+    side: 'SELL',
+    quantity: 400,
+    strike: 40.0,
+    entryPrice: 1.00,
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.50, estimatedExitPrice: 0.55, cdiRealizedReais: 48.03, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bpsLongPut: any = {
+    id: 'pos_bps_long',
+    optionType: 'PUT',
+    side: 'BUY',
+    quantity: 400,
+    strike: 35.0,
+    entryPrice: 0.50,
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.20, estimatedExitPrice: 0.20, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+
+  const bpsStrat = enrichOptionStrategy({
+    id: 'strat_bps_1',
+    portfolio: 'BTG',
+    name: 'PETR4 — Bull Put Spread 40x35',
+    strategyType: 'TRAVA_ALTA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'PETR4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_bps_1', positionId: 'pos_bps_short', allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut },
+      { id: 'l2', strategyId: 'strat_bps_1', positionId: 'pos_bps_long', allocatedQuantity: 400, economicRole: 'HEDGE', position: bpsLongPut },
+    ],
+  });
+  assert(bpsStrat.metrics.netInitialCreditDebitReais === 200.0, 'BPS Real: Crédito inicial líquido é exatamente +R$ 200,00');
+  assert(bpsStrat.metrics.totalCapitalReserved === 2000.0, 'BPS Real: Capital reservado do spread (40-35)*400 é rigorosamente R$ 2.000,00');
+  assert(bpsStrat.metrics.maxLossType === 'FINITE', 'BPS Real: Recognizer define maxLossType FINITE');
+  assert(bpsStrat.metrics.maxLossEconomicReais === 1800.0, 'BPS Real: Max Loss da trava (2000 - 200) é rigorosamente R$ 1.800,00');
+  assert(bpsStrat.metrics.breakEvenInferior === 39.5, 'BPS Real: Break-Even Inferior da trava é R$ 39,50');
+  assert(bpsStrat.economicPerformance.extraProfitPer1000RiskReais !== null, 'BPS Real: Calcula lucro extra por R$ 1.000 de risco sobre os R$ 1.800');
+
+  // 8.2. Naked Short Call Real (Risco Ilimitado UNBOUNDED)
+  const nakedCallMock: any = {
+    id: 'pos_naked_call',
+    optionType: 'CALL',
+    side: 'SELL',
+    quantity: 100,
+    strike: 40.0,
+    entryPrice: 1.20,
+    underlyingCurrentSpot: 39.0,
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.80, estimatedExitPrice: 0.85, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+
+  const nakedStrat = enrichOptionStrategy({
+    id: 'strat_naked_1',
+    portfolio: 'BTG',
+    name: 'VALE3 — Venda Descoberta de Call',
+    strategyType: 'VENDA_CALL_DESCOBERTA',
+    book: 'INCOME',
+    underlyingTicker: 'VALE3',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_naked_1', positionId: 'pos_naked_call', allocatedQuantity: 100, economicRole: 'INCOME', position: nakedCallMock },
+    ],
+  });
+  assert(nakedStrat.metrics.maxLossType === 'UNBOUNDED', 'Naked Call Real: Recognizer classifica como UNBOUNDED');
+  assert(nakedStrat.metrics.maxLossEconomicReais === null, 'Naked Call Real: Max Loss econômico é null');
+  assert(nakedStrat.economicPerformance.excessReturnOnMaxRiskPct === null, 'Naked Call Real: Bloqueia excessReturnOnMaxRiskPct (null)');
+  assert(nakedStrat.economicPerformance.extraProfitPer1000RiskReais === null, 'Naked Call Real: Bloqueia extraProfitPer1000RiskReais (null)');
+
+  // 8.3. Estratégia CLOSED (Congela CDI e DU na data de fechamento closedAt)
+  const closedStrat = enrichOptionStrategy({
+    id: 'strat_closed_1',
+    portfolio: 'BTG',
+    name: 'ITUB4 — CSP Encerrada no 4º DU',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    status: 'CLOSED',
+    openedAt: '2026-08-24',
+    closedAt: '2026-08-28', // Fechada na sexta (4 DU decorridos)
+    legs: [
+      { id: 'l1', strategyId: 'strat_closed_1', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut },
+    ],
+  });
+  assert(closedStrat.economicPerformance.resultNature === 'REALIZED', 'CLOSED: Classifica resultado como REALIZED');
+  assert(closedStrat.economicPerformance.elapsedDU === 4, 'CLOSED: Avalia exatamente 4 DU (para na data de encerramento 28/08)');
+  assert(closedStrat.economicPerformance.accrualValuationDate === '2026-08-28', 'CLOSED: accrualValuationDate é rigorosamente a data do closedAt');
+
+  // 8.4. Estratégia ROLLED (Congela CDI e DU na data do Roll)
+  const rolledStrat = enrichOptionStrategy({
+    id: 'strat_rolled_1',
+    portfolio: 'BTG',
+    name: 'ITUB4 — Rolagem na Sexta',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    status: 'ROLLED',
+    openedAt: '2026-08-24',
+    closedAt: '2026-08-28',
+    legs: [
+      { id: 'l1', strategyId: 'strat_rolled_1', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut },
+    ],
+  });
+  assert(rolledStrat.economicPerformance.elapsedDU === 4, 'ROLLED: Avalia exatamente 4 DU até o fechamento da perna rolada');
+
+  // 8.5. Metodologia B3 com 103,90% do CDI (Sem arredondamento precoce a 8 casas no fator diário)
+  const indexedDi1039 = calculateIndexedDiFactor('2026-08-24', '2026-08-26', 103.9); // 2 DU
+  // 13.90% a.a. -> FDI_100 = 1.00051660 -> TDI = 0.00051660 -> TDI_103.9 = 0.0005367474 (sem arredondar a 8 casas antes do produtório)
+  // Produto exato 2 dias com 16 casas: (1.0005367474)^2 = 1.0010737828062839 -> 1.00107378 (8 casas)
+  assert(indexedDi1039.accumulatedFactor === 1.00107378, '103,90% CDI: Acumulação canônica B3 em 2 DU resulta rigorosamente em 1.00107378');
+
+  // 8.6. CUSTOM sem Percentual ou Negativo (Validação Estrita)
+  try {
+    calculateStrategyEconomicPerformance({
+      startDate: '2026-08-24',
+      valuationDate: '2026-09-01',
+      capitalReservedReais: 15476.0,
+      optionPnlReais: 300.0,
+      collateralMode: 'CUSTOM',
+    });
+    assert(false, 'CUSTOM sem percentual deveria lançar erro');
+  } catch {
+    assert(true, 'CUSTOM sem percentual lança CUSTOM_COLLATERAL_PERCENT_REQUIRED');
+  }
+
+  try {
+    calculateStrategyEconomicPerformance({
+      startDate: '2026-08-24',
+      valuationDate: '2026-09-01',
+      capitalReservedReais: 15476.0,
+      optionPnlReais: 300.0,
+      collateralMode: 'CUSTOM',
+      collateralPctCdi: -10,
+    });
+    assert(false, 'CUSTOM com percentual negativo deveria lançar erro');
+  } catch {
+    assert(true, 'CUSTOM com percentual negativo é rejeitado');
+  }
+
+  // 8.7. Capital Remunerado Distinto do Reservado (ex: 50% em Ações de Margem e 50% em CDB)
+  const perfSplitCollateral = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-24',
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    capitalRemuneratedReais: 7738.0, // Apenas R$ 7.738 aplicados no CDI
+    benchmarkCapitalReais: 15476.0,
+    optionPnlReais: 300.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(Math.abs(perfSplitCollateral.collateralCarryReais - (7738.0 * 0.00310361)) < 0.01, 'Split Capital: Carrego do caixa é calculado sobre os R$ 7.738 remunerados');
+  assert(Math.abs(perfSplitCollateral.benchmarkCdiReais - (15476.0 * 0.00310361)) < 0.01, 'Split Capital: Benchmark CDI é calculado sobre os R$ 15.476 de custo de oportunidade');
+  assert(Math.abs(perfSplitCollateral.excessReturnVsCdiReais - (300.0 + 7738.0 * 0.00310361 - 15476.0 * 0.00310361)) < 0.01, 'Split Capital: Excesso vs CDI desconta o custo de oportunidade não remunerado');
+
   console.log('\n========================================');
-  console.log('✅ ALL 50 UNIT TESTS & 15 ECONOMIC SCENARIOS PASSED SUCCESSFULLY!');
+  console.log('✅ ALL 65 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');
 }
 

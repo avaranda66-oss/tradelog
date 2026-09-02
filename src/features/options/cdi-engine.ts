@@ -46,28 +46,31 @@ export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): nu
 }
 
 /**
- * Calcula o Fator Diário indexado a um percentual do CDI (ex: 110% do CDI) conforme metodologia oficial B3.
- * Regra B3: O percentual p é aplicado sobre a taxa diária efetiva:
- * TDI_indexada = (FDI - 1) * (pctCdi / 100)
- * FDI_indexado = round(1 + TDI_indexada, 8)
+ * Calcula o Fator Diário indexado a um percentual do CDI (ex: 110% ou 103,90% do CDI) conforme metodologia oficial B3.
+ * Metodologia B3:
+ * 1. A taxa diária efetiva oficial TDI_k = (1 + DI_k/100)^(1/252) - 1 é arredondada em 8 casas decimais.
+ * 2. O percentual p é aplicado sobre a TDI_k: TDI_indexada = TDI_k * (p / 100).
+ * 3. O fator 1 + TDI_indexada é levado ao produtório com precisão de até 16 casas decimais (sem novo arredondamento a 8 casas antes do produtório).
  */
 export function calculateIndexedDailyFactor(
   annualRateDecimal: AnnualRateDecimal,
   pctCdi: number = 100
 ): number {
-  if (pctCdi <= 0) return 1.0;
+  if (pctCdi < 0) {
+    throw new Error('INVALID_CDI_PERCENTAGE: Percentual de CDI não pode ser negativo.');
+  }
+  if (pctCdi === 0) return 1.0;
   const standardDailyFactor = calculateB3DailyFactor(annualRateDecimal);
   if (pctCdi === 100) return standardDailyFactor;
 
-  const dailyEffectiveRate = standardDailyFactor - 1.0;
+  const dailyEffectiveRate = standardDailyFactor - 1.0; // Taxa diária efetiva oficial (8 casas)
   const indexedDailyRate = dailyEffectiveRate * (pctCdi / 100.0);
-  const rawIndexedFactor = 1.0 + indexedDailyRate;
-  return Math.round(rawIndexedFactor * 100000000) / 100000000;
+  return 1.0 + indexedDailyRate; // Fator com precisão total para o acumulador de 16 casas decimais
 }
 
-const SCALE_8 = BigInt('100000000');
-const SCALE_16 = BigInt('10000000000000000');
-const HALF_SCALE_8 = BigInt('50000000');
+const SCALE_16 = BigInt('10000000000000000'); // 10^16
+const ROUNDING_OFFSET_8 = BigInt('50000000');  // 0.5 * 10^8 na escala 10^16
+const SCALE_8_DIVISOR = BigInt('100000000');   // 10^8
 
 /**
  * Realiza o produtório acumulado canônico da B3 com truncamento intermediário a 16 casas decimais
@@ -77,10 +80,12 @@ export function calculateB3AccumulatedFactor(dailyFactors: number[]): number {
   if (dailyFactors.length === 0) return 1.0;
   let accumulated16 = SCALE_16;
   for (const factor of dailyFactors) {
-    const factor8 = BigInt(Math.round(factor * 100000000));
-    accumulated16 = (accumulated16 * factor8) / SCALE_8;
+    // Escala 10^16 direta do fator diário (ex: 1.0005367474 -> 10005367474000000n)
+    const factor16 = BigInt(Math.round(factor * 10000000000000000));
+    accumulated16 = (accumulated16 * factor16) / SCALE_16; // Divisão inteira trunca a 16 casas decimais por sessão
   }
-  const rounded8 = (accumulated16 + HALF_SCALE_8) / SCALE_8;
+  // Arredondamento final determinístico para 8 casas decimais
+  const rounded8 = (accumulated16 + ROUNDING_OFFSET_8) / SCALE_8_DIVISOR;
   return Number(rounded8) / 100000000;
 }
 
