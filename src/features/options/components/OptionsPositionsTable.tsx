@@ -14,7 +14,7 @@ interface OptionsPositionsTableProps {
   onOpenDetailDrawer: (position: EnrichedOptionPosition) => void;
   onOpenGroupModal: (selectedPositions: EnrichedOptionPosition[]) => void;
   onOpenFundingModal?: (strategy: EnrichedOptionStrategy) => void;
-  onOpenManageModal?: (strategy: EnrichedOptionStrategy, initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE', initialLegId?: string) => void;
+  onOpenManageModal?: (strategy: EnrichedOptionStrategy, initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE' | 'HISTORY', initialLegId?: string) => void;
   onRefresh: () => void;
 }
 
@@ -378,16 +378,44 @@ export function OptionsPositionsTable({
                   </div>
 
                   <div className="flex items-center gap-4">
-                    {/* P&L Consolidado da Estrutura */}
-                    <div className="text-right">
-                      <div className="text-[10px] text-slate-400 uppercase font-bold">
-                        {strat.economicPerformance.resultNature === 'REALIZED' ? 'P&L REALIZADO' : 'P&L MTM ESTRUTURA'}
+                    {/* P&L Consolidado da Estrutura (Realizado + MTM + Total) */}
+                    <div className="text-right flex items-center gap-3">
+                      <div>
+                        <div className="text-[9px] text-slate-400 uppercase font-bold">
+                          Realizado
+                        </div>
+                        <div className={`text-xs font-mono font-bold ${
+                          (strat.metrics.strategyNetRealizedPnlReais ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                          {strat.metrics.strategyNetRealizedPnlReais !== null
+                            ? `${strat.metrics.strategyNetRealizedPnlReais >= 0 ? '+' : ''}R$ ${strat.metrics.strategyNetRealizedPnlReais.toFixed(2)}`
+                            : 'R$ 0,00'}
+                        </div>
                       </div>
-                      <div className={`text-base font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {isProfit ? '+' : ''}R$ {sm.netPnlMtmReais.toFixed(2)}{' '}
-                        <span className="text-xs font-normal text-emerald-400/80">
-                          (+{sm.roicPct.toFixed(2)}% ROIC)
-                        </span>
+
+                      <div className="border-l border-slate-700/60 pl-3">
+                        <div className="text-[9px] text-slate-400 uppercase font-bold">
+                          MTM Residual
+                        </div>
+                        <div className={`text-xs font-mono font-bold ${
+                          strat.metrics.strategyUnrealizedPnlReais >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                          {strat.metrics.strategyUnrealizedPnlReais >= 0 ? '+' : ''}R$ {strat.metrics.strategyUnrealizedPnlReais.toFixed(2)}
+                        </div>
+                      </div>
+
+                      <div className="border-l border-slate-700/60 pl-3">
+                        <div className="text-[9px] text-slate-400 uppercase font-bold">
+                          P&L Total
+                        </div>
+                        <div className={`text-base font-bold font-mono ${
+                          (strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                          {(strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais) >= 0 ? '+' : ''}R$ {(strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais).toFixed(2)}
+                          <span className="text-xs font-normal font-sans ml-1 text-emerald-400/80">
+                            ({sm.roicPct >= 0 ? '+' : ''}{sm.roicPct.toFixed(1)}%)
+                          </span>
+                        </div>
                       </div>
                     </div>
 
@@ -406,7 +434,7 @@ export function OptionsPositionsTable({
                     {/* Botão Histórico de Manejos */}
                     {onOpenManageModal && (
                       <button
-                        onClick={() => onOpenManageModal(strat, 'SCALE_DOWN', undefined)}
+                        onClick={() => onOpenManageModal(strat, 'HISTORY', undefined)}
                         className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 flex items-center gap-1 transition-all"
                         title="Ver Histórico de Manejos da Estrutura"
                       >
@@ -441,11 +469,13 @@ export function OptionsPositionsTable({
                         <tr className="border-b border-slate-800 text-slate-500 text-[9px] uppercase tracking-wider">
                           <th className="py-2 px-3">Perna / Papel Econômico</th>
                           <th className="py-2 px-2 text-center">Lado</th>
-                          <th className="py-2 px-2 text-right">Qtd Alocada</th>
+                          <th className="py-2 px-2 text-right">Quantidades</th>
                           <th className="py-2 px-2 text-right">Strike</th>
                           <th className="py-2 px-2 text-right">Preço Entrada</th>
                           <th className="py-2 px-2 text-right">Preço Atual</th>
-                          <th className="py-2 px-3 text-right">P&L MTM Perna</th>
+                          <th className="py-2 px-2 text-right">P&L Realizado</th>
+                          <th className="py-2 px-2 text-right">P&L MTM Residual</th>
+                          <th className="py-2 px-3 text-right">P&L Total</th>
                           <th className="py-2 px-3 text-center">Ações</th>
                         </tr>
                       </thead>
@@ -453,10 +483,6 @@ export function OptionsPositionsTable({
                         {strat.legs.map((leg) => {
                           const pos = leg.position;
                           const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
-                          const pnlLeg = isShort
-                            ? (pos.entryPrice - pos.currentPrice) * leg.allocatedQuantity
-                            : (pos.currentPrice - pos.entryPrice) * leg.allocatedQuantity;
-                          const isLegProfit = pnlLeg >= 0;
 
                           return (
                             <tr key={leg.id} className="hover:bg-slate-800/20 transition-colors">
@@ -488,26 +514,49 @@ export function OptionsPositionsTable({
                                 </span>
                               </td>
 
-                              <td className="py-2.5 px-2 text-right font-bold text-slate-200">
-                                {leg.allocatedQuantity.toLocaleString('pt-BR')}
+                              <td className="py-2.5 px-2 text-right">
+                                <div className="font-bold font-mono text-slate-200">
+                                  {leg.openAllocatedQuantity.toLocaleString('pt-BR')} aberto
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  Orig: {leg.originalAllocatedQuantity.toLocaleString('pt-BR')} · Fech: {leg.closedAllocatedQuantity.toLocaleString('pt-BR')}
+                                </div>
                               </td>
 
-                              <td className="py-2.5 px-2 text-right font-bold text-slate-300">
+                              <td className="py-2.5 px-2 text-right font-bold text-slate-300 font-mono">
                                 R$ {pos.strike.toFixed(2)}
                               </td>
 
-                              <td className="py-2.5 px-2 text-right text-slate-400">
+                              <td className="py-2.5 px-2 text-right text-slate-400 font-mono">
                                 R$ {pos.entryPrice.toFixed(2)}
                               </td>
 
-                              <td className="py-2.5 px-2 text-right font-bold text-slate-200">
+                              <td className="py-2.5 px-2 text-right font-bold text-slate-200 font-mono">
                                 R$ {pos.currentPrice.toFixed(2)}
                               </td>
 
-                              <td className="py-2.5 px-3 text-right">
-                                <span className={`font-bold ${isLegProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                  {isLegProfit ? '+' : ''}R$ {pnlLeg.toFixed(2)}
+                              <td className="py-2.5 px-2 text-right font-mono">
+                                <span className={leg.legKnownRealizedPnlReais >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {leg.legKnownRealizedPnlReais >= 0 ? '+' : ''}R$ {leg.legKnownRealizedPnlReais.toFixed(2)}
                                 </span>
+                              </td>
+
+                              <td className="py-2.5 px-2 text-right font-mono">
+                                <span className={`font-bold ${leg.legUnrealizedPnlReais >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {leg.legUnrealizedPnlReais >= 0 ? '+' : ''}R$ {leg.legUnrealizedPnlReais.toFixed(2)}
+                                </span>
+                              </td>
+
+                              <td className="py-2.5 px-3 text-right font-mono">
+                                {leg.legRealizedPnlQuality === 'FULL' && leg.legTotalPnlReais !== null ? (
+                                  <span className={`font-bold ${leg.legTotalPnlReais >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {leg.legTotalPnlReais >= 0 ? '+' : ''}R$ {leg.legTotalPnlReais.toFixed(2)}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 font-sans text-[10px]" title="Histórico anterior incompleto (LEGACY_INCOMPLETE)">
+                                    N/A
+                                  </span>
+                                )}
                               </td>
 
                               <td className="py-2.5 px-3 text-center">

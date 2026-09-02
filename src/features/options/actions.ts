@@ -352,7 +352,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     const enrichedStrategies: EnrichedOptionStrategy[] = [];
     for (const st of rawStrategies) {
       const strategyLegs = rawLegs.filter((l) => l.strategyId === st.id);
-      const legItems: EnrichedStrategyLeg[] = [];
+      const legItems: Parameters<typeof enrichOptionStrategy>[0]['legs'] = [];
 
       for (const leg of strategyLegs) {
         const p = enrichedPosMap.get(leg.positionId);
@@ -1775,6 +1775,10 @@ export interface PartialCloseStrategyLegParams {
   previewFingerprint?: string;
 }
 
+export interface ExecutePartialCloseStrategyLegParams extends PartialCloseStrategyLegParams {
+  previewFingerprint: string;
+}
+
 /**
  * Simula o encerramento parcial de uma perna (LEG_CLOSE) sem qualquer escrita no banco.
  */
@@ -1794,7 +1798,20 @@ export async function previewPartialCloseStrategyLegAction(
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
-    if (!isB3TradingDay(executionDate as BusinessDate)) {
+    if (executionDate > getBrazilTodayDate()) {
+      return {
+        success: false,
+        errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+        error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+      };
+    }
+    let isTradingDay = false;
+    try {
+      isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+    } catch {
+      isTradingDay = false;
+    }
+    if (!isTradingDay) {
       return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
     }
 
@@ -1852,9 +1869,16 @@ export async function previewPartialCloseStrategyLegAction(
  * Protegido por Preview Fingerprint Stale Guard e Condicionais SQL Exactly-Once.
  */
 export async function partialCloseStrategyLegAction(
-  params: PartialCloseStrategyLegParams
+  params: ExecutePartialCloseStrategyLegParams
 ): Promise<{ success: boolean; maneuverEventId?: string; executionId?: string; error?: string; errorCode?: string }> {
   try {
+    if (!params.previewFingerprint || !params.previewFingerprint.trim()) {
+      return {
+        success: false,
+        errorCode: 'MANEUVER_PREVIEW_REQUIRED',
+        error: 'MANEUVER_PREVIEW_REQUIRED: Gere um preview válido antes de confirmar.',
+      };
+    }
     if (!Number.isInteger(params.quantity) || params.quantity <= 0) {
       return { success: false, error: 'INVALID_QUANTITY: Quantidade deve ser um número inteiro positivo.', errorCode: 'INVALID_QUANTITY' };
     }
@@ -1867,7 +1891,20 @@ export async function partialCloseStrategyLegAction(
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
-    if (!isB3TradingDay(executionDate as BusinessDate)) {
+    if (executionDate > getBrazilTodayDate()) {
+      return {
+        success: false,
+        errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+        error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+      };
+    }
+    let isTradingDay = false;
+    try {
+      isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+    } catch {
+      isTradingDay = false;
+    }
+    if (!isTradingDay) {
       return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
     }
 
@@ -1933,7 +1970,7 @@ export async function partialCloseStrategyLegAction(
       const plan = planResult.plan;
 
       // 3. Validação de Stale Preview (P0)
-      if (params.previewFingerprint && params.previewFingerprint !== plan.previewFingerprint) {
+      if (params.previewFingerprint !== plan.previewFingerprint) {
         return {
           success: false,
           errorCode: 'STALE_MANEUVER_PREVIEW',
@@ -2102,6 +2139,10 @@ export interface ScaleDownOptionStrategyParams {
   previewFingerprint?: string;
 }
 
+export interface ExecuteScaleDownOptionStrategyParams extends ScaleDownOptionStrategyParams {
+  previewFingerprint: string;
+}
+
 /**
  * Simula a redução proporcional da estratégia (SCALE_DOWN) sem qualquer escrita no banco.
  */
@@ -2118,8 +2159,38 @@ export async function previewScaleDownStrategyAction(
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
-    if (!isB3TradingDay(executionDate as BusinessDate)) {
+    if (executionDate > getBrazilTodayDate()) {
+      return {
+        success: false,
+        errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+        error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+      };
+    }
+    let isTradingDay = false;
+    try {
+      isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+    } catch {
+      isTradingDay = false;
+    }
+    if (!isTradingDay) {
       return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
+    }
+
+    for (const leg of params.legs || []) {
+      if (!Number.isFinite(leg.price) || leg.price < 0) {
+        return {
+          success: false,
+          errorCode: 'INVALID_PRICE',
+          error: `INVALID_PRICE: Preço inválido para a perna '${leg.strategyLegId}'. Preço deve ser um número finito não negativo.`,
+        };
+      }
+      if (leg.feesReais !== undefined && (!Number.isFinite(leg.feesReais) || leg.feesReais < 0)) {
+        return {
+          success: false,
+          errorCode: 'INVALID_FEES',
+          error: `INVALID_FEES: Custos inválidos para a perna '${leg.strategyLegId}'. Custos devem ser um número finito não negativo.`,
+        };
+      }
     }
 
     const strategy = await db.query.optionStrategies.findFirst({
@@ -2175,9 +2246,16 @@ export async function previewScaleDownStrategyAction(
  * Protegido por Preview Fingerprint Stale Guard e Condicionais SQL Exactly-Once.
  */
 export async function scaleDownOptionStrategyAction(
-  params: ScaleDownOptionStrategyParams
+  params: ExecuteScaleDownOptionStrategyParams
 ): Promise<{ success: boolean; maneuverEventId?: string; error?: string; errorCode?: string }> {
   try {
+    if (!params.previewFingerprint || !params.previewFingerprint.trim()) {
+      return {
+        success: false,
+        errorCode: 'MANEUVER_PREVIEW_REQUIRED',
+        error: 'MANEUVER_PREVIEW_REQUIRED: Gere um preview válido antes de confirmar.',
+      };
+    }
     if (!Number.isFinite(params.percentageReduced) || params.percentageReduced <= 0 || params.percentageReduced >= 100) {
       return {
         success: false,
@@ -2187,8 +2265,38 @@ export async function scaleDownOptionStrategyAction(
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
-    if (!isB3TradingDay(executionDate as BusinessDate)) {
+    if (executionDate > getBrazilTodayDate()) {
+      return {
+        success: false,
+        errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+        error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+      };
+    }
+    let isTradingDay = false;
+    try {
+      isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+    } catch {
+      isTradingDay = false;
+    }
+    if (!isTradingDay) {
       return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
+    }
+
+    for (const leg of params.legs || []) {
+      if (!Number.isFinite(leg.price) || leg.price < 0) {
+        return {
+          success: false,
+          errorCode: 'INVALID_PRICE',
+          error: `INVALID_PRICE: Preço inválido para a perna '${leg.strategyLegId}'. Preço deve ser um número finito não negativo.`,
+        };
+      }
+      if (leg.feesReais !== undefined && (!Number.isFinite(leg.feesReais) || leg.feesReais < 0)) {
+        return {
+          success: false,
+          errorCode: 'INVALID_FEES',
+          error: `INVALID_FEES: Custos inválidos para a perna '${leg.strategyLegId}'. Custos devem ser um número finito não negativo.`,
+        };
+      }
     }
 
     const maneuverEventId = generateId('strat_mnv');
@@ -2251,7 +2359,7 @@ export async function scaleDownOptionStrategyAction(
       const plan = planResult.plan;
 
       // 3. Validação de Stale Preview (P0)
-      if (params.previewFingerprint && params.previewFingerprint !== plan.previewFingerprint) {
+      if (params.previewFingerprint !== plan.previewFingerprint) {
         return {
           success: false,
           errorCode: 'STALE_MANEUVER_PREVIEW',

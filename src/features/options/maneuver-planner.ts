@@ -4,7 +4,7 @@ import {
   calculateStrategyCanonicalResidualRisk,
   type StrategyCanonicalResidualRisk,
 } from './calculations';
-import { isB3TradingDay, type BusinessDate } from './b3-calendar';
+import { isB3TradingDay, getBrazilTodayDate, type BusinessDate } from './b3-calendar';
 
 // ─── Proportional & GCD Helpers ─────────────────────────────────────
 export function gcd(a: number, b: number): number {
@@ -82,7 +82,9 @@ export interface ManeuverPlan {
   afterRisk: StrategyCanonicalResidualRisk;
   beforeBenchmarkCapitalReais: number;
   afterBenchmarkCapitalReais: number;
+  capitalDeltaReais: number | null;
   capitalReleasedReais: number | null;
+  additionalCapitalRequiredReais: number | null;
 
   strategyWillClose: boolean;
   fundingTransition:
@@ -130,8 +132,25 @@ export interface ManeuverHistoryDTO {
 }
 
 // ─── Fingerprint Criptográfico Determinístico ───────────────────────
+export function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [
+          key,
+          canonicalize((value as Record<string, unknown>)[key]),
+        ])
+    );
+  }
+  return value;
+}
+
 export function createManeuverFingerprint(payload: Record<string, any>): string {
-  const serialized = JSON.stringify(payload, Object.keys(payload).sort());
+  const serialized = JSON.stringify(canonicalize(payload));
   return crypto.createHash('sha256').update(serialized).digest('hex');
 }
 
@@ -205,7 +224,22 @@ export function buildScaleDownManeuverPlan(
     };
   }
 
-  if (!isB3TradingDay(executionDate as BusinessDate)) {
+  if (executionDate > getBrazilTodayDate()) {
+    return {
+      success: false,
+      errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+      error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+    };
+  }
+
+  let isTradingDay = false;
+  try {
+    isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+  } catch {
+    isTradingDay = false;
+  }
+
+  if (!isTradingDay) {
     return {
       success: false,
       errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY',
@@ -439,30 +473,64 @@ export function buildScaleDownManeuverPlan(
   const isBeforeComparable = beforeRisk.riskRecognitionQuality !== 'UNKNOWN' && beforeRisk.maxLossType !== 'UNBOUNDED';
   const isAfterComparable = afterRisk.riskRecognitionQuality !== 'UNKNOWN' && afterRisk.maxLossType !== 'UNBOUNDED';
 
+  const capitalDeltaReais = isBeforeComparable && isAfterComparable
+    ? Math.round((afterBenchmarkCapitalReais - beforeBenchmarkCapitalReais) * 100) / 100
+    : null;
+
   const capitalReleasedReais = isBeforeComparable && isAfterComparable
     ? Math.max(0, Math.round((beforeBenchmarkCapitalReais - afterBenchmarkCapitalReais) * 100) / 100)
     : null;
 
-  // 7. Fingerprint Determinístico
+  const additionalCapitalRequiredReais = isBeforeComparable && isAfterComparable
+    ? Math.max(0, Math.round((afterBenchmarkCapitalReais - beforeBenchmarkCapitalReais) * 100) / 100)
+    : null;
+
+  // 7. Fingerprint Determinístico (ordenado explicitamente por legId)
+  const sortedLegsState = openLegs
+    .map((l) => {
+      const pos = positionsMap.get(l.positionId);
+      return {
+        legId: l.id,
+        positionId: l.positionId,
+        economicRole: l.economicRole,
+        originalAllocatedQuantity: l.allocatedQuantity,
+        openAllocatedQuantity: curOpenByLegId.get(l.id)!,
+        positionOpenQuantity: pos?.openQuantity ?? pos?.quantity ?? 0,
+        entryPrice: pos?.entryPrice ?? 0,
+        strike: pos?.strike ?? 0,
+        side: pos?.side ?? 'UNKNOWN',
+        optionType: pos?.optionType ?? 'CALL',
+        expirationDate: pos?.expirationDate ?? '',
+      };
+    })
+    .sort((a, b) => a.legId.localeCompare(b.legId));
+
+  const sortedInputs = legInputs
+    .map((i) => ({
+      legId: i.strategyLegId,
+      price: i.price,
+      fees: i.feesReais || 0,
+    }))
+    .sort((a, b) => a.legId.localeCompare(b.legId));
+
   const fingerprintPayload = {
     strategyId: strategy.id,
+    collateralCoveragePct: (strategy as any).collateralCoveragePct ?? null,
     maneuverType: 'SCALE_DOWN',
     executionDate,
     percentageReduced,
     unitsReduced: unitsToReduce,
-    legsState: openLegs.map((l) => ({
-      legId: l.id,
-      openAllocated: curOpenByLegId.get(l.id)!,
-      positionId: l.positionId,
-      positionOpen: positionsMap.get(l.positionId)?.openQuantity,
-    })),
-    inputs: legInputs.map((i) => ({
-      legId: i.strategyLegId,
-      price: i.price,
-      fees: i.feesReais || 0,
-    })),
-    openSegmentId: openSegment?.id ?? null,
-    openSegmentCapital: openSegment?.benchmarkCapitalReais ?? null,
+    legsState: sortedLegsState,
+    inputs: sortedInputs,
+    openSegment: openSegment
+      ? {
+          id: openSegment.id,
+          benchmarkCapitalReais: openSegment.benchmarkCapitalReais,
+          capitalRemuneratedReais: openSegment.capitalRemuneratedReais,
+          collateralMode: openSegment.collateralMode,
+          collateralPctCdi: openSegment.collateralPctCdi,
+        }
+      : null,
   };
   const previewFingerprint = createManeuverFingerprint(fingerprintPayload);
 
@@ -489,7 +557,9 @@ export function buildScaleDownManeuverPlan(
       afterRisk,
       beforeBenchmarkCapitalReais,
       afterBenchmarkCapitalReais,
+      capitalDeltaReais,
       capitalReleasedReais,
+      additionalCapitalRequiredReais,
       strategyWillClose: false,
       fundingTransition: {
         type: 'CLOSE_AND_OPEN_NEW_SEGMENT',
@@ -554,7 +624,22 @@ export function buildPartialLegCloseManeuverPlan(
     };
   }
 
-  if (!isB3TradingDay(executionDate as BusinessDate)) {
+  if (executionDate > getBrazilTodayDate()) {
+    return {
+      success: false,
+      errorCode: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED',
+      error: 'FUTURE_EXECUTION_DATE_NOT_ALLOWED: A data de execução não pode estar no futuro.',
+    };
+  }
+
+  let isTradingDay = false;
+  try {
+    isTradingDay = isB3TradingDay(executionDate as BusinessDate);
+  } catch {
+    isTradingDay = false;
+  }
+
+  if (!isTradingDay) {
     return {
       success: false,
       errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY',
@@ -716,23 +801,57 @@ export function buildPartialLegCloseManeuverPlan(
   const isBeforeComparable = beforeRisk.riskRecognitionQuality !== 'UNKNOWN' && beforeRisk.maxLossType !== 'UNBOUNDED';
   const isAfterComparable = strategyWillClose || (afterRisk.riskRecognitionQuality !== 'UNKNOWN' && afterRisk.maxLossType !== 'UNBOUNDED');
 
+  const capitalDeltaReais = isBeforeComparable && isAfterComparable
+    ? Math.round((afterBenchmarkCapitalReais - beforeBenchmarkCapitalReais) * 100) / 100
+    : null;
+
   const capitalReleasedReais = isBeforeComparable && isAfterComparable
     ? Math.max(0, Math.round((beforeBenchmarkCapitalReais - afterBenchmarkCapitalReais) * 100) / 100)
     : null;
 
-  // Fingerprint determinístico
+  const additionalCapitalRequiredReais = isBeforeComparable && isAfterComparable
+    ? Math.max(0, Math.round((afterBenchmarkCapitalReais - beforeBenchmarkCapitalReais) * 100) / 100)
+    : null;
+
+  // 7. Fingerprint Determinístico (ordenado explicitamente por legId)
+  const sortedLegsState = allLegs
+    .map((l) => {
+      const p = positionsMap.get(l.positionId);
+      return {
+        legId: l.id,
+        positionId: l.positionId,
+        economicRole: l.economicRole,
+        originalAllocatedQuantity: l.allocatedQuantity,
+        openAllocatedQuantity: curOpenByLegId.get(l.id)!,
+        positionOpenQuantity: p?.openQuantity ?? p?.quantity ?? 0,
+        entryPrice: p?.entryPrice ?? 0,
+        strike: p?.strike ?? 0,
+        side: p?.side ?? 'UNKNOWN',
+        optionType: p?.optionType ?? 'CALL',
+        expirationDate: p?.expirationDate ?? '',
+      };
+    })
+    .sort((a, b) => a.legId.localeCompare(b.legId));
+
   const fingerprintPayload = {
     strategyId: strategy.id,
+    collateralCoveragePct: (strategy as any).collateralCoveragePct ?? null,
     maneuverType: 'LEG_CLOSE',
     executionDate,
     targetLegId: targetLeg.id,
     quantity,
     price,
     fees: feesReais,
-    legOpenBefore: legOpenQty,
-    positionOpenBefore: posOpenQty,
-    openSegmentId: openSegment?.id ?? null,
-    openSegmentCapital: openSegment?.benchmarkCapitalReais ?? null,
+    legsState: sortedLegsState,
+    openSegment: openSegment
+      ? {
+          id: openSegment.id,
+          benchmarkCapitalReais: openSegment.benchmarkCapitalReais,
+          capitalRemuneratedReais: openSegment.capitalRemuneratedReais,
+          collateralMode: openSegment.collateralMode,
+          collateralPctCdi: openSegment.collateralPctCdi,
+        }
+      : null,
   };
   const previewFingerprint = createManeuverFingerprint(fingerprintPayload);
 
@@ -757,7 +876,9 @@ export function buildPartialLegCloseManeuverPlan(
       afterRisk,
       beforeBenchmarkCapitalReais,
       afterBenchmarkCapitalReais,
+      capitalDeltaReais,
       capitalReleasedReais,
+      additionalCapitalRequiredReais,
       strategyWillClose,
       fundingTransition: strategyWillClose
         ? { type: 'CLOSE_FINAL_SEGMENT', executionDate }

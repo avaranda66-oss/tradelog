@@ -25,6 +25,7 @@ import {
 import { eq, inArray, and, isNull, asc } from 'drizzle-orm';
 import { calculateRealizedDiFactor } from './cdi-engine';
 import { calculateStrategyEconomicPerformance } from './calculations';
+import { canonicalize, createManeuverFingerprint } from './maneuver-planner';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -1110,6 +1111,7 @@ export async function runActionsSuiteTests() {
       quantity: -10,
       price: 1.0,
       executionDate: '2026-09-02',
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectInvalidQty.success === false, 'P0.8: Quantidade negativa rejeitada');
     assert(Boolean(rejectInvalidQty.error?.includes('INVALID_QUANTITY')), 'P0.8: Erro INVALID_QUANTITY retornado');
@@ -1120,6 +1122,7 @@ export async function runActionsSuiteTests() {
       quantity: 10,
       price: -0.5,
       executionDate: '2026-09-02',
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectInvalidPrice.success === false, 'P0.8: Preço negativo rejeitado');
     assert(Boolean(rejectInvalidPrice.error?.includes('INVALID_PRICE')), 'P0.8: Erro INVALID_PRICE retornado');
@@ -1129,7 +1132,8 @@ export async function runActionsSuiteTests() {
       strategyLegId: 'non_existent',
       quantity: 10,
       price: 1.0,
-      executionDate: '2026-09-05', // Sábado
+      executionDate: '2026-08-29', // Sábado passado
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectSaturdayAction.success === false, 'P0.8: Data em sábado rejeitada');
     assert(Boolean(rejectSaturdayAction.error?.includes('INVALID_EXECUTION_DATE_NON_TRADING_DAY')), 'P0.8: Erro INVALID_EXECUTION_DATE_NON_TRADING_DAY retornado');
@@ -1140,6 +1144,7 @@ export async function runActionsSuiteTests() {
       percentageReduced: 0,
       executionDate: '2026-09-02',
       legs: [],
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectZeroPct.success === false, 'P0.7: Redução de 0% rejeitada');
     assert(Boolean(rejectZeroPct.error?.includes('INVALID_SCALE_DOWN_PERCENTAGE')), 'P0.7: Erro INVALID_SCALE_DOWN_PERCENTAGE retornado para 0%');
@@ -1149,6 +1154,7 @@ export async function runActionsSuiteTests() {
       percentageReduced: 100,
       executionDate: '2026-09-02',
       legs: [],
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectHundredPct.success === false, 'P0.7: Redução de 100% rejeitada');
     assert(Boolean(rejectHundredPct.error?.includes('INVALID_SCALE_DOWN_PERCENTAGE')), 'P0.7: Erro INVALID_SCALE_DOWN_PERCENTAGE retornado para 100%');
@@ -1266,12 +1272,26 @@ export async function runActionsSuiteTests() {
         { strategyLegId: itubGoldenPutLegId, price: 0.20 },
         { strategyLegId: itubGoldenCallLegId, price: 0.60 },
       ],
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectUnrepresentablePct.success === false, 'P0.7: Porcentagem não representável em contratos inteiros rejeitada');
     assert(Boolean(rejectUnrepresentablePct.error?.includes('SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE')), 'P0.7: Erro SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE retornado');
 
     const posResBefore = await getOptionPositions();
     const realizedBefore = posResBefore.summary!.portfolioKnownGrossRealizedPnlReais;
+
+    // Preview obrigatório antes de execução real
+    const goldenPreview = await previewScaleDownStrategyAction({
+      strategyId: itubGoldenStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [
+        { strategyLegId: itubGoldenPutLegId, price: 0.20, feesReais: 0 },
+        { strategyLegId: itubGoldenCallLegId, price: 0.60, feesReais: 0 },
+      ],
+      notes: 'Redução de 50% da trava 2:1 ITUB4',
+    });
+    assert(goldenPreview.success === true, 'P0 Golden Case: Preview executado com sucesso');
 
     const scaleDownRes = await scaleDownOptionStrategyAction({
       strategyId: itubGoldenStratId,
@@ -1282,10 +1302,12 @@ export async function runActionsSuiteTests() {
         { strategyLegId: itubGoldenCallLegId, price: 0.60, feesReais: 0 },
       ],
       notes: 'Redução de 50% da trava 2:1 ITUB4',
+      previewFingerprint: (goldenPreview as any).plan.previewFingerprint,
     });
 
     assert(scaleDownRes.success === true, 'P0 Golden Case: scaleDownOptionStrategyAction executado com sucesso');
     assert(Boolean(scaleDownRes.maneuverEventId), 'P0 Golden Case: maneuverEventId retornado');
+
 
     const mnvEvent = db.query.strategyManeuverEvents.findFirst({
       where: eq(strategyManeuverEvents.id, scaleDownRes.maneuverEventId!),
@@ -1480,6 +1502,16 @@ export async function runActionsSuiteTests() {
     // Gross = (2.00 - 0.32) * 50 = +R$ 84,00
     // Fees = R$ 2,00
     // Net = R$ 82,00
+    const feePreview = await previewPartialCloseStrategyLegAction({
+      strategyId: feeStratId,
+      strategyLegId: feeLegId,
+      quantity: 50,
+      price: 0.32,
+      feesReais: 2.00,
+      executionDate: '2026-09-02',
+    });
+    assert(feePreview.success === true, 'P0 Fees Test: Preview executado com sucesso');
+
     const feeCloseRes = await partialCloseStrategyLegAction({
       strategyId: feeStratId,
       strategyLegId: feeLegId,
@@ -1487,6 +1519,7 @@ export async function runActionsSuiteTests() {
       price: 0.32,
       feesReais: 2.00,
       executionDate: '2026-09-02',
+      previewFingerprint: (feePreview as any).plan.previewFingerprint,
     });
     assert(feeCloseRes.success === true, 'P0 Fees Test: partialCloseStrategyLegAction com taxa executado com sucesso');
 
@@ -1572,11 +1605,20 @@ export async function runActionsSuiteTests() {
     }).run();
 
     // Scale down de 50% na estratégia 100% CDI:
+    const remunPreview = await previewScaleDownStrategyAction({
+      strategyId: remunStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [{ strategyLegId: remunLegId, price: 0.10, feesReais: 0 }],
+    });
+    assert(remunPreview.success === true, 'P0 Remun Test: Preview executado com sucesso');
+
     const remunScaleDown = await scaleDownOptionStrategyAction({
       strategyId: remunStratId,
       percentageReduced: 50,
       executionDate: '2026-09-02',
       legs: [{ strategyLegId: remunLegId, price: 0.10, feesReais: 0 }],
+      previewFingerprint: (remunPreview as any).plan.previewFingerprint,
     });
     assert(remunScaleDown.success === true, 'P0 Remun Test: scaleDownOptionStrategyAction 50% com sucesso');
 
@@ -1692,12 +1734,22 @@ export async function runActionsSuiteTests() {
     }).run();
 
     // Fecha a perna compradora (hedge), deixando a short call descoberta
+    const unbPreview = await previewPartialCloseStrategyLegAction({
+      strategyId: unbStratId,
+      strategyLegId: unbLongLegId,
+      quantity: 100,
+      price: 0.50,
+      executionDate: '2026-09-02',
+    });
+    assert(unbPreview.success === true, 'P0 Unbounded Test: Preview executado com sucesso');
+
     const unbCloseRes = await partialCloseStrategyLegAction({
       strategyId: unbStratId,
       strategyLegId: unbLongLegId,
       quantity: 100,
       price: 0.50,
       executionDate: '2026-09-02',
+      previewFingerprint: (unbPreview as any).plan.previewFingerprint,
     });
     assert(unbCloseRes.success === true, 'P0 Unbounded Test: Fechamento da trava compradora aceito');
 
@@ -1718,12 +1770,22 @@ export async function runActionsSuiteTests() {
     assert(unbPosCheck.summary!.portfolioExcludedFromBenchmarkCount >= 1, 'P0.2 Unbounded Test: portfolioExcludedFromBenchmarkCount incrementado');
 
     // 8.7. Múltiplos Parciais Consecutivos (Provas de Invariantes em CADA Passo)
+    const partPreview1 = await previewPartialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 50,
+      price: 0.15,
+      executionDate: '2026-09-02',
+    });
+    assert(partPreview1.success === true, 'P0 Multi-Partial: Preview 1 executado com sucesso');
+
     const partClose1 = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
       strategyLegId: itubGoldenPutLegId,
       quantity: 50,
       price: 0.15,
       executionDate: '2026-09-02',
+      previewFingerprint: (partPreview1 as any).plan.previewFingerprint,
     });
     assert(partClose1.success === true, 'P0 Multi-Partial: Redução 1 de 50 contratos aceita');
     const legAfterPart1 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
@@ -1736,12 +1798,22 @@ export async function runActionsSuiteTests() {
     assert(legAfterPart1.openAllocatedQuantity === 150, 'P0 Multi-Partial Step 1: leg openAllocatedQuantity === 150');
     assert(legAfterPart1.closedAllocatedQuantity === 250, 'P0 Multi-Partial Step 1: leg closedAllocatedQuantity === 250 (200 + 50)');
 
+    const partPreview2 = await previewPartialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 50,
+      price: 0.10,
+      executionDate: '2026-09-02',
+    });
+    assert(partPreview2.success === true, 'P0 Multi-Partial: Preview 2 executado com sucesso');
+
     const partClose2 = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
       strategyLegId: itubGoldenPutLegId,
       quantity: 50,
       price: 0.10,
       executionDate: '2026-09-02',
+      previewFingerprint: (partPreview2 as any).plan.previewFingerprint,
     });
     assert(partClose2.success === true, 'P0 Multi-Partial: Redução 2 de 50 contratos aceita');
     const legAfterPart2 = db.query.optionStrategyLegs.findFirst({ where: eq(optionStrategyLegs.id, itubGoldenPutLegId) }).sync()!;
@@ -1760,6 +1832,7 @@ export async function runActionsSuiteTests() {
       quantity: 150,
       price: 0.10,
       executionDate: '2026-09-02',
+      previewFingerprint: 'dummy_boundary_test',
     });
     assert(rejectOverdraw.success === false, 'P0 Multi-Partial: Tentativa de redução acima do saldo (150 > 100) rejeitada');
     assert(Boolean(rejectOverdraw.error?.includes('INSUFFICIENT_LEG_OPEN_QUANTITY')), 'P0 Multi-Partial: Erro INSUFFICIENT_LEG_OPEN_QUANTITY retornado');
@@ -1818,14 +1891,33 @@ export async function runActionsSuiteTests() {
     const realizedBeforeTerminal = summaryBeforeTerminal.portfolioKnownGrossRealizedPnlReais;
     const optionPnlBeforeTerminal = summaryBeforeTerminal.portfolioOptionPnlReais;
 
-    const termCloseCall = await partialCloseStrategyLegAction({
+    const termPreviewCall = await previewPartialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
       strategyLegId: itubGoldenCallLegId,
       quantity: 100,
       price: 0.80,
       executionDate: '2026-09-02',
     });
+    assert(termPreviewCall.success === true, 'P0.3 Terminal Close: Preview CALL executado com sucesso');
+
+    const termCloseCall = await partialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenCallLegId,
+      quantity: 100,
+      price: 0.80,
+      executionDate: '2026-09-02',
+      previewFingerprint: (termPreviewCall as any).plan.previewFingerprint,
+    });
     assert(termCloseCall.success === true, 'P0.3 Terminal Close: CALL fechada totalmente');
+
+    const termPreviewPut = await previewPartialCloseStrategyLegAction({
+      strategyId: itubGoldenStratId,
+      strategyLegId: itubGoldenPutLegId,
+      quantity: 100,
+      price: 0.05,
+      executionDate: '2026-09-02',
+    });
+    assert(termPreviewPut.success === true, 'P0.3 Terminal Close: Preview PUT executado com sucesso');
 
     const termClosePut = await partialCloseStrategyLegAction({
       strategyId: itubGoldenStratId,
@@ -1833,6 +1925,7 @@ export async function runActionsSuiteTests() {
       quantity: 100,
       price: 0.05,
       executionDate: '2026-09-02',
+      previewFingerprint: (termPreviewPut as any).plan.previewFingerprint,
     });
     assert(termClosePut.success === true, 'P0.3 Terminal Close: PUT fechada totalmente');
 
@@ -3000,6 +3093,188 @@ export async function runActionsSuiteTests() {
     assert(historyRes.success === true, 'P4.3 Histórico: getStrategyManeuverHistoryAction executado com sucesso');
     assert(historyRes.history!.length === 1, 'P4.3 Histórico: Exatamente 1 evento de manejo listado');
     assert(historyRes.history![0].executions[0].ticker.startsWith('ITUB'), 'P4.3 Histórico: Ticker resolvido corretamente');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.8 MANEUVER_PREVIEW_REQUIRED — Rejeição de execução sem fingerprint
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.8 MANEUVER_PREVIEW_REQUIRED Tests:');
+
+    const noFpRes = await scaleDownOptionStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 25,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.50, feesReais: 0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.10, feesReais: 0 },
+      ],
+      previewFingerprint: '',
+    });
+    assert(noFpRes.success === false, 'P4.3 MANEUVER_PREVIEW_REQUIRED: Fingerprint vazio rejeitado');
+    assert(noFpRes.errorCode === 'MANEUVER_PREVIEW_REQUIRED', 'P4.3 MANEUVER_PREVIEW_REQUIRED: errorCode correto');
+
+    const noFpPartialRes = await partialCloseStrategyLegAction({
+      strategyId: createdMnvStratId,
+      strategyLegId: mnvCallLeg.id,
+      quantity: 10,
+      price: 0.50,
+      executionDate: '2026-08-25',
+      previewFingerprint: '',
+    });
+    assert(noFpPartialRes.success === false, 'P4.3 MANEUVER_PREVIEW_REQUIRED: Partial close sem fingerprint rejeitado');
+    assert(noFpPartialRes.errorCode === 'MANEUVER_PREVIEW_REQUIRED', 'P4.3 MANEUVER_PREVIEW_REQUIRED: errorCode correto para partial');
+
+    // Verificar zero writes após rejeição
+    const eventsAfterReject = db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, createdMnvStratId),
+    }).sync();
+    assert(eventsAfterReject.length === 1, 'P4.3 MANEUVER_PREVIEW_REQUIRED: Zero writes — apenas o evento 9.4 existe');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.9 FUTURE_EXECUTION_DATE_NOT_ALLOWED
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.9 FUTURE_EXECUTION_DATE_NOT_ALLOWED Tests:');
+
+    const futurePreviewRes = await previewScaleDownStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 25,
+      executionDate: '2099-12-31',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.50, feesReais: 0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.10, feesReais: 0 },
+      ],
+    });
+    assert(futurePreviewRes.success === false, 'P4.3 Future Date: Preview com data futura rejeitado');
+    assert((futurePreviewRes as any).errorCode === 'FUTURE_EXECUTION_DATE_NOT_ALLOWED', 'P4.3 Future Date: errorCode correto no preview');
+
+    const futureExecRes = await scaleDownOptionStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 25,
+      executionDate: '2099-12-31',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.50, feesReais: 0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.10, feesReais: 0 },
+      ],
+      previewFingerprint: 'doesnt_matter',
+    });
+    assert(futureExecRes.success === false, 'P4.3 Future Date: Execução com data futura rejeitada');
+    assert(futureExecRes.errorCode === 'FUTURE_EXECUTION_DATE_NOT_ALLOWED', 'P4.3 Future Date: errorCode correto na execução');
+
+    const futurePartialPreviewRes = await previewPartialCloseStrategyLegAction({
+      strategyId: createdMnvStratId,
+      strategyLegId: mnvCallLeg.id,
+      quantity: 10,
+      price: 0.50,
+      executionDate: '2099-12-31',
+    });
+    assert(futurePartialPreviewRes.success === false, 'P4.3 Future Date: Partial preview com data futura rejeitado');
+    assert((futurePartialPreviewRes as any).errorCode === 'FUTURE_EXECUTION_DATE_NOT_ALLOWED', 'P4.3 Future Date: errorCode correto no partial preview');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.10 Fingerprint Determinístico — Mesma Carga em Ordem Diferente
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.10 Fingerprint Determinism Tests:');
+
+    const payloadA = {
+      strategyId: 'test',
+      legsState: [
+        { legId: 'leg_a', openAllocated: 100 },
+        { legId: 'leg_b', openAllocated: 200 },
+      ].sort((a, b) => a.legId.localeCompare(b.legId)),
+      inputs: [
+        { legId: 'leg_a', price: 1.0 },
+        { legId: 'leg_b', price: 2.0 },
+      ].sort((a, b) => a.legId.localeCompare(b.legId)),
+    };
+
+    // Mesma carga lógica mas com inputs e legs em ordem inversa
+    const payloadB = {
+      strategyId: 'test',
+      legsState: [
+        { legId: 'leg_b', openAllocated: 200 },
+        { legId: 'leg_a', openAllocated: 100 },
+      ].sort((a, b) => a.legId.localeCompare(b.legId)),
+      inputs: [
+        { legId: 'leg_b', price: 2.0 },
+        { legId: 'leg_a', price: 1.0 },
+      ].sort((a, b) => a.legId.localeCompare(b.legId)),
+    };
+
+    const fpA = createManeuverFingerprint(payloadA);
+    const fpB = createManeuverFingerprint(payloadB);
+    assert(fpA === fpB, 'P4.3 Fingerprint Determinism: Mesma carga em ordem diferente (após sort por legId) → fingerprint IGUAL');
+    assert(fpA.length === 64, 'P4.3 Fingerprint Determinism: SHA-256 com 64 hex chars');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.11 Fingerprint Sensibilidade a collateralCoveragePct
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.11 Fingerprint Sensitivity Tests:');
+
+    const payloadWithCoverage90 = { ...payloadA, collateralCoveragePct: 90 };
+    const payloadWithCoverage100 = { ...payloadA, collateralCoveragePct: 100 };
+    const fpCov90 = createManeuverFingerprint(payloadWithCoverage90);
+    const fpCov100 = createManeuverFingerprint(payloadWithCoverage100);
+    assert(fpCov90 !== fpCov100, 'P4.3 Fingerprint Sensitivity: collateralCoveragePct muda → fingerprint DIFERENTE');
+
+    // Sensibilidade a preço
+    const payloadPriceChange = {
+      ...payloadA,
+      inputs: [
+        { legId: 'leg_a', price: 1.01 },
+        { legId: 'leg_b', price: 2.0 },
+      ].sort((a, b) => a.legId.localeCompare(b.legId)),
+    };
+    const fpPriceChange = createManeuverFingerprint(payloadPriceChange);
+    assert(fpPriceChange !== fpA, 'P4.3 Fingerprint Sensitivity: Preço muda → fingerprint DIFERENTE');
+
+    // Sensibilidade a funding segment
+    const payloadWithFunding = { ...payloadA, openSegment: { benchmarkCapital: 10000, collateralMode: 'IDLE_CASH' } };
+    const payloadWithFundingDiff = { ...payloadA, openSegment: { benchmarkCapital: 15000, collateralMode: 'IDLE_CASH' } };
+    const fpFund1 = createManeuverFingerprint(payloadWithFunding);
+    const fpFund2 = createManeuverFingerprint(payloadWithFundingDiff);
+    assert(fpFund1 !== fpFund2, 'P4.3 Fingerprint Sensitivity: Funding segment muda → fingerprint DIFERENTE');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.12 Canonicalize Unit Tests
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.12 Canonicalize Unit Tests:');
+
+    // Arrays preservam ordem
+    const arr = canonicalize([3, 1, 2]);
+    assert(JSON.stringify(arr) === '[3,1,2]', 'P4.3 Canonicalize: Arrays preservam ordem (não ordenam)');
+
+    // Objects ordenam chaves
+    const obj = canonicalize({ z: 1, a: 2, m: 3 });
+    assert(JSON.stringify(obj) === '{"a":2,"m":3,"z":1}', 'P4.3 Canonicalize: Objects ordenam chaves recursivamente');
+
+    // Nested objects
+    const nested = canonicalize({ b: { z: 1, a: 2 }, a: { y: 3, x: 4 } });
+    assert(JSON.stringify(nested) === '{"a":{"x":4,"y":3},"b":{"a":2,"z":1}}', 'P4.3 Canonicalize: Nested objects ordenam chaves em profundidade');
+
+    // Primitives mantidos
+    assert(canonicalize(42) === 42, 'P4.3 Canonicalize: Primitivo number preservado');
+    assert(canonicalize('abc') === 'abc', 'P4.3 Canonicalize: Primitivo string preservado');
+    assert(canonicalize(null) === null, 'P4.3 Canonicalize: null preservado');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.13 Reconciliação Pós-Parcial Golden ITUB — Leg P&L Quality
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.13 Post-Partial Leg P&L Quality Reconciliation:');
+
+    const postPartialPositions = await getOptionPositions();
+    const mnvStratEnriched = postPartialPositions.strategies!.find((s) => s.id === createdMnvStratId)!;
+    assert(mnvStratEnriched !== undefined, 'P4.3 Leg P&L: Strategy encontrada após manejo parcial');
+
+    for (const leg of mnvStratEnriched.legs) {
+      assert(
+        leg.legRealizedPnlQuality === 'FULL' || leg.legRealizedPnlQuality === 'NOT_AVAILABLE',
+        `P4.3 Leg P&L: legRealizedPnlQuality é FULL ou NOT_AVAILABLE (obtido: ${leg.legRealizedPnlQuality}) para ${leg.position.tickerOption}`
+      );
+      if (leg.legRealizedPnlQuality === 'FULL') {
+        assert(typeof leg.legKnownRealizedPnlReais === 'number', 'P4.3 Leg P&L: legKnownRealizedPnlReais é number quando FULL');
+        assert(typeof leg.legUnrealizedPnlReais === 'number', 'P4.3 Leg P&L: legUnrealizedPnlReais é number quando FULL');
+        assert(typeof leg.legTotalPnlReais === 'number', 'P4.3 Leg P&L: legTotalPnlReais é number quando FULL');
+      }
+    }
 
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)

@@ -40,7 +40,7 @@ export function OptionsDashboardView({
   const [fundingStrategy, setFundingStrategy] = useState<EnrichedOptionStrategy | null>(null);
   const [manageStrategyState, setManageStrategyState] = useState<{
     strategy: EnrichedOptionStrategy;
-    initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE';
+    initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE' | 'HISTORY';
     initialLegId?: string;
   } | null>(null);
 

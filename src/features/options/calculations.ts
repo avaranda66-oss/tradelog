@@ -1425,6 +1425,10 @@ export interface EnrichedStrategyLeg {
   legacyClosedAllocatedQuantity: number;
   economicRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM';
   position: EnrichedOptionPosition;
+  legRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
+  legKnownRealizedPnlReais: number;
+  legUnrealizedPnlReais: number;
+  legTotalPnlReais: number | null;
 }
 
 // ─── 11. STRATEGY RISK & PAYOFF RECOGNIZER ───
@@ -1880,6 +1884,10 @@ export function enrichOptionStrategy(params: {
       legacyClosedAllocatedQuantity: legacyClosed,
       economicRole: leg.economicRole,
       position: leg.position,
+      legRealizedPnlQuality: 'FULL',
+      legKnownRealizedPnlReais: 0,
+      legUnrealizedPnlReais: 0,
+      legTotalPnlReais: 0,
     };
   });
 
@@ -1904,9 +1912,9 @@ export function enrichOptionStrategy(params: {
       residualInitialCreditDebitReais -= pos.entryPrice * openQty;
     }
 
-    const legExecutionQty = (params.executions || [])
-      .filter((e) => e.strategyLegId === leg.id)
-      .reduce((s, e) => s + (e.quantity || 0), 0);
+    const legExecs = (params.executions || []).filter((e) => e.strategyLegId === leg.id);
+    const legExecutionQty = legExecs.reduce((s, e) => s + (e.quantity || 0), 0);
+    const legKnownRealizedPnlReais = Math.round(legExecs.reduce((acc, x) => acc + x.netRealizedPnlReais, 0) * 100) / 100;
 
     const expectedLegExecutionQty =
       leg.closedAllocatedQuantity - leg.legacyClosedAllocatedQuantity;
@@ -1916,11 +1924,12 @@ export function enrichOptionStrategy(params: {
       (pos as any).legacyQuality === 'LEGACY_INCOMPLETE' ||
       pos.metrics.realizedPnlQuality === 'LEGACY_INCOMPLETE';
 
-    if (pos.metrics.realizedPnlQuality === 'NOT_AVAILABLE') {
-      hasStrategyNotAvailable = true;
-    } else if (expectedLegExecutionQty !== legExecutionQty) {
+    let legRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE' = 'FULL';
+    if (pos.metrics.realizedPnlQuality === 'NOT_AVAILABLE' || expectedLegExecutionQty !== legExecutionQty) {
+      legRealizedPnlQuality = 'NOT_AVAILABLE';
       hasStrategyNotAvailable = true;
     } else if (isLegLegacy) {
+      legRealizedPnlQuality = 'LEGACY_INCOMPLETE';
       hasStrategyLegacyIncomplete = true;
     }
 
@@ -1931,7 +1940,17 @@ export function enrichOptionStrategy(params: {
       quantityUnderlyingUnits: openQty,
       side: isLong ? 'LONG' : 'SHORT',
     });
+    const legUnrealizedPnlReais = Math.round(pnlMtmLeg * 100) / 100;
     strategyUnrealizedPnlReais += pnlMtmLeg;
+
+    const legTotalPnlReais = legRealizedPnlQuality === 'FULL'
+      ? Math.round((legKnownRealizedPnlReais + legUnrealizedPnlReais) * 100) / 100
+      : null;
+
+    leg.legRealizedPnlQuality = legRealizedPnlQuality;
+    leg.legKnownRealizedPnlReais = legKnownRealizedPnlReais;
+    leg.legUnrealizedPnlReais = legUnrealizedPnlReais;
+    leg.legTotalPnlReais = legTotalPnlReais;
 
     const pnlExitLeg = calculateSignedPnL({
       entryPrice: pos.entryPrice,

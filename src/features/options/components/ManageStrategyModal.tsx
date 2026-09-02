@@ -17,7 +17,7 @@ import { StrategyManeuverHistorySection } from './StrategyManeuverHistorySection
 interface ManageStrategyModalProps {
   strategy: EnrichedOptionStrategy | null;
   isOpen: boolean;
-  initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE';
+  initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE' | 'HISTORY';
   initialLegId?: string;
   onClose: () => void;
   onSuccess: () => void;
@@ -55,7 +55,10 @@ export function ManageStrategyModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [staleAlert, setStaleAlert] = useState<boolean>(false);
 
-  // Estado de Recibo Pós-Execução
+  // Estado de Recibo Pós-Execução e Falha de Recibo (COMMITTED)
+  const [committedManeuverId, setCommittedManeuverId] = useState<string | null>(null);
+  const [receiptLoadError, setReceiptLoadError] = useState<string | null>(null);
+  const [isRetryingReceipt, setIsRetryingReceipt] = useState<boolean>(false);
   const [receipt, setReceipt] = useState<ManeuverHistoryDTO | null>(null);
   const [refreshHistoryTrigger, setRefreshHistoryTrigger] = useState<number>(0);
 
@@ -68,6 +71,9 @@ export function ManageStrategyModal({
       setPreview(null);
       setErrorMessage(null);
       setStaleAlert(false);
+      setCommittedManeuverId(null);
+      setReceiptLoadError(null);
+      setIsRetryingReceipt(false);
       setReceipt(null);
 
       // Preencher preços sugeridos para SCALE_DOWN
@@ -175,6 +181,12 @@ export function ManageStrategyModal({
     setStaleAlert(false);
 
     try {
+      if (executionDate > getBrazilTodayDate()) {
+        setErrorMessage('A data de execução não pode estar no futuro.');
+        setIsLoadingPreview(false);
+        return;
+      }
+
       if (activeTab === 'SCALE_DOWN') {
         const pct = parseFloat(scaleDownPct.replace(',', '.'));
         if (isNaN(pct) || pct <= 0 || pct >= 100) {
@@ -183,16 +195,38 @@ export function ManageStrategyModal({
           return;
         }
 
-        const legInputs = openLegs.map((l) => {
-          const input = scaleDownLegPrices[l.id] || { price: '0', fees: '0' };
-          const p = parseFloat((input.price || '0').replace(',', '.'));
-          const f = parseFloat((input.fees || '0').replace(',', '.'));
-          return {
+        const legInputs = [];
+        for (const l of openLegs) {
+          const input = scaleDownLegPrices[l.id];
+          const rawPrice = input?.price?.trim() ?? '';
+          if (rawPrice === '') {
+            setErrorMessage(`Informe o preço de saída para a perna ${l.position.tickerOption}.`);
+            setIsLoadingPreview(false);
+            return;
+          }
+          const p = parseFloat(rawPrice.replace(',', '.'));
+          if (isNaN(p) || p < 0) {
+            setErrorMessage(`Preço inválido para a perna ${l.position.tickerOption}. O preço deve ser finito e não negativo (R$ 0,00 ou maior).`);
+            setIsLoadingPreview(false);
+            return;
+          }
+
+          const rawFees = input?.fees?.trim() ?? '';
+          let f = 0;
+          if (rawFees !== '') {
+            f = parseFloat(rawFees.replace(',', '.'));
+            if (isNaN(f) || f < 0) {
+              setErrorMessage(`Custos inválidos para a perna ${l.position.tickerOption}.`);
+              setIsLoadingPreview(false);
+              return;
+            }
+          }
+          legInputs.push({
             strategyLegId: l.id,
-            price: isNaN(p) ? 0 : p,
-            feesReais: isNaN(f) ? 0 : f,
-          };
-        });
+            price: p,
+            feesReais: f,
+          });
+        }
 
         const res = await previewScaleDownStrategyAction({
           strategyId: strategy.id,
@@ -215,15 +249,30 @@ export function ManageStrategyModal({
           return;
         }
 
-        const p = parseFloat(legClosePrice.replace(',', '.'));
+        const rawPrice = legClosePrice.trim();
+        if (rawPrice === '') {
+          setErrorMessage('Informe o preço de saída (R$ 0,00 ou maior).');
+          setIsLoadingPreview(false);
+          return;
+        }
+        const p = parseFloat(rawPrice.replace(',', '.'));
         if (isNaN(p) || p < 0) {
-          setErrorMessage('Informe um preço de saída válido.');
+          setErrorMessage('Informe um preço de saída válido (R$ 0,00 ou maior).');
           setIsLoadingPreview(false);
           return;
         }
 
-        const f = parseFloat(legCloseFees.replace(',', '.'));
-        const fees = isNaN(f) ? 0 : f;
+        const rawFees = legCloseFees.trim();
+        let fees = 0;
+        if (rawFees !== '') {
+          const f = parseFloat(rawFees.replace(',', '.'));
+          if (isNaN(f) || f < 0) {
+            setErrorMessage('Custos devem ser um número finito não negativo.');
+            setIsLoadingPreview(false);
+            return;
+          }
+          fees = f;
+        }
 
         const res = await previewPartialCloseStrategyLegAction({
           strategyId: strategy.id,
@@ -275,12 +324,16 @@ export function ManageStrategyModal({
         });
 
         if (res.success && res.maneuverEventId) {
-          // Buscar recibo factual do evento
+          setCommittedManeuverId(res.maneuverEventId);
+          setPreview(null);
+          setRefreshHistoryTrigger((prev) => prev + 1);
+
           const receiptRes = await getStrategyManeuverReceiptAction(res.maneuverEventId);
           if (receiptRes.success && receiptRes.receipt) {
             setReceipt(receiptRes.receipt);
+          } else {
+            setReceiptLoadError('Manejo executado e persistido no banco! Não foi possível carregar o recibo detalhado de imediato.');
           }
-          setRefreshHistoryTrigger((prev) => prev + 1);
         } else {
           if (res.errorCode === 'STALE_MANEUVER_PREVIEW') {
             setStaleAlert(true);
@@ -303,11 +356,16 @@ export function ManageStrategyModal({
         });
 
         if (res.success && res.maneuverEventId) {
+          setCommittedManeuverId(res.maneuverEventId);
+          setPreview(null);
+          setRefreshHistoryTrigger((prev) => prev + 1);
+
           const receiptRes = await getStrategyManeuverReceiptAction(res.maneuverEventId);
           if (receiptRes.success && receiptRes.receipt) {
             setReceipt(receiptRes.receipt);
+          } else {
+            setReceiptLoadError('Manejo executado e persistido no banco! Não foi possível carregar o recibo detalhado de imediato.');
           }
-          setRefreshHistoryTrigger((prev) => prev + 1);
         } else {
           if (res.errorCode === 'STALE_MANEUVER_PREVIEW') {
             setStaleAlert(true);
@@ -321,6 +379,24 @@ export function ManageStrategyModal({
       setErrorMessage(err.message || 'Erro inesperado na execução do manejo.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleRetryReceipt = async () => {
+    if (!committedManeuverId) return;
+    setIsRetryingReceipt(true);
+    setReceiptLoadError(null);
+    try {
+      const receiptRes = await getStrategyManeuverReceiptAction(committedManeuverId);
+      if (receiptRes.success && receiptRes.receipt) {
+        setReceipt(receiptRes.receipt);
+      } else {
+        setReceiptLoadError('Falha ao obter recibo. Clique novamente para tentar.');
+      }
+    } catch (err: any) {
+      setReceiptLoadError(err.message || 'Erro ao carregar recibo.');
+    } finally {
+      setIsRetryingReceipt(false);
     }
   };
 
@@ -601,6 +677,7 @@ export function ManageStrategyModal({
                     type="date"
                     value={executionDate}
                     onChange={handleDateChange}
+                    max={getBrazilTodayDate()}
                     className="w-full px-3 py-1.5 rounded-lg bg-[#050811] border border-slate-700 text-slate-100 font-mono text-xs focus:border-amber-400 focus:outline-none"
                   />
                 </div>
@@ -727,6 +804,7 @@ export function ManageStrategyModal({
                     type="date"
                     value={executionDate}
                     onChange={handleDateChange}
+                    max={getBrazilTodayDate()}
                     className="w-full px-3 py-2 rounded-lg bg-[#050811] border border-slate-700 text-slate-100 font-mono text-xs focus:border-sky-400 focus:outline-none"
                   />
                 </div>
@@ -918,6 +996,98 @@ export function ManageStrategyModal({
                 </div>
               </div>
 
+              {/* Painel de Risco Canônico (Antes ➔ Depois) */}
+              <div className="space-y-2">
+                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">
+                  Risco &amp; Payoff Canônico (Antes ➔ Depois)
+                </span>
+                {(preview.afterRisk.maxLossType === 'UNBOUNDED' || preview.afterRisk.maxLossType === 'UNKNOWN') && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border-2 border-rose-500/50 text-rose-300 flex items-center gap-2 text-xs">
+                    <span className="text-lg">🚨</span>
+                    <span>
+                      <strong>ATENÇÃO:</strong> A estrutura residual após o manejo possui risco{' '}
+                      <strong>{preview.afterRisk.maxLossType}</strong>.
+                      {preview.afterRisk.maxLossType === 'UNBOUNDED'
+                        ? ' A perda máxima potencial é ilimitada. Certifique-se de que esta é realmente a sua intenção operacional.'
+                        : ' O perfil de risco não pode ser determinado para esta combinação. Prossiga com extrema cautela.'}
+                    </span>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Card Antes */}
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1">
+                    <span className="text-[9px] uppercase text-slate-500 font-bold block">Antes do Manejo</span>
+                    <div className="text-xs font-mono text-slate-300 space-y-0.5">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Classificação</span>
+                        <span className={`font-bold ${preview.beforeRisk.maxLossType === 'FINITE' ? 'text-emerald-400' : preview.beforeRisk.maxLossType === 'UNBOUNDED' ? 'text-rose-400' : 'text-amber-400'}`}>
+                          {preview.beforeRisk.maxLossType}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Max Loss Econ.</span>
+                        <span className="font-bold">
+                          {preview.beforeRisk.maxLossEconomicReais !== null
+                            ? `R$ ${preview.beforeRisk.maxLossEconomicReais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                            : '∞'}
+                        </span>
+                      </div>
+                      {preview.beforeRisk.riskProfile.breakEvenInferior !== null && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Break-Even Inf.</span>
+                          <span>R$ {preview.beforeRisk.riskProfile.breakEvenInferior.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {preview.beforeRisk.riskProfile.breakEvenSuperior !== null && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Break-Even Sup.</span>
+                          <span>R$ {preview.beforeRisk.riskProfile.breakEvenSuperior.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card Depois */}
+                  <div className={`p-3 rounded-xl border space-y-1 ${
+                    preview.afterRisk.maxLossType === 'UNBOUNDED'
+                      ? 'bg-rose-500/5 border-rose-500/40'
+                      : preview.afterRisk.maxLossType === 'UNKNOWN'
+                        ? 'bg-amber-500/5 border-amber-500/40'
+                        : 'bg-emerald-500/5 border-emerald-500/30'
+                  }`}>
+                    <span className="text-[9px] uppercase text-slate-500 font-bold block">Após o Manejo</span>
+                    <div className="text-xs font-mono text-slate-300 space-y-0.5">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Classificação</span>
+                        <span className={`font-bold ${preview.afterRisk.maxLossType === 'FINITE' ? 'text-emerald-400' : preview.afterRisk.maxLossType === 'UNBOUNDED' ? 'text-rose-400' : 'text-amber-400'}`}>
+                          {preview.afterRisk.maxLossType}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Max Loss Econ.</span>
+                        <span className="font-bold">
+                          {preview.afterRisk.maxLossEconomicReais !== null
+                            ? `R$ ${preview.afterRisk.maxLossEconomicReais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                            : '∞'}
+                        </span>
+                      </div>
+                      {preview.afterRisk.riskProfile.breakEvenInferior !== null && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Break-Even Inf.</span>
+                          <span>R$ {preview.afterRisk.riskProfile.breakEvenInferior.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {preview.afterRisk.riskProfile.breakEvenSuperior !== null && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Break-Even Sup.</span>
+                          <span>R$ {preview.afterRisk.riskProfile.breakEvenSuperior.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Tabela de Execuções Projetadas */}
               <div className="space-y-1.5">
                 <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">
@@ -968,19 +1138,57 @@ export function ManageStrategyModal({
               </div>
             </div>
           )}
+
+          {/* ─── ESTADO COMMITTED (Pós-Execução com Recibo Pendente) ─── */}
+          {committedManeuverId && !preview && activeTab !== 'HISTORY' && (
+            <div className="p-4 rounded-2xl bg-gradient-to-b from-[#161f14] to-[#070d18] border border-emerald-500/50 shadow-xl space-y-4 animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center gap-2 border-b border-emerald-500/30 pb-2.5">
+                <span className="text-emerald-400 font-bold text-sm">✅ Manejo Persistido no Banco</span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
+                  COMMITTED
+                </span>
+              </div>
+              <p className="text-xs text-slate-300">
+                A operação foi confirmada e gravada atomicamente com sucesso no banco de dados.
+              </p>
+              {receiptLoadError && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>{receiptLoadError}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleRetryReceipt}
+                  disabled={isRetryingReceipt}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-xs border border-amber-500/30 flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isRetryingReceipt ? (
+                    <><span className="animate-spin">🔄</span><span>Carregando...</span></>
+                  ) : (
+                    <><span>🔄</span><span>Carregar Recibo Detalhado</span></>
+                  )}
+                </button>
+                <span className="text-[10px] text-slate-500 font-mono">
+                  Event ID: {committedManeuverId}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer com Botões de Ação */}
         <div className="p-4 bg-[#0c1322] border-t border-slate-800 flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={committedManeuverId ? handleFinishAndClose : onClose}
             className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition-colors"
           >
-            Fechar
+            {committedManeuverId ? 'Fechar e Atualizar' : 'Fechar'}
           </button>
 
-          {activeTab !== 'HISTORY' && (
+          {activeTab !== 'HISTORY' && !committedManeuverId && (
             <div className="flex items-center gap-2">
               <button
                 type="button"
