@@ -365,7 +365,7 @@ export function OptionsPositionsTable({
                         </div>
                       ) : (
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          Fluxo Inicial: <strong className="text-emerald-400">{sm.isNetCredit ? '+' : '-'}R$ {Math.abs(sm.netInitialCreditDebitReais).toFixed(2)} {sm.isNetCredit ? 'Crédito' : 'Débito'}</strong> · Capital Reservado Cash-Secured: <strong className="text-slate-200">R$ {sm.totalCapitalReserved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+                          Fluxo Inicial: <strong className="text-emerald-400">{sm.isNetCredit ? '+' : '-'}R$ {Math.abs(sm.netInitialCreditDebitReais).toFixed(2)} {sm.isNetCredit ? 'Crédito' : 'Débito'}</strong> · {strat.strategyType === 'CASH_SECURED_PUT' ? 'Capital Reservado Cash-Secured:' : 'Capital Reservado:'} <strong className="text-slate-200">R$ {sm.totalCapitalReserved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
                         </p>
                       )}
                     </div>
@@ -374,7 +374,9 @@ export function OptionsPositionsTable({
                   <div className="flex items-center gap-4">
                     {/* P&L Consolidado da Estrutura */}
                     <div className="text-right">
-                      <div className="text-[10px] text-slate-400 uppercase font-bold">P&L MTM ESTRUTURA</div>
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">
+                        {strat.economicPerformance.resultNature === 'REALIZED' ? 'P&L REALIZADO' : 'P&L MTM ESTRUTURA'}
+                      </div>
                       <div className={`text-base font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {isProfit ? '+' : ''}R$ {sm.netPnlMtmReais.toFixed(2)}{' '}
                         <span className="text-xs font-normal text-emerald-400/80">

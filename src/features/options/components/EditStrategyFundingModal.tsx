@@ -87,15 +87,45 @@ export function EditStrategyFundingModal({
           finalCoveragePct = 100;
           finalReais = null;
         } else if (fundingSplitType === 'SPLIT_PCT') {
+          if (coveragePctVal.trim() === '') {
+            setErrorMessage('Informe a cobertura da garantia (0% a 100%).');
+            setIsSubmitting(false);
+            return;
+          }
           finalCoveragePct = parseNumberOrNull(coveragePctVal);
+          if (finalCoveragePct === null || finalCoveragePct < 0 || finalCoveragePct > 100) {
+            setErrorMessage('Cobertura de garantia inválida (deve estar entre 0% e 100%).');
+            setIsSubmitting(false);
+            return;
+          }
           finalReais = null;
         } else if (fundingSplitType === 'SPLIT_REAIS') {
+          if (reaisVal.trim() === '') {
+            setErrorMessage('Informe o valor do capital remunerado em R$.');
+            setIsSubmitting(false);
+            return;
+          }
           finalReais = parseNumberOrNull(reaisVal);
+          if (finalReais === null || finalReais < 0 || finalReais > benchmarkCapital + 0.01) {
+            setErrorMessage(`Capital remunerado inválido (deve ser entre R$ 0,00 e R$ ${benchmarkCapital.toFixed(2)}).`);
+            setIsSubmitting(false);
+            return;
+          }
           finalCoveragePct = null;
         }
 
         if (collateralMode === 'CUSTOM') {
+          if (customPctCdiVal.trim() === '') {
+            setErrorMessage('Informe o percentual do CDI para o modo customizado.');
+            setIsSubmitting(false);
+            return;
+          }
           finalPctCdi = parseNumberOrNull(customPctCdiVal);
+          if (finalPctCdi === null || finalPctCdi < 0) {
+            setErrorMessage('Percentual do CDI inválido (deve ser maior ou igual a 0%).');
+            setIsSubmitting(false);
+            return;
+          }
         } else {
           finalPctCdi = 100;
         }
@@ -147,13 +177,13 @@ export function EditStrategyFundingModal({
         {/* Quadro Informativo de Capital de Referência */}
         <div className="p-3 rounded-xl bg-[#070b14] border border-slate-800 flex items-center justify-between">
           <div>
-            <span className="text-[10px] text-slate-500 uppercase font-bold">CAPITAL DE REFERÊNCIA (BENCHMARK)</span>
+            <span className="text-[10px] text-slate-500 uppercase font-bold">CAPITAL DE REFERÊNCIA DO BENCHMARK</span>
             <div className="text-sm font-bold text-slate-200 mt-0.5">
               R$ {benchmarkCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
             </div>
           </div>
           <span className="text-[10px] text-slate-400 bg-slate-800/80 px-2 py-1 rounded">
-            Base Cash-Secured B3
+            Base econômica da estratégia
           </span>
         </div>
 

@@ -238,8 +238,22 @@ export function OptionsKpiCards({
             <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">
               BENCHMARK CDI — CAPITAL ELEGÍVEL
             </span>
-            <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 text-[10px] font-bold">
-              {inc.cdiIsEstimated ? 'CDI ESTIMADO ⚠️' : 'B3 OFICIAL'}
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+              summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                ? 'bg-purple-500/15 text-purple-300'
+                : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
+                ? 'bg-amber-500/15 text-amber-300'
+                : summary.portfolioBenchmarkQuality === 'ESTIMATED'
+                ? 'bg-amber-500/15 text-amber-300'
+                : 'bg-slate-800 text-slate-500'
+            }`}>
+              {summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                ? 'B3 OFICIAL'
+                : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
+                ? 'CDI PARCIAL ⚠️'
+                : summary.portfolioBenchmarkQuality === 'ESTIMATED'
+                ? 'CDI ESTIMADO ⚠️'
+                : 'N/A'}
             </span>
           </div>
           <div className="space-y-1">
@@ -271,73 +285,89 @@ export function OptionsKpiCards({
         </div>
 
         {/* Card 4: Valor Gerado Acima do CDI (Double Yield Institucional) */}
-        <div className="bg-[#12100a] border border-amber-500/40 rounded-xl p-4 space-y-2 shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-              {summary.portfolioEconomicPerformanceQuality === 'FULL'
-                ? 'VALOR GERADO ACIMA DO CDI'
-                : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
-                ? 'VALOR ESTIMADO ACIMA DO CDI'
-                : 'VALOR ACIMA DO CDI'}
-            </span>
-            <div className="flex items-center gap-1.5">
-              {summary.portfolioEconomicPerformanceQuality === 'FULL' && (
-                <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
-                  Double Yield Institucional
+        {(() => {
+          const canShowPortfolioEconomicComparison =
+            summary.portfolioBenchmarkEligibleCount > 0 &&
+            summary.portfolioEconomicPerformanceQuality !== 'INSUFFICIENT_DATA';
+
+          return (
+            <div className="bg-[#12100a] border border-amber-500/40 rounded-xl p-4 space-y-2 shadow-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                  {summary.portfolioEconomicPerformanceQuality === 'FULL'
+                    ? 'VALOR GERADO ACIMA DO CDI'
+                    : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
+                    ? 'VALOR ESTIMADO ACIMA DO CDI'
+                    : 'VALOR ACIMA DO CDI'}
                 </span>
-              )}
-              {summary.portfolioEconomicPerformanceQuality === 'PARTIAL' && (
-                <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold" title="Parte da carteira possui funding não informado">
-                  Funding Parcial ⚠️
-                </span>
-              )}
-              {summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA' && (
-                <span className="px-2 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-bold">
-                  Inconclusivo
-                </span>
-              )}
-              <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
-                summary.portfolioTotalReturnToCdiMultiple !== null && summary.portfolioTotalReturnToCdiMultiple >= 1.5
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                  : 'bg-slate-800 text-slate-400'
-              }`}>
-                {summary.portfolioTotalReturnToCdiMultiple !== null ? `${summary.portfolioTotalReturnToCdiMultiple.toFixed(2)}× CDI` : '---'}
-              </span>
+                <div className="flex items-center gap-1.5">
+                  {summary.portfolioEconomicPerformanceQuality === 'FULL' && (
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                      Double Yield Institucional
+                    </span>
+                  )}
+                  {summary.portfolioEconomicPerformanceQuality === 'PARTIAL' && (
+                    <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold" title="Parte da carteira possui funding não informado">
+                      Funding Parcial ⚠️
+                    </span>
+                  )}
+                  {summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA' && (
+                    <span className="px-2 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-bold">
+                      Inconclusivo
+                    </span>
+                  )}
+                  {canShowPortfolioEconomicComparison && summary.portfolioTotalReturnToCdiMultiple !== null && (
+                    <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                      summary.portfolioTotalReturnToCdiMultiple >= 1.5
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {summary.portfolioTotalReturnToCdiMultiple.toFixed(2)}× CDI
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className={`text-2xl font-bold tracking-tight ${
+                  canShowPortfolioEconomicComparison && summary.portfolioExcessReturnVsCdiReais >= 0
+                    ? 'text-amber-400'
+                    : 'text-slate-400'
+                }`}>
+                  {!canShowPortfolioEconomicComparison ? (
+                    <span className="text-slate-500 text-lg">N/A</span>
+                  ) : (
+                    `${summary.portfolioExcessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${summary.portfolioExcessReturnVsCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {!canShowPortfolioEconomicComparison ? (
+                    <span className="text-slate-500 italic">
+                      {summary.portfolioBenchmarkEligibleCount === 0
+                        ? 'Sem posições elegíveis para apuração de excesso vs CDI.'
+                        : 'Dados temporais insuficientes para apurar comparação econômica vs CDI.'}
+                    </span>
+                  ) : (
+                    <span>
+                      Excesso econômico vs CDI: <strong className={summary.portfolioExcessReturnVsCdiReais >= 0 ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+                        {summary.portfolioExcessReturnVsCdiReais >= 0
+                          ? `+R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} acima do CDI elegível`
+                          : `R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} abaixo do CDI elegível`}
+                      </strong>
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500 italic">
+                {summary.portfolioEconomicPerformanceQuality === 'FULL'
+                  ? 'Excesso econômico do universo elegível sobre o mesmo capital aplicado ao CDI.'
+                  : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
+                  ? 'Parte do capital possui funding não informado; resultado baseado nas premissas disponíveis.'
+                  : 'Dados insuficientes para uma comparação econômica consistente.'}
+                {isNetView && ' (Narrativa de Double Yield e Múltiplos CDI calculada sobre a base bruta institucional).'}
+              </p>
             </div>
-          </div>
-          <div className="space-y-1">
-            <div className={`text-2xl font-bold tracking-tight ${
-              summary.portfolioExcessReturnVsCdiReais >= 0 ? 'text-amber-400' : 'text-slate-400'
-            }`}>
-              {summary.portfolioBenchmarkEligibleCount === 0 || summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA' ? (
-                <span className="text-slate-500 text-lg">N/A</span>
-              ) : (
-                `${summary.portfolioExcessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${summary.portfolioExcessReturnVsCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              )}
-            </div>
-            <div className="text-[11px] text-slate-400">
-              {summary.portfolioBenchmarkEligibleCount === 0 ? (
-                <span className="text-slate-500 italic">Sem posições elegíveis para apuração de excesso vs CDI.</span>
-              ) : (
-                <span>
-                  Excesso econômico vs CDI: <strong className={summary.portfolioExcessReturnVsCdiReais >= 0 ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                    {summary.portfolioExcessReturnVsCdiReais >= 0
-                      ? `+R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} acima do CDI elegível`
-                      : `R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} abaixo do CDI elegível`}
-                  </strong>
-                </span>
-              )}
-            </div>
-          </div>
-          <p className="text-[10px] text-slate-500 italic">
-            {summary.portfolioEconomicPerformanceQuality === 'FULL'
-              ? 'Excesso econômico do universo elegível sobre o mesmo capital aplicado ao CDI.'
-              : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
-              ? 'Parte do capital possui funding não informado; resultado baseado nas premissas disponíveis.'
-              : 'Dados insuficientes para uma comparação econômica consistente.'}
-            {isNetView && ' (Narrativa de Double Yield e Múltiplos CDI calculada sobre a base bruta institucional).'}
-          </p>
-        </div>
+          );
+        })()}
       </div>
 
       {/* 4. Faixa de Contexto Quantitativo Diário */}

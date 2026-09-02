@@ -15,9 +15,11 @@ export function StrategyEconomicStorytellingCard({
   const ep = strategy.economicPerformance;
   const sm = strategy.metrics;
 
+  const canCompareToCdi = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA';
   const isMtm = ep.resultNature === 'MTM';
   const isPositivePnl = ep.optionPnlReais >= 0;
   const isPositiveExcess = ep.excessReturnVsCdiReais >= 0;
+  const isAssumedFunding = ep.qualityNotes?.includes('ASSUMED_FULL_COLLATERAL_COVERAGE');
 
   // Narrativa temporal e de realização
   const timeContextText = isMtm
@@ -70,11 +72,15 @@ export function StrategyEconomicStorytellingCard({
               className={`px-1.5 py-0.5 rounded border ${
                 ep.benchmarkQuality === 'OFFICIAL_DI'
                   ? 'bg-purple-950/60 border-purple-700/50 text-purple-300'
+                  : ep.benchmarkQuality === 'PARTIAL_ESTIMATE'
+                  ? 'bg-amber-950/60 border-amber-700/50 text-amber-300'
+                  : ep.benchmarkQuality === 'ESTIMATED'
+                  ? 'bg-amber-950/60 border-amber-700/50 text-amber-300'
                   : 'bg-slate-800 border-slate-700 text-slate-400'
               }`}
               title="Origem dos fatores da taxa DI"
             >
-              CDI: {ep.benchmarkQuality === 'OFFICIAL_DI' ? 'B3 OFICIAL' : 'ESTIMADO'}
+              CDI: {ep.benchmarkQuality === 'OFFICIAL_DI' ? 'B3 OFICIAL' : ep.benchmarkQuality === 'PARTIAL_ESTIMATE' ? 'PARCIAL' : 'ESTIMADO'}
             </span>
 
             {/* Risco */}
@@ -139,12 +145,20 @@ export function StrategyEconomicStorytellingCard({
             CARREGO CAIXA (CDI)
           </div>
           <div className="text-base font-bold text-purple-300">
-            +R$ {ep.collateralCarryReais.toFixed(2)}
+            {!canCompareToCdi ? (
+              <span className="text-slate-500 text-sm">N/A</span>
+            ) : (
+              `+R$ ${ep.collateralCarryReais.toFixed(2)}`
+            )}
           </div>
           <div className="text-[10px] text-slate-500">
-            {ep.collateralMode === 'IDLE_CASH'
-              ? 'Caixa não remunerado'
-              : `Sobre R$ ${ep.capitalRemuneratedReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}`}
+            {!canCompareToCdi ? (
+              'Dados temporais insuficientes'
+            ) : ep.collateralMode === 'IDLE_CASH' ? (
+              'Caixa não remunerado'
+            ) : (
+              `Sobre R$ ${ep.capitalRemuneratedReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}`
+            )}
           </div>
         </div>
 
@@ -157,9 +171,13 @@ export function StrategyEconomicStorytellingCard({
             {ep.totalEconomicReturnReais >= 0 ? '+' : ''}R$ {ep.totalEconomicReturnReais.toFixed(2)}
           </div>
           <div className="text-[10px] text-slate-500">
-            {ep.totalEconomicReturnPct !== null
-              ? `${ep.totalEconomicReturnPct >= 0 ? '+' : ''}${ep.totalEconomicReturnPct.toFixed(2)}% no período`
-              : 'Double Yield consolidado'}
+            {!canCompareToCdi ? (
+              'P&L opções (sem carry)'
+            ) : ep.totalEconomicReturnPct !== null ? (
+              `${ep.totalEconomicReturnPct >= 0 ? '+' : ''}${ep.totalEconomicReturnPct.toFixed(2)}% no período`
+            ) : (
+              'Double Yield consolidado'
+            )}
           </div>
         </div>
 
@@ -169,23 +187,47 @@ export function StrategyEconomicStorytellingCard({
             SE FOSSE SÓ CDI
           </div>
           <div className="text-base font-bold text-slate-300">
-            +R$ {ep.benchmarkCdiReais.toFixed(2)}
+            {!canCompareToCdi ? (
+              <span className="text-slate-500 text-sm">N/A</span>
+            ) : (
+              `+R$ ${ep.benchmarkCdiReais.toFixed(2)}`
+            )}
           </div>
           <div className="text-[10px] text-slate-500">
-            {ep.cdiPeriodReturnPct !== null ? `${ep.cdiPeriodReturnPct.toFixed(2)}% taxa DI no período` : 'Custo de oportunidade'}
+            {!canCompareToCdi
+              ? 'Benchmark temporal indisponível'
+              : ep.cdiPeriodReturnPct !== null
+              ? `${ep.cdiPeriodReturnPct.toFixed(2)}% taxa DI no período`
+              : 'Custo de oportunidade'}
           </div>
         </div>
 
         {/* Valor Gerado Acima do CDI */}
         <div className="bg-[#070b14] border border-amber-500/30 rounded-lg p-3 space-y-1">
           <div className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">
-            VALOR GERADO ACIMA CDI
+            {!canCompareToCdi
+              ? 'COMPARAÇÃO VS CDI'
+              : ep.economicPerformanceQuality === 'PARTIAL'
+              ? 'VALOR ESTIMADO ACIMA CDI'
+              : 'VALOR GERADO ACIMA CDI'}
           </div>
-          <div className={`text-base font-bold ${isPositiveExcess ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {isPositiveExcess ? '+' : ''}R$ {ep.excessReturnVsCdiReais.toFixed(2)}
+          <div className={`text-base font-bold ${
+            !canCompareToCdi
+              ? 'text-slate-500'
+              : isPositiveExcess
+              ? 'text-emerald-400'
+              : 'text-rose-400'
+          }`}>
+            {!canCompareToCdi ? (
+              <span className="text-slate-500 text-sm">N/A</span>
+            ) : (
+              `${isPositiveExcess ? '+' : ''}R$ ${ep.excessReturnVsCdiReais.toFixed(2)}`
+            )}
           </div>
           <div className="text-[10px] text-slate-500">
-            {ep.excessPeriodPctPoints !== null
+            {!canCompareToCdi
+              ? 'Comparação não disponível'
+              : ep.excessPeriodPctPoints !== null
               ? `${ep.excessPeriodPctPoints >= 0 ? '+' : ''}${ep.excessPeriodPctPoints.toFixed(2)} p.p. vs CDI`
               : 'Alpha econômico'}
           </div>
@@ -195,66 +237,84 @@ export function StrategyEconomicStorytellingCard({
       {/* 3. Storytelling Humano Institucional & Múltiplos */}
       <div className="bg-[#080d1a] border border-slate-800 rounded-xl p-3.5 space-y-2.5">
         <div className="text-slate-300 leading-relaxed text-xs">
-          <span>{timeContextText} </span>
-          {isPositivePnl ? (
+          {!canCompareToCdi ? (
             <span>
-              as opções <strong className="text-emerald-400 font-bold">{isMtm ? 'estão gerando' : 'geraram'} +R$ {ep.optionPnlReais.toFixed(2)}</strong>
+              Dados temporais insuficientes para apurar o benchmark CDI ou comparação de custo de oportunidade (ausência de data válida de encerramento da perna). As opções {isMtm ? 'estão registrando' : 'registraram'}{' '}
+              <strong className={isPositivePnl ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                {isPositivePnl ? '+' : ''}R$ {ep.optionPnlReais.toFixed(2)}
+              </strong>.
             </span>
           ) : (
-            <span>
-              as opções <strong className="text-rose-400 font-bold">{isMtm ? 'estão registrando' : 'registraram'} R$ {ep.optionPnlReais.toFixed(2)}</strong>
-            </span>
-          )}
-          {ep.collateralCarryReais > 0 ? (
-            <span>
-              , somados a <strong className="text-purple-300 font-bold">+R$ {ep.collateralCarryReais.toFixed(2)} de carrego de caixa</strong> aplicado em garantia, totalizando{' '}
-              <strong className="text-amber-300 font-bold">R$ {ep.totalEconomicReturnReais.toFixed(2)} de retorno econômico</strong>.
-            </span>
-          ) : (
-            <span>
-              {' '}com garantia não remunerada (0% carry de caixa).
-            </span>
+            <>
+              {isAssumedFunding && (
+                <span className="text-amber-300 font-bold block mb-1">
+                  ⚠️ Assumindo remuneração integral da garantia (funding não informado na criação da estrutura):
+                </span>
+              )}
+              <span>{timeContextText} </span>
+              {isPositivePnl ? (
+                <span>
+                  as opções <strong className="text-emerald-400 font-bold">{isMtm ? 'estão gerando' : 'geraram'} +R$ {ep.optionPnlReais.toFixed(2)}</strong>
+                </span>
+              ) : (
+                <span>
+                  as opções <strong className="text-rose-400 font-bold">{isMtm ? 'estão registrando' : 'registraram'} R$ {ep.optionPnlReais.toFixed(2)}</strong>
+                </span>
+              )}
+              {ep.collateralCarryReais > 0 ? (
+                <span>
+                  , somados a <strong className="text-purple-300 font-bold">+R$ {ep.collateralCarryReais.toFixed(2)} de carrego de caixa</strong> aplicado em garantia, totalizando{' '}
+                  <strong className="text-amber-300 font-bold">R$ {ep.totalEconomicReturnReais.toFixed(2)} de retorno econômico</strong>.
+                </span>
+              ) : (
+                <span>
+                  {' '}com garantia não remunerada (0% carry de caixa).
+                </span>
+              )}
+            </>
           )}
         </div>
 
-        {/* Faixa de Múltiplos e Dias Equivalentes */}
-        <div className="flex flex-wrap items-center gap-4 text-xs pt-1 border-t border-slate-800/60">
-          {/* Múltiplo Opções / CDI */}
-          {ep.optionPnlToCdiMultiple !== null && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-500">Opções / CDI:</span>
-              <strong className="text-amber-400 font-bold">{ep.optionPnlToCdiMultiple.toFixed(2)}×</strong>
-            </div>
-          )}
+        {/* Faixa de Múltiplos e Dias Equivalentes (somente se canCompareToCdi) */}
+        {canCompareToCdi && (
+          <div className="flex flex-wrap items-center gap-4 text-xs pt-1 border-t border-slate-800/60">
+            {/* Múltiplo Opções / CDI */}
+            {ep.optionPnlToCdiMultiple !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">Opções / CDI:</span>
+                <strong className="text-amber-400 font-bold">{ep.optionPnlToCdiMultiple.toFixed(2)}×</strong>
+              </div>
+            )}
 
-          {/* Múltiplo Total / CDI */}
-          {ep.totalReturnToCdiMultiple !== null && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-500">Total / CDI:</span>
-              <strong className="text-amber-300 font-bold">{ep.totalReturnToCdiMultiple.toFixed(2)}×</strong>
-            </div>
-          )}
+            {/* Múltiplo Total / CDI */}
+            {ep.totalReturnToCdiMultiple !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">Total / CDI:</span>
+                <strong className="text-amber-300 font-bold">{ep.totalReturnToCdiMultiple.toFixed(2)}×</strong>
+              </div>
+            )}
 
-          {/* Dias Úteis Equivalentes de CDI (apenas se positivo e válido) */}
-          {ep.optionPnlEquivalentCdiDU !== null && ep.optionPnlEquivalentCdiDU > 0 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-500">Equivalência:</span>
-              <strong className="text-purple-300 font-bold">≈ {ep.optionPnlEquivalentCdiDU.toFixed(0)} DU de CDI</strong>
-            </div>
-          )}
+            {/* Dias Úteis Equivalentes de CDI (apenas se positivo e válido) */}
+            {ep.optionPnlEquivalentCdiDU !== null && ep.optionPnlEquivalentCdiDU > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">Equivalência:</span>
+                <strong className="text-purple-300 font-bold">≈ {ep.optionPnlEquivalentCdiDU.toFixed(0)} DU de CDI</strong>
+              </div>
+            )}
 
-          {/* Eficiência por R$ 1.000 de Risco */}
-          {ep.maxLossType === 'FINITE' && ep.extraProfitPer1000RiskReais !== null && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-500">
-                {isMtm ? 'Excesso vs CDI / R$ 1k risco:' : 'Adicional / R$ 1k risco:'}
-              </span>
-              <strong className="text-emerald-300 font-bold">
-                {ep.extraProfitPer1000RiskReais >= 0 ? '+' : ''}R$ {ep.extraProfitPer1000RiskReais.toFixed(2)}
-              </strong>
-            </div>
-          )}
-        </div>
+            {/* Eficiência por R$ 1.000 de Risco */}
+            {ep.maxLossType === 'FINITE' && ep.extraProfitPer1000RiskReais !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">
+                  {isMtm ? 'Excesso vs CDI / R$ 1k risco:' : 'Adicional / R$ 1k risco:'}
+                </span>
+                <strong className="text-emerald-300 font-bold">
+                  {ep.extraProfitPer1000RiskReais >= 0 ? '+' : ''}R$ {ep.extraProfitPer1000RiskReais.toFixed(2)}
+                </strong>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 4. Diagnóstico de Curva de Risco & Salvaguardas */}
@@ -290,10 +350,24 @@ export function StrategyEconomicStorytellingCard({
         </div>
 
         {/* Notas de Transparência Institucional */}
-        <div className="text-[10px] text-slate-500 italic">
-          {ep.annualizationQuality === 'VERY_SHORT_PERIOD'
-            ? 'Ritmo anualizado é meramente indicativo devido ao período decorrido < 21 DU.'
-            : 'Métricas calculadas conforme convenção oficial B3 DI e Black-Scholes institucional.'}
+        <div className="text-[10px] text-slate-500 italic space-x-2">
+          <span>
+            {ep.benchmarkQuality === 'OFFICIAL_DI'
+              ? 'Benchmark CDI apurado com observações oficiais B3.'
+              : ep.benchmarkQuality === 'PARTIAL_ESTIMATE'
+              ? 'Benchmark CDI parcialmente estimado; consulte os indicadores de qualidade.'
+              : ep.benchmarkQuality === 'ESTIMATED'
+              ? 'Benchmark CDI estimado com taxa de referência.'
+              : 'Benchmark CDI não disponível.'}
+          </span>
+          <span>·</span>
+          <span>Risco econômico baseado no padrão de payoff reconhecido.</span>
+          {ep.annualizationQuality === 'VERY_SHORT_PERIOD' && (
+            <>
+              <span>·</span>
+              <span>Ritmo anualizado é meramente indicativo devido ao período decorrido &lt; 21 DU.</span>
+            </>
+          )}
         </div>
       </div>
     </div>

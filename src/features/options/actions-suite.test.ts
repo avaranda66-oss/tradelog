@@ -185,6 +185,7 @@ export async function runActionsSuiteTests() {
     // Direcional BOVA11 (R$ 50) fica excluded from benchmark.
     assert(summary.portfolioBenchmarkEligibleCount >= 2, 'Benchmark Eligibility: Universo elegível conta ITUB + LREN');
     assert(summary.portfolioExcludedFromBenchmarkCount >= 1, 'Benchmark Eligibility: BOVA11 Direcional excluída do benchmark');
+    assert(summary.portfolioBenchmarkQuality === 'OFFICIAL_DI', 'Benchmark Quality: Universo elegível com DI Oficial apura OFFICIAL_DI');
     assert(summary.portfolioOptionPnlReais >= 543.0, 'Portfolio Economic: P&L de opções do universo elegível soma R$ 543,00');
     assert(summary.portfolioBenchmarkCdiReais > 0, 'Portfolio Economic: Benchmark CDI calculado');
     assert(summary.portfolioCollateralCarryReais > 0, 'Portfolio Economic: Carrego de colateral do ITUB calculado');
@@ -421,6 +422,16 @@ export async function runActionsSuiteTests() {
     });
     assert(updateExceedRes.success === false, 'Funding Update: Rejeição de capital remunerado excessivo');
     assert(Boolean(updateExceedRes.error?.includes('REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK')), 'Funding Update: Erro REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK retornado');
+
+    // 5.3. Rejeitar update remunerado sem cobertura nem capital em R$ (split nulo)
+    const updateMissingSplitRes = await updateOptionStrategyFundingAction({
+      strategyId: zeroFundingRes.strategyId!,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: null,
+      capitalRemuneratedReais: null,
+    });
+    assert(updateMissingSplitRes.success === false, 'Funding Update: Rejeição de split nulo em modo remunerado');
+    assert(Boolean(updateMissingSplitRes.error?.includes('EXPLICIT_FUNDING_SPLIT_REQUIRED')), 'Funding Update: Erro EXPLICIT_FUNDING_SPLIT_REQUIRED retornado');
 
     // Limpeza da estrutura criada
     if (zeroFundingRes.strategyId) {

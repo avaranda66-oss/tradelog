@@ -75,6 +75,7 @@ export interface OptionsPortfolioSummary {
   portfolioBenchmarkEligibleCount: number;
   portfolioExcludedFromBenchmarkCount: number;
   portfolioEconomicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA';
+  portfolioBenchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' | 'NOT_AVAILABLE';
 
   portfolioOptionPnlReais: number;
   portfolioBenchmarkCdiReais: number;
@@ -325,6 +326,9 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     let portfolioBenchmarkEligibleCount = 0;
     let portfolioExcludedFromBenchmarkCount = 0;
     let portfolioEconomicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA' = 'FULL';
+    let hasEstimatedBenchmark = false;
+    let hasPartialEstimateBenchmark = false;
+    let hasOfficialBenchmark = false;
 
     // Agregação Econômica Canônica do Universo Benchmark-Eligible (Double Yield Consolidado)
     let portfolioOptionPnlReais = 0;
@@ -376,6 +380,10 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
           } else if (ep.economicPerformanceQuality === 'INSUFFICIENT_DATA') {
             portfolioEconomicPerformanceQuality = 'INSUFFICIENT_DATA';
           }
+
+          if (ep.benchmarkQuality === 'ESTIMATED') hasEstimatedBenchmark = true;
+          else if (ep.benchmarkQuality === 'PARTIAL_ESTIMATE') hasPartialEstimateBenchmark = true;
+          else if (ep.benchmarkQuality === 'OFFICIAL_DI') hasOfficialBenchmark = true;
 
           portfolioOptionPnlReais += ep.optionPnlReais;
           portfolioBenchmarkCdiReais += ep.benchmarkCdiReais;
@@ -434,6 +442,9 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             if (portfolioEconomicPerformanceQuality === 'FULL') {
               portfolioEconomicPerformanceQuality = 'PARTIAL';
             }
+
+            if (m.cdiIsEstimated) hasEstimatedBenchmark = true;
+            else hasOfficialBenchmark = true;
 
             portfolioOptionPnlReais += unallocPnl;
             portfolioBenchmarkCdiReais += unallocCdi;
@@ -529,6 +540,17 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       }
     }
 
+    let portfolioBenchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' | 'NOT_AVAILABLE' = 'NOT_AVAILABLE';
+    if (portfolioBenchmarkEligibleCount === 0) {
+      portfolioBenchmarkQuality = 'NOT_AVAILABLE';
+    } else if (hasEstimatedBenchmark) {
+      portfolioBenchmarkQuality = 'ESTIMATED';
+    } else if (hasPartialEstimateBenchmark) {
+      portfolioBenchmarkQuality = 'PARTIAL_ESTIMATE';
+    } else if (hasOfficialBenchmark) {
+      portfolioBenchmarkQuality = 'OFFICIAL_DI';
+    }
+
     return {
       success: true,
       positions: finalPositions,
@@ -548,6 +570,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         portfolioBenchmarkEligibleCount,
         portfolioExcludedFromBenchmarkCount,
         portfolioEconomicPerformanceQuality,
+        portfolioBenchmarkQuality,
 
         portfolioOptionPnlReais,
         portfolioBenchmarkCdiReais,
@@ -865,6 +888,17 @@ export async function updateOptionStrategyFundingAction(params: {
     if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
       if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
         return { success: false, error: 'INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.' };
+      }
+    }
+
+    if (params.collateralMode !== 'IDLE_CASH') {
+      const hasCoverage = params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null;
+      const hasReais = params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null;
+      if (!hasCoverage && !hasReais) {
+        return {
+          success: false,
+          error: 'EXPLICIT_FUNDING_SPLIT_REQUIRED: Modo de funding remunerado exige cobertura percentual ou capital em R$ explícito.',
+        };
       }
     }
 
