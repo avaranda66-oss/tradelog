@@ -7,6 +7,27 @@ export type BusinessDate = string; // Formato estrito 'YYYY-MM-DD'
 
 export const SUPPORTED_YEARS = [2026] as const;
 
+export class UnsupportedB3CalendarYearError extends Error {
+  constructor(year: number) {
+    super(`Ano ${year} não suportado pelo calendário B3 oficial do sistema. Anos suportados: ${SUPPORTED_YEARS.join(', ')}`);
+    this.name = 'UnsupportedB3CalendarYearError';
+  }
+}
+
+/**
+ * Retorna a data de hoje no fuso horário oficial da B3 (America/Sao_Paulo)
+ * Garante que avaliações após as 21h UTC não avancem inadvertidamente para o dia seguinte.
+ */
+export function getBrazilTodayDate(refDate: Date = new Date()): BusinessDate {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(refDate) as BusinessDate;
+}
+
 /**
  * Feriados Oficiais da B3 em 2026 (Sem Negociação):
  * - 01/01/2026 (Ano Novo)
@@ -81,6 +102,10 @@ export function isB3TradingDay(dateStr: BusinessDate): boolean {
   const y = parseInt(yStr, 10);
   const m = parseInt(mStr, 10) - 1;
   const d = parseInt(dStr, 10);
+
+  if (!SUPPORTED_YEARS.includes(y as (typeof SUPPORTED_YEARS)[number])) {
+    throw new UnsupportedB3CalendarYearError(y);
+  }
 
   // Date local sem offset UTC
   const dt = new Date(y, m, d);

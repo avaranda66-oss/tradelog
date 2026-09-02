@@ -7,9 +7,11 @@ import {
   type BusinessDate,
   parseBusinessDate,
   countB3TradingDays,
+  getBrazilTodayDate,
 } from './b3-calendar';
 import {
   type AnnualRateDecimal,
+  toAnnualRateDecimal,
   normalizeAnnualRate,
   calculateRealizedDiFactor,
   calculateProjectedDiFactor,
@@ -190,6 +192,8 @@ export interface EfficiencyParams {
   projectedCdiFactor: number | null;
 }
 
+export type ExecutionQuality = 'EXECUTABLE' | 'INDICATIVE' | 'STALE' | 'UNAVAILABLE';
+
 export interface EfficiencyAnalysis {
   harvestRatio: number | null;
   earlyCaptureFactor: number | null;
@@ -200,6 +204,8 @@ export interface EfficiencyAnalysis {
   scoreBasis: ExitQuoteBasis;
   scoreCompleteness: 'FULL' | 'PARTIAL_EARLY_CAPTURE_ONLY' | 'UNAVAILABLE';
   missingInputs: string[];
+  executionQuality: ExecutionQuality;
+  decisionEligible: boolean;
 }
 
 export function calculateEfficiencyScore(
@@ -208,6 +214,12 @@ export function calculateEfficiencyScore(
   isExecutableQuote: boolean
 ): EfficiencyAnalysis {
   const missingInputs: string[] = [];
+
+  const executionQuality: ExecutionQuality = !isExecutableQuote
+    ? priceBasis === 'UNAVAILABLE'
+      ? 'UNAVAILABLE'
+      : 'INDICATIVE'
+    : 'EXECUTABLE';
 
   if (params.totalDU <= 0 || params.entryPrice <= 0 || params.quantityUnderlyingUnits <= 0) {
     return {
@@ -220,6 +232,8 @@ export function calculateEfficiencyScore(
       scoreBasis: 'UNAVAILABLE',
       scoreCompleteness: 'UNAVAILABLE',
       missingInputs: ['INVALID_PARAMS'],
+      executionQuality: 'UNAVAILABLE',
+      decisionEligible: false,
     };
   }
 
@@ -285,6 +299,9 @@ export function calculateEfficiencyScore(
     tier = 'INSUFFICIENT_DATA';
   }
 
+  // Elegibilidade de Decisão: Apenas cotações executáveis (Bid/Ask LIVE) com score completo podem disparar ações operacionais automáticas
+  const decisionEligible = isExecutableQuote && scoreDisplay !== null && completeness === 'FULL';
+
   return {
     harvestRatio,
     earlyCaptureFactor,
@@ -295,6 +312,8 @@ export function calculateEfficiencyScore(
     scoreBasis: priceBasis,
     scoreCompleteness: completeness,
     missingInputs,
+    executionQuality,
+    decisionEligible,
   };
 }
 
@@ -410,7 +429,7 @@ export type EnrichedOptionPosition = OptionPosition & {
 export function enrichOptionPosition(
   pos: OptionPosition,
   marketSnapshot?: OptionMarketSnapshot,
-  valuationDateStr: BusinessDate = new Date().toISOString().slice(0, 10) as BusinessDate
+  valuationDateStr: BusinessDate = getBrazilTodayDate()
 ): EnrichedOptionPosition {
   const openDate = parseBusinessDate(pos.entryDate);
   const expiryDate = parseBusinessDate(pos.expirationDate);
@@ -500,8 +519,8 @@ export function enrichOptionPosition(
     maxLossReais = pos.entryPrice * quantityUnits;
   }
 
-  // 7. CDI Realizado Diário vs Projetado
-  const cdiRateAnnual = normalizeAnnualRate(pos.cdiRateAnnual || 14.0, 'PERCENT');
+  // 7. CDI Realizado Diário vs Projetado (com normalização estrita de unidade decimal)
+  const cdiRateAnnual = toAnnualRateDecimal(pos.cdiRateAnnual);
   const realizedDi = calculateRealizedDiFactor(openDate, effectiveValDate, cdiRateAnnual);
   const projectedDi = calculateProjectedDiFactor(remainingTradingDays, cdiRateAnnual);
 
@@ -634,7 +653,7 @@ export interface SimulationResult {
 }
 
 export function simulateOptionTradeCdi(params: SimulationParams): SimulationResult {
-  const cdiAnnual = normalizeAnnualRate(params.cdiRateAnnual || 14.0, 'PERCENT');
+  const cdiAnnual = toAnnualRateDecimal(params.cdiRateAnnual);
   const isSell = params.side === 'SELL';
   const totalPremiumReais = params.premium * params.quantity;
 

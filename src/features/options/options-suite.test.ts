@@ -44,12 +44,19 @@ export function runAllTests() {
   assert(countB3TradingDays('2026-08-24', '2026-09-01') === 6, 'ITUBU393 tem exatamente 6 DU decorridos');
   assert(countB3TradingDays('2026-08-27', '2026-09-01') === 3, 'LRENV104 tem exatamente 3 DU decorridos');
 
-  // Teste de parser estrito
+  // Teste de parser estrito e anos não suportados
   try {
     parseBusinessDate('2026-99-99');
     assert(false, 'parseBusinessDate deveria rejeitar 2026-99-99');
   } catch {
     assert(true, 'parseBusinessDate rejeita data inválida 2026-99-99');
+  }
+
+  try {
+    isB3TradingDay('2027-01-05');
+    assert(false, 'isB3TradingDay deveria rejeitar ano não suportado 2027');
+  } catch {
+    assert(true, 'isB3TradingDay lança UnsupportedB3CalendarYearError para ano 2027');
   }
 
   // ─── 2. CDI ACCRUAL TESTS ───
@@ -131,6 +138,8 @@ export function runAllTests() {
   );
   assert(effExec.efficiencyScoreDisplay === 46, `Efficiency Score Executável de ITUB resulta rigorosamente em 46 (obtido: ${effExec.efficiencyScoreDisplay})`);
   assert(effExec.tier === 'ELEVADA', 'Score 46 classifica no tier ELEVADA');
+  assert(effExec.executionQuality === 'EXECUTABLE', 'Cotação LIVE marca executionQuality EXECUTABLE');
+  assert(effExec.decisionEligible === true, 'Cotação LIVE executável é decisionEligible=true');
 
   // MTM c/ Mark 0.29
   const effMtm = calculateEfficiencyScore(
@@ -147,6 +156,8 @@ export function runAllTests() {
     false
   );
   assert(effMtm.efficiencyScoreDisplay === 51, `Efficiency Score MTM de ITUB resulta rigorosamente em 51 (obtido: ${effMtm.efficiencyScoreDisplay})`);
+  assert(effMtm.executionQuality === 'INDICATIVE', 'Cotação MARK não-executável marca executionQuality INDICATIVE');
+  assert(effMtm.decisionEligible === false, 'Cotação MARK não-executável bloqueia decisionEligible (false)');
 
   // Edge cases
   const effTZero = calculateEfficiencyScore(

@@ -23,7 +23,10 @@ import {
   type EnrichedStrategyLeg,
   type OptionMarketSnapshot,
   type StrategyBook,
+  type CollateralMode,
 } from './calculations';
+import { getBrazilTodayDate } from './b3-calendar';
+import { toAnnualRateDecimal } from './cdi-engine';
 
 export type { PositionCalculatedMetrics, EnrichedOptionPosition, EnrichedOptionStrategy, EnrichedStrategyLeg };
 
@@ -188,7 +191,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
       filteredPositions = rawPositions.filter((p) => p.status !== 'OPEN');
     }
 
-    const valuationDate = new Date().toISOString().slice(0, 10);
+    const valuationDate = getBrazilTodayDate();
     const enrichedPosMap = new Map<string, EnrichedOptionPosition>();
     for (const p of filteredPositions) {
       enrichedPosMap.set(p.id, enrichOptionPosition(p, undefined, valuationDate));
@@ -518,6 +521,7 @@ export async function groupOptionPositionsAction(params: {
   strategyType?: string;
   book?: StrategyBook;
   portfolio?: string;
+  collateralMode?: CollateralMode;
   notes?: string;
   legs: Array<{
     positionId: string;
@@ -539,8 +543,14 @@ export async function groupOptionPositionsAction(params: {
       return { success: false, error: 'Uma ou mais posições selecionadas não foram encontradas.' };
     }
 
-    // Verifica se pertencem ao mesmo ativo subjacente
+    // Verifica se pertencem ao mesmo ativo subjacente (Validação Estrita)
     const underlyingTickers = new Set(rawPositions.map((p) => p.tickerUnderlying.toUpperCase()));
+    if (underlyingTickers.size > 1) {
+      return {
+        success: false,
+        error: `Todas as pernas selecionadas devem pertencer ao mesmo ativo subjacente (Encontrados: ${Array.from(underlyingTickers).join(', ')}).`,
+      };
+    }
     const underlyingTicker = Array.from(underlyingTickers)[0] || 'MULTI';
 
     // Checagem de Alocação Disponível
@@ -556,10 +566,10 @@ export async function groupOptionPositionsAction(params: {
     for (const legParam of params.legs) {
       const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
       const alreadyAllocated = allocatedSum.get(pos.id) || 0;
-      const desiredQty = legParam.allocatedQuantity || pos.quantity;
+      const desiredQty = legParam.allocatedQuantity ?? pos.quantity;
 
       if (desiredQty <= 0) {
-        return { success: false, error: `Quantidade alocada inválida para ${pos.tickerOption}.` };
+        return { success: false, error: `Quantidade alocada deve ser maior que zero para ${pos.tickerOption}.` };
       }
 
       if (alreadyAllocated + desiredQty > pos.quantity) {
@@ -585,57 +595,59 @@ export async function groupOptionPositionsAction(params: {
       detectedBook = 'HYBRID';
     }
 
-    // Execução Transacional
+    // Execução em Transação ACID
     const strategyName = params.name || `${underlyingTicker} — Estrutura Financiada 2:1`;
 
-    await db.insert(optionStrategies).values({
-      id: strategyId,
-      portfolio: params.portfolio || rawPositions[0].portfolio || 'Principal',
-      name: strategyName,
-      strategyType: detectedType,
-      book: detectedBook,
-      underlyingTicker,
-      collateralMode: 'IDLE_CASH',
-      status: 'OPEN',
-      openedAt,
-      notes: params.notes,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    for (const legParam of params.legs) {
-      const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
-      const allocQty = legParam.allocatedQuantity || pos.quantity;
-      const legId = generateId('opt_strat_leg');
-
-      let econRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM' = legParam.economicRole || 'CUSTOM';
-      if (!legParam.economicRole) {
-        if ((pos.side === 'SELL' || pos.side === 'SHORT') && pos.optionType === 'PUT') {
-          econRole = 'FINANCING';
-        } else if ((pos.side === 'BUY' || pos.side === 'LONG') && pos.optionType === 'CALL') {
-          econRole = 'DIRECTIONAL';
-        }
-      }
-
-      await db.insert(optionStrategyLegs).values({
-        id: legId,
-        strategyId,
-        positionId: pos.id,
-        allocatedQuantity: allocQty,
-        economicRole: econRole,
+    await db.transaction(async (tx) => {
+      await tx.insert(optionStrategies).values({
+        id: strategyId,
+        portfolio: params.portfolio || rawPositions[0].portfolio || 'Principal',
+        name: strategyName,
+        strategyType: detectedType,
+        book: detectedBook,
+        underlyingTicker,
+        collateralMode: params.collateralMode || 'REMUNERATED_100_CDI',
+        status: 'OPEN',
+        openedAt,
+        notes: params.notes,
         createdAt: now,
+        updatedAt: now,
       });
 
-      await db.insert(strategyAllocationEvents).values({
-        id: generateId('strat_ev'),
-        strategyId,
-        positionId: pos.id,
-        eventType: 'GROUP',
-        allocatedQuantity: allocQty,
-        notes: `Agrupado na estrutura ${strategyName}`,
-        timestamp: now,
-      });
-    }
+      for (const legParam of params.legs) {
+        const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
+        const allocQty = legParam.allocatedQuantity ?? pos.quantity;
+        const legId = generateId('opt_strat_leg');
+
+        let econRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM' = legParam.economicRole || 'CUSTOM';
+        if (!legParam.economicRole) {
+          if ((pos.side === 'SELL' || pos.side === 'SHORT') && pos.optionType === 'PUT') {
+            econRole = 'FINANCING';
+          } else if ((pos.side === 'BUY' || pos.side === 'LONG') && pos.optionType === 'CALL') {
+            econRole = 'DIRECTIONAL';
+          }
+        }
+
+        await tx.insert(optionStrategyLegs).values({
+          id: legId,
+          strategyId,
+          positionId: pos.id,
+          allocatedQuantity: allocQty,
+          economicRole: econRole,
+          createdAt: now,
+        });
+
+        await tx.insert(strategyAllocationEvents).values({
+          id: generateId('strat_ev'),
+          strategyId,
+          positionId: pos.id,
+          eventType: 'GROUP',
+          allocatedQuantity: allocQty,
+          notes: `Agrupado na estrutura ${strategyName}`,
+          timestamp: now,
+        });
+      }
+    });
 
     revalidatePath('/opcoes');
     return { success: true, strategyId };
@@ -646,7 +658,7 @@ export async function groupOptionPositionsAction(params: {
 }
 
 /**
- * 3. Desagrupa Estrutura (Desfaz Relações com 100% de Segurança)
+ * 3. Desagrupa Estrutura (Desfaz Relações com 100% de Segurança Transacional)
  */
 export async function ungroupOptionStrategyAction(strategyId: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -663,20 +675,23 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
     });
 
     const now = new Date().toISOString();
-    for (const leg of legs) {
-      await db.insert(strategyAllocationEvents).values({
-        id: generateId('strat_ev'),
-        strategyId,
-        positionId: leg.positionId,
-        eventType: 'UNGROUP',
-        allocatedQuantity: leg.allocatedQuantity,
-        notes: `Desagrupado da estrutura ${existingStrategy.name}`,
-        timestamp: now,
-      });
-    }
 
-    // Deleta a estratégia (cascade deleta as legs, as posições permanecem intactas!)
-    await db.delete(optionStrategies).where(eq(optionStrategies.id, strategyId));
+    await db.transaction(async (tx) => {
+      for (const leg of legs) {
+        await tx.insert(strategyAllocationEvents).values({
+          id: generateId('strat_ev'),
+          strategyId,
+          positionId: leg.positionId,
+          eventType: 'UNGROUP',
+          allocatedQuantity: leg.allocatedQuantity,
+          notes: `Desagrupado da estrutura ${existingStrategy.name}`,
+          timestamp: now,
+        });
+      }
+
+      // Deleta a estratégia (cascade deleta as legs, as posições permanecem intactas!)
+      await tx.delete(optionStrategies).where(eq(optionStrategies.id, strategyId));
+    });
 
     revalidatePath('/opcoes');
     return { success: true };
@@ -759,7 +774,7 @@ export async function createOptionPosition(data: {
       iv: data.iv,
       pop: data.pop,
       breakEven: data.breakEven || breakEven,
-      cdiRateAnnual: data.cdiRateAnnual || 14.0,
+      cdiRateAnnual: toAnnualRateDecimal(data.cdiRateAnnual),
       notes: data.notes,
       createdAt: now,
       updatedAt: now,
@@ -849,6 +864,7 @@ export async function updateOptionPosition(
       ...data,
       allocatedCapital,
       breakEven: data.breakEven || breakEven,
+      cdiRateAnnual: data.cdiRateAnnual !== undefined ? toAnnualRateDecimal(data.cdiRateAnnual) : current.cdiRateAnnual,
       updatedAt: new Date().toISOString(),
     }).where(eq(optionPositions.id, id));
 
@@ -872,7 +888,7 @@ export async function closeOptionPosition(params: {
 }): Promise<{ success: boolean; error?: string }> {
   try {
     const now = new Date().toISOString();
-    const exitDate = params.exitDate || now.slice(0, 10);
+    const exitDate = params.exitDate || getBrazilTodayDate();
 
     // Ao encerrar a posição, também encerra as alocações/estruturas associadas
     await db.update(optionPositions).set({
@@ -909,7 +925,7 @@ export async function rollOptionPosition(params: {
     });
     if (!current) throw new Error('Posição original não encontrada');
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getBrazilTodayDate();
 
     await closeOptionPosition({
       id: params.currentPositionId,
