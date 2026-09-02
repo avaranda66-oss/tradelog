@@ -176,6 +176,8 @@ sqlite.exec(`
     underlying_ticker TEXT NOT NULL,
     collateral_mode TEXT DEFAULT 'IDLE_CASH',
     collateral_yield_pct_cdi REAL,
+    capital_remunerated_reais REAL,
+    collateral_coverage_pct REAL,
     status TEXT NOT NULL DEFAULT 'OPEN',
     opened_at TEXT NOT NULL,
     closed_at TEXT,
@@ -205,7 +207,8 @@ sqlite.exec(`
   );
 `);
 
-
+try { sqlite.exec('ALTER TABLE option_strategies ADD COLUMN capital_remunerated_reais REAL;'); } catch {}
+try { sqlite.exec('ALTER TABLE option_strategies ADD COLUMN collateral_coverage_pct REAL;'); } catch {}
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_bias TEXT;'); } catch {}
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_key_levels TEXT;'); } catch {}
 try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_news TEXT;'); } catch {}
