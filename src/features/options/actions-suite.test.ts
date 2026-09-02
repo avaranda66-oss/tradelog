@@ -675,9 +675,11 @@ export async function runActionsSuiteTests() {
     const correctedPos = db.query.optionPositions.findFirst({
       where: eq(optionPositions.id, newPos1Id),
     }).sync();
-    assert(correctedPos?.quantity === 1500, 'P0.3: Nova quantity = 1500');
-    assert(correctedPos?.openQuantity === 1500, 'P0.3: openQuantity atualizado atomicamente para 1500');
-    assert(correctedPos!.openQuantity <= correctedPos!.quantity, 'P0.3: Invariante 0 <= openQuantity <= quantity preservada');
+    assert(Boolean(correctedPos), 'P0.3: Posição corrigida encontrada no banco');
+    if (!correctedPos) throw new Error('correctedPos não encontrada');
+    assert(correctedPos.quantity === 1500, 'P0.3: Nova quantity = 1500');
+    assert(correctedPos.openQuantity === 1500, 'P0.3: openQuantity atualizado atomicamente para 1500');
+    assert((correctedPos.openQuantity ?? 0) <= correctedPos.quantity, 'P0.3: Invariante 0 <= openQuantity <= quantity preservada');
 
     // 6.5. P0.5: Bloqueio de Desagrupamento quando há histórico contábil (Execution)
     // Agrupa novamente para simular execução
