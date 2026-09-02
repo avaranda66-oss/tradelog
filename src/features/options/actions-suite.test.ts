@@ -46,6 +46,10 @@ export async function runActionsSuiteTests() {
     rollOptionPosition,
     partialCloseStrategyLegAction,
     scaleDownOptionStrategyAction,
+    previewScaleDownStrategyAction,
+    previewPartialCloseStrategyLegAction,
+    getStrategyManeuverReceiptAction,
+    getStrategyManeuverHistoryAction,
   } = await import('./actions');
 
   console.log('\n========================================');
@@ -76,6 +80,8 @@ export async function runActionsSuiteTests() {
   const itubStratId = 'fix_itub_strat_1';
   const lrenPutId = 'fix_lren_put_1';
   const dirCallId = 'fix_dir_call_1';
+  const mnvCallPosId = 'pos_mnv_call_1';
+  const mnvPutPosId = 'pos_mnv_put_1';
 
   try {
     // Limpeza Prévia Determinística
@@ -2820,6 +2826,181 @@ export async function runActionsSuiteTests() {
     assert(unsuppStrat.economicPerformance.annualizedEquivalentPct === null, 'P0 Funding Creation C: annualizedEquivalentPct === null');
     assert(unsuppStrat.economicPerformance.annualizationQuality === 'NOT_AVAILABLE', 'P0 Funding Creation C: annualizationQuality === NOT_AVAILABLE');
 
+    // =========================================================================
+    // 9. Phase 4.3 Pure Maneuver Planner, Preview, Fingerprint & Anti-Double-Submit
+    // =========================================================================
+    console.log('\n9. Phase 4.3 Pure Maneuver Planner, Preview, Fingerprint & Anti-Double-Submit Tests:');
+
+    // Criação das posições Golden ITUB: +200 CALL / -400 PUT
+    db.insert(optionPositions).values([
+      {
+        id: mnvCallPosId,
+        tickerOption: 'ITUBI393',
+        tickerUnderlying: 'ITUB4',
+        optionType: 'CALL',
+        side: 'BUY',
+        strategyType: 'COMPRA_CALL',
+        entryDate: '2026-08-24',
+        expirationDate: '2026-09-18',
+        strike: 38.69,
+        allocatedCapital: 236.0,
+        quantity: 200,
+        openQuantity: 200,
+        closedQuantity: 0,
+        legacyClosedQuantity: 0,
+        realizedPnlReais: 0,
+        entryPrice: 1.18,
+        currentPrice: 0.70,
+        status: 'OPEN',
+      },
+      {
+        id: mnvPutPosId,
+        tickerOption: 'ITUBU393',
+        tickerUnderlying: 'ITUB4',
+        optionType: 'PUT',
+        side: 'SELL',
+        strategyType: 'VENDA_PUT',
+        entryDate: '2026-08-24',
+        expirationDate: '2026-09-18',
+        strike: 38.69,
+        allocatedCapital: 15476.0,
+        quantity: 400,
+        openQuantity: 400,
+        closedQuantity: 0,
+        legacyClosedQuantity: 0,
+        realizedPnlReais: 0,
+        entryPrice: 1.04,
+        currentPrice: 0.30,
+        status: 'OPEN',
+      },
+    ]).run();
+
+    // Agrupamento canônico da Golden ITUB
+    const mnvGroupRes = await groupOptionPositionsAction({
+      name: 'Trava Golden ITUB Maneuver 4.3',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      underlyingTicker: 'ITUB4',
+      collateralMode: 'IDLE_CASH',
+      legs: [
+        { positionId: mnvCallPosId, allocatedQuantity: 200, economicRole: 'DIRECTIONAL' },
+        { positionId: mnvPutPosId, allocatedQuantity: 400, economicRole: 'INCOME' },
+      ],
+    });
+    assert(mnvGroupRes.success === true, 'P4.3 Setup: Agrupamento Golden ITUB criado com sucesso');
+    const createdMnvStratId = mnvGroupRes.strategyId!;
+
+    const mnvLegs = db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, createdMnvStratId),
+      orderBy: [asc(optionStrategyLegs.id)],
+    }).sync();
+    const mnvCallLeg = mnvLegs.find((l) => l.positionId === mnvCallPosId)!;
+    const mnvPutLeg = mnvLegs.find((l) => l.positionId === mnvPutPosId)!;
+
+    // 9.1 Pure Preview: Simulação 50% sem escrita
+    const preview50Res = await previewScaleDownStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 50,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.60, feesReais: 2.0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.20, feesReais: 3.0 },
+      ],
+      notes: 'Preview 50% test',
+    });
+    assert(preview50Res.success === true, 'P4.3 Preview: previewScaleDownStrategyAction executado com sucesso');
+    const plan50 = (preview50Res as any).plan;
+    assert(plan50.percentageReduced === 50, 'P4.3 Preview: percentageReduced === 50');
+    assert(plan50.unitsReduced === 100, 'P4.3 Preview: unitsReduced === 100 (50% do MDC 200)');
+    assert(plan50.executions.length === 2, 'P4.3 Preview: 2 execuções projetadas');
+    assert(plan50.preservesPreManeuverRatio === true, 'P4.3 Preview: preservesPreManeuverRatio === true');
+    assert(plan50.preservesOriginalRatio === true, 'P4.3 Preview: preservesOriginalRatio === true');
+    assert(plan50.capitalReleasedReais === 7738, `P4.3 Preview: capitalReleasedReais === 7738 (obtido: ${plan50.capitalReleasedReais})`);
+    assert(plan50.afterBenchmarkCapitalReais === 7738, `P4.3 Preview: afterBenchmarkCapitalReais === 7738 (obtido: ${plan50.afterBenchmarkCapitalReais})`);
+    assert(plan50.afterRisk.riskProfile.breakEvenInferior === 38.24, `P4.3 Preview: afterRisk.riskProfile.breakEvenInferior === 38.24 (obtido: ${plan50.afterRisk.riskProfile.breakEvenInferior})`);
+    assert(plan50.afterRisk.maxLossEconomicReais === 7648, `P4.3 Preview: afterRisk.maxLossEconomicReais === 7648 (obtido: ${plan50.afterRisk.maxLossEconomicReais})`);
+    assert(typeof plan50.previewFingerprint === 'string' && plan50.previewFingerprint.length === 64, 'P4.3 Preview: previewFingerprint é SHA-256 válido com 64 caracteres hex');
+
+    // Invariante de Pureza: ZERO escritas no banco durante preview
+    const mnvEventsCountBefore = db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, createdMnvStratId),
+    }).sync().length;
+    assert(mnvEventsCountBefore === 0, 'P4.3 Pureza: Preview não inseriu nenhum evento de manejo no banco');
+
+    // 9.2 Preview com Porcentagem Não-Representável (33.3% sobre MDC 200 -> 66.6 contratos)
+    const previewNonRepRes = await previewScaleDownStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 33.3,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.60 },
+        { strategyLegId: mnvPutLeg.id, price: 0.20 },
+      ],
+    });
+    assert(previewNonRepRes.success === false, 'P4.3 Validação: 33.3% sobre MDC 200 rejeitado');
+    assert((previewNonRepRes as any).errorCode === 'SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE', 'P4.3 Validação: Retorna errorCode SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE');
+
+    // 9.3 Stale Guard: Rejeição de fingerprint obsoleto ou forjado
+    const fakeFingerprint = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+    const staleExecRes = await scaleDownOptionStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 50,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.60, feesReais: 2.0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.20, feesReais: 3.0 },
+      ],
+      previewFingerprint: fakeFingerprint,
+    });
+    assert(staleExecRes.success === false, 'P4.3 Stale Guard: Fingerprint divergente rejeitado');
+    assert(staleExecRes.errorCode === 'STALE_MANEUVER_PREVIEW', 'P4.3 Stale Guard: Retorna errorCode STALE_MANEUVER_PREVIEW');
+
+    // 9.4 Execução Bem-Sucedida com o Fingerprint Genuíno
+    const genuineExecRes = await scaleDownOptionStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 50,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.60, feesReais: 2.0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.20, feesReais: 3.0 },
+      ],
+      previewFingerprint: plan50.previewFingerprint,
+    });
+    assert(genuineExecRes.success === true, 'P4.3 Execução: Manejo 50% executado com sucesso com fingerprint genuíno');
+    const maneuverEventId = genuineExecRes.maneuverEventId!;
+
+    // 9.5 Proteção Anti-Double-Submit em Nível de Banco (SQL)
+    // Tentar reexecutar a MESMA confirmação: bloqueia por stale preview ou conditional update
+    const doubleSubmitRes = await scaleDownOptionStrategyAction({
+      strategyId: createdMnvStratId,
+      percentageReduced: 50,
+      executionDate: '2026-08-25',
+      legs: [
+        { strategyLegId: mnvCallLeg.id, price: 0.60, feesReais: 2.0 },
+        { strategyLegId: mnvPutLeg.id, price: 0.20, feesReais: 3.0 },
+      ],
+      previewFingerprint: plan50.previewFingerprint,
+    });
+    assert(doubleSubmitRes.success === false, 'P4.3 Anti-Double-Submit: Replay imediato bloqueado');
+    assert(doubleSubmitRes.errorCode === 'STALE_MANEUVER_PREVIEW', 'P4.3 Anti-Double-Submit: Bloqueado por stale preview');
+
+    // 9.6 Recibo Canônico Pós-Execução
+    const receiptRes = await getStrategyManeuverReceiptAction(maneuverEventId);
+    assert(receiptRes.success === true, 'P4.3 Recibo: getStrategyManeuverReceiptAction executado com sucesso');
+    const receipt = receiptRes.receipt!;
+    assert(receipt.maneuverEventId === maneuverEventId, 'P4.3 Recibo: maneuverEventId corresponde');
+    assert(receipt.executions.length === 2, 'P4.3 Recibo: 2 execuções retornadas');
+    assert(receipt.auditCapitalReleasedReais === 7738, 'P4.3 Recibo: auditCapitalReleasedReais === 7738');
+    assert(receipt.preservesOriginalRatio === true, 'P4.3 Recibo: preservesOriginalRatio === true');
+    const expectedNetRealized = receipt.executions.reduce((acc, e) => acc + e.netRealizedPnlReais, 0);
+    assert(receipt.netRealizedPnlReais === Math.round(expectedNetRealized * 100) / 100, 'P4.3 Recibo: netRealizedPnlReais === SUM(executions)');
+
+    // 9.7 Histórico Visual Canônico
+    const historyRes = await getStrategyManeuverHistoryAction(createdMnvStratId);
+    assert(historyRes.success === true, 'P4.3 Histórico: getStrategyManeuverHistoryAction executado com sucesso');
+    assert(historyRes.history!.length === 1, 'P4.3 Histórico: Exatamente 1 evento de manejo listado');
+    assert(historyRes.history![0].executions[0].ticker.startsWith('ITUB'), 'P4.3 Histórico: Ticker resolvido corretamente');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
@@ -2831,6 +3012,7 @@ export async function runActionsSuiteTests() {
       'pos_ledger_check', 'pos_adv_call', 'pos_adv_put',
       'pos_leg_prop_a', 'pos_leg_prop_b',
       'pos_bps_short_put', 'pos_bps_long_put', 'pos_unb_naked_call', 'pos_unb_long_call_part', 'pos_unsupp_diag_1', 'pos_unsupp_diag_2',
+      mnvCallPosId, mnvPutPosId,
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',

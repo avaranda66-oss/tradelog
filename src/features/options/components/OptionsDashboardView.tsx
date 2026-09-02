@@ -12,6 +12,7 @@ import { EditPositionModal } from './EditPositionModal';
 import { OptionDetailDrawer } from './OptionDetailDrawer';
 import { GroupPositionsModal } from './GroupPositionsModal';
 import { EditStrategyFundingModal } from './EditStrategyFundingModal';
+import { ManageStrategyModal } from './ManageStrategyModal';
 import { closeOptionPosition } from '../actions';
 import { useRouter } from 'next/navigation';
 
@@ -37,6 +38,11 @@ export function OptionsDashboardView({
   const [selectedDrawerPosition, setSelectedDrawerPosition] = useState<EnrichedOptionPosition | null>(null);
   const [positionsToGroup, setPositionsToGroup] = useState<EnrichedOptionPosition[] | null>(null);
   const [fundingStrategy, setFundingStrategy] = useState<EnrichedOptionStrategy | null>(null);
+  const [manageStrategyState, setManageStrategyState] = useState<{
+    strategy: EnrichedOptionStrategy;
+    initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE';
+    initialLegId?: string;
+  } | null>(null);
 
   const handleRefresh = () => {
     startTransition(() => {
@@ -101,6 +107,7 @@ export function OptionsDashboardView({
         onOpenDetailDrawer={(pos) => setSelectedDrawerPosition(pos)}
         onOpenGroupModal={(selected) => setPositionsToGroup(selected)}
         onOpenFundingModal={(strat) => setFundingStrategy(strat)}
+        onOpenManageModal={(strat, initialMode, initialLegId) => setManageStrategyState({ strategy: strat, initialMode, initialLegId })}
         onRefresh={handleRefresh}
       />
 
@@ -118,6 +125,16 @@ export function OptionsDashboardView({
         isOpen={!!fundingStrategy}
         onClose={() => setFundingStrategy(null)}
         onUpdated={handleRefresh}
+      />
+
+      {/* Modal de Manejo Institucional de Estrutura (SCALE_DOWN & LEG_CLOSE) */}
+      <ManageStrategyModal
+        strategy={manageStrategyState?.strategy || null}
+        isOpen={!!manageStrategyState}
+        initialMode={manageStrategyState?.initialMode}
+        initialLegId={manageStrategyState?.initialLegId}
+        onClose={() => setManageStrategyState(null)}
+        onSuccess={handleRefresh}
       />
 
       {/* Modais & Drawer Quant */}

@@ -36,6 +36,25 @@ import {
 } from './calculations';
 import { getBrazilTodayDate, isB3TradingDay, type BusinessDate } from './b3-calendar';
 import { toAnnualRateDecimal } from './cdi-engine';
+import {
+  buildScaleDownManeuverPlan,
+  buildPartialLegCloseManeuverPlan,
+  calculateLegsGcd,
+  formatLegsRatio,
+  type ManeuverPlan,
+  type ManeuverPreviewExecution,
+  type ManeuverHistoryDTO,
+  type ManeuverHistoryExecutionDTO,
+  type RatioComponent,
+} from './maneuver-planner';
+
+export type {
+  ManeuverPlan,
+  ManeuverPreviewExecution,
+  ManeuverHistoryDTO,
+  ManeuverHistoryExecutionDTO,
+  RatioComponent,
+};
 
 function safeRevalidate(path: string = '/opcoes') {
   try {
@@ -1727,7 +1746,7 @@ export async function closeOptionPosition(params: {
         status: params.status,
         openQuantity: 0,
         closedQuantity: newClosedQuantity,
-        realizedPnlReais: newTotalRealizedPnl,
+realizedPnlReais: newTotalRealizedPnl,
         exitPrice: effectivePrice,
         exitDate,
         notes: params.notes ?? pos.notes,
@@ -1743,29 +1762,7 @@ export async function closeOptionPosition(params: {
   }
 }
 
-// ─── Proportional & GCD Helpers para Maneuvers ──────────────────────
-function gcd(a: number, b: number): number {
-  let x = Math.abs(a);
-  let y = Math.abs(b);
-  while (y) {
-    const t = y;
-    y = x % y;
-    x = t;
-  }
-  return x;
-}
-
-function calculateLegsGcd(quantities: number[]): number {
-  if (quantities.length === 0) return 0;
-  return quantities.reduce((acc, q) => gcd(acc, q));
-}
-
-function formatLegsRatio(legs: Array<{ quantity: number }>): string {
-  if (legs.length === 0) return '';
-  const g = calculateLegsGcd(legs.map((l) => l.quantity));
-  if (g === 0) return legs.map(() => '0').join(':');
-  return legs.map((l) => (l.quantity / g).toString()).join(':');
-}
+// ─── Proportional & Maneuver Actions (Backed by Shared Pure Planner) ─
 
 export interface PartialCloseStrategyLegParams {
   strategyId: string;
@@ -1775,167 +1772,138 @@ export interface PartialCloseStrategyLegParams {
   executionDate?: string;
   feesReais?: number;
   notes?: string;
+  previewFingerprint?: string;
 }
 
 /**
- * Encerra parcial ou totalmente uma perna específica de uma estratégia (LEG_CLOSE)
+ * Simula o encerramento parcial de uma perna (LEG_CLOSE) sem qualquer escrita no banco.
  */
-export async function partialCloseStrategyLegAction(
+export async function previewPartialCloseStrategyLegAction(
   params: PartialCloseStrategyLegParams
-): Promise<{ success: boolean; maneuverEventId?: string; executionId?: string; error?: string }> {
+): Promise<{ success: true; plan: ManeuverPlan } | { success: false; error: string; errorCode: string }> {
   try {
-    // 1. Validações de Boundary
     if (!Number.isInteger(params.quantity) || params.quantity <= 0) {
-      return { success: false, error: 'INVALID_QUANTITY: Quantidade deve ser um número inteiro positivo.' };
+      return { success: false, error: 'INVALID_QUANTITY: Quantidade deve ser um número inteiro positivo.', errorCode: 'INVALID_QUANTITY' };
     }
     if (!Number.isFinite(params.price) || params.price < 0) {
-      return { success: false, error: 'INVALID_PRICE: Preço deve ser um número finito não negativo.' };
+      return { success: false, error: 'INVALID_PRICE: Preço deve ser um número finito não negativo.', errorCode: 'INVALID_PRICE' };
     }
     const fees = params.feesReais !== undefined ? params.feesReais : 0;
     if (!Number.isFinite(fees) || fees < 0) {
-      return { success: false, error: 'INVALID_FEES: Custos devem ser um número finito não negativo.' };
+      return { success: false, error: 'INVALID_FEES: Custos devem ser um número finito não negativo.', errorCode: 'INVALID_FEES' };
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
     if (!isB3TradingDay(executionDate as BusinessDate)) {
-      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.' };
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
     }
 
-    // 2. Busca e validação da estratégia
     const strategy = await db.query.optionStrategies.findFirst({
       where: eq(optionStrategies.id, params.strategyId),
     });
     if (!strategy) {
-      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.' };
-    }
-    if (strategy.status !== 'OPEN') {
-      return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.' };
+      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.', errorCode: 'STRATEGY_NOT_FOUND' };
     }
 
-    // 3. Busca e validação das pernas
     const allLegs = await db.query.optionStrategyLegs.findMany({
       where: eq(optionStrategyLegs.strategyId, params.strategyId),
       orderBy: [asc(optionStrategyLegs.id)],
     });
     const targetLeg = allLegs.find((l) => l.id === params.strategyLegId);
     if (!targetLeg) {
-      return { success: false, error: 'STRATEGY_LEG_NOT_FOUND: Perna não encontrada na estratégia.' };
+      return { success: false, error: 'STRATEGY_LEG_NOT_FOUND: Perna não encontrada na estratégia.', errorCode: 'STRATEGY_LEG_NOT_FOUND' };
     }
 
-    const legOpenQty = targetLeg.openAllocatedQuantity ?? Math.max(0, targetLeg.allocatedQuantity - (targetLeg.closedAllocatedQuantity ?? 0));
-    if (params.quantity > legOpenQty) {
-      return { success: false, error: `INSUFFICIENT_LEG_OPEN_QUANTITY: Quantidade solicitada (${params.quantity}) excede o saldo aberto da perna (${legOpenQty}).` };
+    const positionsMap = new Map<string, OptionPosition>();
+    for (const leg of allLegs) {
+      const pos = await db.query.optionPositions.findFirst({
+        where: eq(optionPositions.id, leg.positionId),
+      });
+      if (pos) positionsMap.set(leg.positionId, pos);
     }
 
-    // 4. Busca e validação da posição correspondente
-    const targetPosition = await db.query.optionPositions.findFirst({
-      where: eq(optionPositions.id, targetLeg.positionId),
+    const openSegment = await db.query.strategyFundingSegments.findFirst({
+      where: and(
+        eq(strategyFundingSegments.strategyId, params.strategyId),
+        isNull(strategyFundingSegments.endDate)
+      ),
     });
-    if (!targetPosition) {
-      return { success: false, error: 'POSITION_NOT_FOUND: Posição correspondente à perna não encontrada.' };
-    }
-    if (targetPosition.status !== 'OPEN') {
-      return { success: false, error: 'POSITION_NOT_OPEN: Posição correspondente não está aberta.' };
-    }
-    if (executionDate < targetPosition.entryDate) {
-      return { success: false, error: `EXECUTION_DATE_BEFORE_ENTRY_DATE: Data de execução (${executionDate}) não pode ser anterior à data de entrada (${targetPosition.entryDate}).` };
-    }
-    const posOpenQty = targetPosition.openQuantity ?? targetPosition.quantity;
-    if (params.quantity > posOpenQty) {
-      return { success: false, error: `INSUFFICIENT_POSITION_OPEN_QUANTITY: Quantidade solicitada (${params.quantity}) excede o saldo aberto da posição (${posOpenQty}).` };
-    }
 
-    // 5. Cálculo de Ratios de Auditoria
-    const originalRatio = formatLegsRatio(allLegs.map((l) => ({ quantity: l.allocatedQuantity })));
-    const ratioBefore = formatLegsRatio(allLegs.map((l) => ({ quantity: l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)) })));
-    const postQuantities = allLegs.map((l) => {
-      const curOpen = l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0));
-      return { quantity: l.id === targetLeg.id ? curOpen - params.quantity : curOpen };
+    return buildPartialLegCloseManeuverPlan({
+      strategy,
+      allLegs,
+      targetLeg,
+      positionsMap,
+      openSegment,
+      quantity: params.quantity,
+      price: params.price,
+      feesReais: params.feesReais || 0,
+      executionDate,
+      notes: params.notes,
     });
-    const ratioAfter = formatLegsRatio(postQuantities);
-    const preservesOriginalRatio = ratioAfter !== '' && ratioAfter === originalRatio;
+  } catch (err: any) {
+    console.error('[Options Actions] Erro ao simular LEG_CLOSE:', err);
+    return { success: false, error: err.message || 'Erro ao simular LEG_CLOSE', errorCode: 'INTERNAL_ERROR' };
+  }
+}
 
-    // 6. Cálculo Financeiro da Execução
-    const isSell = targetPosition.side === 'SELL' || targetPosition.side === 'SHORT';
-    const executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
-    const unitGrossPnl = isSell ? (targetPosition.entryPrice - params.price) : (params.price - targetPosition.entryPrice);
-    const grossRealizedPnlReais = Math.round(unitGrossPnl * params.quantity * 100) / 100;
-    const netRealizedPnlReais = Math.round((grossRealizedPnlReais - fees) * 100) / 100;
+/**
+ * Encerra parcial ou totalmente uma perna específica de uma estratégia (LEG_CLOSE)
+ * Protegido por Preview Fingerprint Stale Guard e Condicionais SQL Exactly-Once.
+ */
+export async function partialCloseStrategyLegAction(
+  params: PartialCloseStrategyLegParams
+): Promise<{ success: boolean; maneuverEventId?: string; executionId?: string; error?: string; errorCode?: string }> {
+  try {
+    if (!Number.isInteger(params.quantity) || params.quantity <= 0) {
+      return { success: false, error: 'INVALID_QUANTITY: Quantidade deve ser um número inteiro positivo.', errorCode: 'INVALID_QUANTITY' };
+    }
+    if (!Number.isFinite(params.price) || params.price < 0) {
+      return { success: false, error: 'INVALID_PRICE: Preço deve ser um número finito não negativo.', errorCode: 'INVALID_PRICE' };
+    }
+    const fees = params.feesReais !== undefined ? params.feesReais : 0;
+    if (!Number.isFinite(fees) || fees < 0) {
+      return { success: false, error: 'INVALID_FEES: Custos devem ser um número finito não negativo.', errorCode: 'INVALID_FEES' };
+    }
+
+    const executionDate = params.executionDate || getBrazilTodayDate();
+    if (!isB3TradingDay(executionDate as BusinessDate)) {
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
+    }
 
     const maneuverEventId = generateId('strat_mnv');
     const execId = generateId('opt_pos_exec');
     const now = new Date().toISOString();
 
-    db.transaction((tx) => {
-      // 6.1 Criar Strategy Maneuver Event PRIMEIRO (Precedência estrita)
-      tx.insert(strategyManeuverEvents).values({
-        id: maneuverEventId,
-        strategyId: params.strategyId,
-        maneuverType: 'LEG_CLOSE',
-        percentageReduced: null,
-        unitsReduced: null,
-        executionDate,
-        auditRealizedPnlReais: grossRealizedPnlReais,
-        auditCapitalReleasedReais: null,
-        auditRatioBefore: ratioBefore,
-        auditRatioAfter: ratioAfter,
-        preservesOriginalRatio,
-        notes: params.notes || 'Encerramento parcial de perna',
-        createdAt: now,
-      }).run();
-
-      // 6.2 Criar Option Position Execution vinculada ao Maneuver
-      tx.insert(optionPositionExecutions).values({
-        id: execId,
-        positionId: targetPosition.id,
-        strategyId: params.strategyId,
-        strategyLegId: targetLeg.id,
-        maneuverEventId,
-        executionType,
-        quantity: params.quantity,
-        price: params.price,
-        executionDate,
-        entryPriceBasisReais: targetPosition.entryPrice,
-        grossRealizedPnlReais,
-        feesReais: fees,
-        netRealizedPnlReais,
-        source: 'USER_MANUAL',
-        notes: params.notes,
-        createdAt: now,
-      }).run();
-
-      // 6.3 Atualização atômica condicional da perna
-      const legRes = tx.run(sql`
-        UPDATE option_strategy_legs
-        SET open_allocated_quantity = open_allocated_quantity - ${params.quantity},
-            closed_allocated_quantity = closed_allocated_quantity + ${params.quantity}
-        WHERE id = ${targetLeg.id} AND open_allocated_quantity >= ${params.quantity}
-      `);
-      if (legRes.changes !== 1) {
-        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na perna.');
-      }
-
-      // 6.4 Atualização atômica condicional da posição
-      const posRes = tx.run(sql`
-        UPDATE option_positions
-        SET open_quantity = open_quantity - ${params.quantity},
-            closed_quantity = closed_quantity + ${params.quantity},
-            realized_pnl_reais = realized_pnl_reais + ${netRealizedPnlReais},
-            status = CASE WHEN open_quantity - ${params.quantity} = 0 THEN 'CLOSED' ELSE status END,
-            exit_date = CASE WHEN open_quantity - ${params.quantity} = 0 THEN ${executionDate} ELSE exit_date END,
-            exit_price = CASE WHEN open_quantity - ${params.quantity} = 0 THEN ${params.price} ELSE exit_price END,
-            updated_at = ${now}
-        WHERE id = ${targetPosition.id} AND open_quantity >= ${params.quantity}
-      `);
-      if (posRes.changes !== 1) {
-        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na posição.');
-      }
-
-      // 6.5 Reconciliação da estratégia e evolução do segmento de funding
-      const remainingLegs = tx.query.optionStrategyLegs.findMany({
-        where: eq(optionStrategyLegs.strategyId, params.strategyId),
+    const txRes = db.transaction((tx) => {
+      // 1. Recarregar estado dentro da transaction
+      const strategy = tx.query.optionStrategies.findFirst({
+        where: eq(optionStrategies.id, params.strategyId),
       }).sync();
-      const totalRemainingOpen = remainingLegs.reduce((acc, l) => acc + (l.openAllocatedQuantity ?? 0), 0);
+      if (!strategy) {
+        return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.', errorCode: 'STRATEGY_NOT_FOUND' };
+      }
+      if (strategy.status !== 'OPEN') {
+        return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.', errorCode: 'STRATEGY_NOT_OPEN' };
+      }
+
+      const allLegs = tx.query.optionStrategyLegs.findMany({
+        where: eq(optionStrategyLegs.strategyId, params.strategyId),
+        orderBy: [asc(optionStrategyLegs.id)],
+      }).sync();
+
+      const targetLeg = allLegs.find((l) => l.id === params.strategyLegId);
+      if (!targetLeg) {
+        return { success: false, error: 'STRATEGY_LEG_NOT_FOUND: Perna não encontrada na estratégia.', errorCode: 'STRATEGY_LEG_NOT_FOUND' };
+      }
+
+      const positionsMap = new Map<string, OptionPosition>();
+      for (const leg of allLegs) {
+        const pos = tx.query.optionPositions.findFirst({
+          where: eq(optionPositions.id, leg.positionId),
+        }).sync();
+        if (pos) positionsMap.set(leg.positionId, pos);
+      }
 
       const openSegment = tx.query.strategyFundingSegments.findFirst({
         where: and(
@@ -1944,48 +1912,126 @@ export async function partialCloseStrategyLegAction(
         ),
       }).sync();
 
-      if (totalRemainingOpen === 0) {
-        // Todas as pernas foram zeradas: estratégia torna-se terminal CLOSED
+      // 2. Executar o MESMO planner puro compartilhado
+      const planResult = buildPartialLegCloseManeuverPlan({
+        strategy,
+        allLegs,
+        targetLeg,
+        positionsMap,
+        openSegment,
+        quantity: params.quantity,
+        price: params.price,
+        feesReais: params.feesReais || 0,
+        executionDate,
+        notes: params.notes,
+      });
+
+      if (!planResult.success) {
+        return { success: false, error: planResult.error, errorCode: planResult.errorCode };
+      }
+
+      const plan = planResult.plan;
+
+      // 3. Validação de Stale Preview (P0)
+      if (params.previewFingerprint && params.previewFingerprint !== plan.previewFingerprint) {
+        return {
+          success: false,
+          errorCode: 'STALE_MANEUVER_PREVIEW',
+          error: 'STALE_MANEUVER_PREVIEW: A estrutura mudou desde a simulação. Gere um novo preview antes de confirmar.',
+        };
+      }
+
+      const exec = plan.executions[0];
+      const pos = positionsMap.get(exec.positionId)!;
+
+      // 4. Inserir Strategy Maneuver Event PRIMEIRO (Precedência estrita)
+      tx.insert(strategyManeuverEvents).values({
+        id: maneuverEventId,
+        strategyId: params.strategyId,
+        maneuverType: 'LEG_CLOSE',
+        percentageReduced: null,
+        unitsReduced: null,
+        executionDate,
+        auditRealizedPnlReais: plan.grossRealizedPnlReais,
+        auditCapitalReleasedReais: plan.capitalReleasedReais,
+        auditRatioBefore: plan.ratioBefore,
+        auditRatioAfter: plan.ratioAfter,
+        preservesOriginalRatio: plan.preservesOriginalRatio,
+        notes: params.notes || `Fechamento parcial de ${params.quantity} unidades da perna ${pos.tickerOption}`,
+        createdAt: now,
+      }).run();
+
+      // 5. Inserir execution com mesmo maneuverEventId
+      tx.insert(optionPositionExecutions).values({
+        id: execId,
+        positionId: pos.id,
+        strategyId: params.strategyId,
+        strategyLegId: targetLeg.id,
+        maneuverEventId,
+        executionType: exec.executionType,
+        quantity: exec.quantity,
+        price: exec.price,
+        executionDate,
+        entryPriceBasisReais: pos.entryPrice,
+        grossRealizedPnlReais: exec.grossRealizedPnlReais,
+        feesReais: exec.feesReais,
+        netRealizedPnlReais: exec.netRealizedPnlReais,
+        source: 'USER_MANUAL',
+        notes: params.notes,
+        createdAt: now,
+      }).run();
+
+      // 6. Conditional SQL update da leg com expectedLegOpenBefore (P0 Anti-Double-Submit)
+      const legRes = tx.run(sql`
+        UPDATE option_strategy_legs
+        SET open_allocated_quantity = open_allocated_quantity - ${exec.quantity},
+            closed_allocated_quantity = closed_allocated_quantity + ${exec.quantity}
+        WHERE id = ${targetLeg.id}
+          AND open_allocated_quantity = ${exec.expectedLegOpenBefore}
+          AND open_allocated_quantity >= ${exec.quantity}
+      `);
+      if (legRes.changes !== 1) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência detectada ou saldo já modificado na perna.');
+      }
+
+      // 7. Conditional SQL update da position com expectedPositionOpenBefore (P0 Anti-Double-Submit)
+      const posRes = tx.run(sql`
+        UPDATE option_positions
+        SET open_quantity = open_quantity - ${exec.quantity},
+            closed_quantity = closed_quantity + ${exec.quantity},
+            realized_pnl_reais = realized_pnl_reais + ${exec.netRealizedPnlReais},
+            status = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN 'CLOSED' ELSE status END,
+            exit_date = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN ${executionDate} ELSE exit_date END,
+            exit_price = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN ${exec.price} ELSE exit_price END,
+            updated_at = ${now}
+        WHERE id = ${pos.id}
+          AND open_quantity = ${exec.expectedPositionOpenBefore}
+          AND open_quantity >= ${exec.quantity}
+      `);
+      if (posRes.changes !== 1) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência detectada ou saldo já modificado na posição.');
+      }
+
+      // 8. Transição de Funding
+      if (openSegment) {
+        tx.update(strategyFundingSegments)
+          .set({ endDate: executionDate })
+          .where(eq(strategyFundingSegments.id, openSegment.id))
+          .run();
+      }
+
+      if (plan.strategyWillClose) {
         tx.update(optionStrategies).set({
           status: 'CLOSED',
           closedAt: executionDate,
+          capitalRemuneratedReais: 0,
           updatedAt: now,
         }).where(eq(optionStrategies.id, params.strategyId)).run();
-
-        if (openSegment) {
-          tx.update(strategyFundingSegments)
-            .set({ endDate: executionDate })
-            .where(eq(strategyFundingSegments.id, openSegment.id))
-            .run();
-        }
       } else {
-        // Ainda há contratos abertos: recalcular benchmark capital e abrir novo segmento
-        if (openSegment) {
-          tx.update(strategyFundingSegments)
-            .set({ endDate: executionDate })
-            .where(eq(strategyFundingSegments.id, openSegment.id))
-            .run();
-        }
-
-        const remainingOpenLegs = remainingLegs.filter((l) => (l.openAllocatedQuantity ?? 0) > 0);
-        const remainingLegsForBenchmark = remainingOpenLegs.map((l) => {
-          const p = tx.query.optionPositions.findFirst({ where: eq(optionPositions.id, l.positionId) }).sync()!;
-          return {
-            allocatedQuantity: l.openAllocatedQuantity ?? 0,
-            economicRole: l.economicRole,
-            position: {
-              ...p,
-              optionType: p.optionType as 'CALL' | 'PUT',
-              side: p.side as 'SELL' | 'SHORT' | 'BUY' | 'LONG',
-            },
-          };
-        });
-
-        const residualRisk = calculateStrategyCanonicalResidualRisk(remainingLegsForBenchmark);
-        const newBenchmarkCapital = residualRisk.benchmarkCapitalReais;
+        const residualRisk = plan.afterRisk;
+        const newBenchmarkCapital = plan.afterBenchmarkCapitalReais;
         let newSegmentQuality = openSegment ? openSegment.quality : 'FULL';
 
-        // Fail-safe institucional para risco residual desconhecido ou ilimitado
         if (residualRisk.riskRecognitionQuality === 'UNKNOWN' || residualRisk.maxLossType === 'UNBOUNDED') {
           newSegmentQuality = 'INSUFFICIENT_DATA';
         }
@@ -2019,20 +2065,27 @@ export async function partialCloseStrategyLegAction(
           createdAt: now,
         }).run();
 
-        // RECONCILIAÇÃO ATÔMICA DA STRATEGY ROW: atualiza o snapshot corrente no banco
         tx.update(optionStrategies).set({
           capitalRemuneratedReais: newCapitalRemunerated,
           collateralMode: currentMode,
           updatedAt: now,
         }).where(eq(optionStrategies.id, params.strategyId)).run();
       }
+
+      return { success: true, maneuverEventId, executionId: execId };
     });
 
-    safeRevalidate('/opcoes');
-    return { success: true, maneuverEventId, executionId: execId };
+    if (txRes.success) {
+      safeRevalidate('/opcoes');
+    }
+    return txRes;
   } catch (err: any) {
     console.error('[Options Actions] Erro em partialCloseStrategyLegAction:', err);
-    return { success: false, error: err.message || 'Erro ao fechar perna da estratégia' };
+    return {
+      success: false,
+      error: err.message || 'Erro ao fechar perna da estratégia',
+      errorCode: err.message?.startsWith('STALE') ? 'STALE_MANEUVER_PREVIEW' : 'INTERNAL_ERROR',
+    };
   }
 }
 
@@ -2046,230 +2099,131 @@ export interface ScaleDownOptionStrategyParams {
     feesReais?: number;
   }>;
   notes?: string;
+  previewFingerprint?: string;
 }
 
 /**
- * Reduz proporcionalmente todas as pernas abertas de uma estratégia (SCALE_DOWN)
+ * Simula a redução proporcional da estratégia (SCALE_DOWN) sem qualquer escrita no banco.
  */
-export async function scaleDownOptionStrategyAction(
+export async function previewScaleDownStrategyAction(
   params: ScaleDownOptionStrategyParams
-): Promise<{ success: boolean; maneuverEventId?: string; error?: string }> {
+): Promise<{ success: true; plan: ManeuverPlan } | { success: false; error: string; errorCode: string }> {
   try {
-    // 1. Validação da porcentagem
     if (!Number.isFinite(params.percentageReduced) || params.percentageReduced <= 0 || params.percentageReduced >= 100) {
       return {
         success: false,
+        errorCode: 'INVALID_SCALE_DOWN_PERCENTAGE',
         error: 'INVALID_SCALE_DOWN_PERCENTAGE: A porcentagem de redução deve estar entre 0% e 100% (exclusivos). Para encerramento total (100%), utilize o fechamento completo da estratégia.',
       };
     }
 
     const executionDate = params.executionDate || getBrazilTodayDate();
     if (!isB3TradingDay(executionDate as BusinessDate)) {
-      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.' };
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
     }
 
-    // 2. Busca e validação da estratégia
     const strategy = await db.query.optionStrategies.findFirst({
       where: eq(optionStrategies.id, params.strategyId),
     });
     if (!strategy) {
-      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.' };
-    }
-    if (strategy.status !== 'OPEN') {
-      return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.' };
+      return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.', errorCode: 'STRATEGY_NOT_FOUND' };
     }
 
-    // 3. Busca e validação das pernas abertas
     const allLegs = await db.query.optionStrategyLegs.findMany({
       where: eq(optionStrategyLegs.strategyId, params.strategyId),
       orderBy: [asc(optionStrategyLegs.id)],
     });
-
     const openLegs = allLegs.filter((l) => {
       const openQty = l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0));
       return openQty > 0;
     });
 
-    if (openLegs.length === 0) {
-      return { success: false, error: 'NO_OPEN_LEGS_IN_STRATEGY: Não há pernas abertas na estratégia para redução.' };
-    }
-
-    if (!Array.isArray(params.legs) || params.legs.length !== openLegs.length) {
-      return {
-        success: false,
-        error: `MISSING_LEG_INPUT: O cliente deve fornecer exatamente uma entrada de execução para cada perna aberta da estratégia (esperado: ${openLegs.length}, recebido: ${params.legs?.length ?? 0}).`,
-      };
-    }
-
-    const legInputMap = new Map<string, { price: number; feesReais?: number }>();
-    const seenLegIds = new Set<string>();
-
-    for (const legInput of params.legs) {
-      if (seenLegIds.has(legInput.strategyLegId)) {
-        return { success: false, error: `DUPLICATE_LEG_INPUT: Perna '${legInput.strategyLegId}' fornecida em duplicidade.` };
-      }
-      seenLegIds.add(legInput.strategyLegId);
-
-      if (!openLegs.some((l) => l.id === legInput.strategyLegId)) {
-        return { success: false, error: `INVALID_LEG_INPUT: Perna '${legInput.strategyLegId}' não pertence à estratégia ou já se encontra fechada.` };
-      }
-      if (!Number.isFinite(legInput.price) || legInput.price < 0) {
-        return { success: false, error: `INVALID_PRICE: Preço inválido para a perna '${legInput.strategyLegId}'.` };
-      }
-      if (legInput.feesReais !== undefined && (!Number.isFinite(legInput.feesReais) || legInput.feesReais < 0)) {
-        return { success: false, error: `INVALID_FEES: Custos inválidos para a perna '${legInput.strategyLegId}'.` };
-      }
-      legInputMap.set(legInput.strategyLegId, { price: legInput.price, feesReais: legInput.feesReais || 0 });
-    }
-
-    // 4. Algoritmo GCD / MDC para derivação estrita das quantidades pelo Servidor
-    const openQuantities = openLegs.map((l) => l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)));
-    const strategyGcd = calculateLegsGcd(openQuantities);
-    const unitsToReduce = (strategyGcd * params.percentageReduced) / 100.0;
-
-    if (!Number.isInteger(unitsToReduce) || unitsToReduce < 1) {
-      return {
-        success: false,
-        error: `SCALE_DOWN_PERCENTAGE_NOT_REPRESENTABLE: A porcentagem ${params.percentageReduced}% sobre a unidade base da estratégia (MDC: ${strategyGcd}) resulta em ${unitsToReduce} unidades, que não é um número inteiro de contratos.`,
-      };
-    }
-
-    const qtyToCloseByLegId = new Map<string, number>();
-    const newOpenByLegId = new Map<string, number>();
-
-    for (let i = 0; i < openLegs.length; i++) {
-      const leg = openLegs[i];
-      const curOpen = openQuantities[i];
-      const legRatioMultiplier = curOpen / strategyGcd;
-      const legQtyToClose = legRatioMultiplier * unitsToReduce;
-      qtyToCloseByLegId.set(leg.id, legQtyToClose);
-      newOpenByLegId.set(leg.id, curOpen - legQtyToClose);
-    }
-
-    // 5. Ratios de Auditoria e Preservação de Razão
-    const originalRatio = formatLegsRatio(allLegs.map((l) => ({ quantity: l.allocatedQuantity })));
-    const auditRatioBefore = formatLegsRatio(openLegs.map((l) => ({ quantity: l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0)) })));
-    const auditRatioAfter = formatLegsRatio(openLegs.map((l) => ({ quantity: newOpenByLegId.get(l.id)! })));
-    const preservesOriginalRatio = auditRatioAfter !== '' && auditRatioAfter === originalRatio;
-
-    // 6. Pré-validação das posições
     const positionsMap = new Map<string, OptionPosition>();
-    for (const leg of openLegs) {
+    for (const leg of allLegs) {
       const pos = await db.query.optionPositions.findFirst({
         where: eq(optionPositions.id, leg.positionId),
       });
-      if (!pos) {
-        return { success: false, error: `POSITION_NOT_FOUND: Posição para a perna '${leg.id}' não encontrada.` };
-      }
-      if (pos.status !== 'OPEN') {
-        return { success: false, error: `POSITION_NOT_OPEN: Posição '${pos.tickerOption}' não está aberta.` };
-      }
-      if (executionDate < pos.entryDate) {
-        return { success: false, error: `EXECUTION_DATE_BEFORE_ENTRY_DATE: Data de execução (${executionDate}) não pode ser anterior à data de entrada (${pos.entryDate}).` };
-      }
-      const posOpenQty = pos.openQuantity ?? pos.quantity;
-      const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
-      if (qtyToClose > posOpenQty) {
-        return { success: false, error: `INSUFFICIENT_POSITION_OPEN_QUANTITY: Quantidade a encerrar (${qtyToClose}) excede saldo da posição (${posOpenQty}).` };
-      }
-      positionsMap.set(leg.positionId, pos);
+      if (pos) positionsMap.set(leg.positionId, pos);
     }
 
-    // 7. Cálculo preliminar de P&L de auditoria
-    let totalAuditGrossRealizedPnl = 0;
-    for (const leg of openLegs) {
-      const pos = positionsMap.get(leg.positionId)!;
-      const legInput = legInputMap.get(leg.id)!;
-      const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
-      const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
-      const unitPnl = isSell ? (pos.entryPrice - legInput.price) : (legInput.price - pos.entryPrice);
-      totalAuditGrossRealizedPnl += Math.round(unitPnl * qtyToClose * 100) / 100;
+    const openSegment = await db.query.strategyFundingSegments.findFirst({
+      where: and(
+        eq(strategyFundingSegments.strategyId, params.strategyId),
+        isNull(strategyFundingSegments.endDate)
+      ),
+    });
+
+    return buildScaleDownManeuverPlan({
+      strategy,
+      allLegs,
+      openLegs,
+      positionsMap,
+      openSegment,
+      percentageReduced: params.percentageReduced,
+      executionDate,
+      legInputs: params.legs || [],
+      notes: params.notes,
+    });
+  } catch (err: any) {
+    console.error('[Options Actions] Erro ao simular SCALE_DOWN:', err);
+    return { success: false, error: err.message || 'Erro ao simular SCALE_DOWN', errorCode: 'INTERNAL_ERROR' };
+  }
+}
+
+/**
+ * Reduz proporcionalmente todas as pernas abertas de uma estratégia (SCALE_DOWN)
+ * Protegido por Preview Fingerprint Stale Guard e Condicionais SQL Exactly-Once.
+ */
+export async function scaleDownOptionStrategyAction(
+  params: ScaleDownOptionStrategyParams
+): Promise<{ success: boolean; maneuverEventId?: string; error?: string; errorCode?: string }> {
+  try {
+    if (!Number.isFinite(params.percentageReduced) || params.percentageReduced <= 0 || params.percentageReduced >= 100) {
+      return {
+        success: false,
+        errorCode: 'INVALID_SCALE_DOWN_PERCENTAGE',
+        error: 'INVALID_SCALE_DOWN_PERCENTAGE: A porcentagem de redução deve estar entre 0% e 100% (exclusivos). Para encerramento total (100%), utilize o fechamento completo da estratégia.',
+      };
     }
-    totalAuditGrossRealizedPnl = Math.round(totalAuditGrossRealizedPnl * 100) / 100;
+
+    const executionDate = params.executionDate || getBrazilTodayDate();
+    if (!isB3TradingDay(executionDate as BusinessDate)) {
+      return { success: false, error: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY: A data de execução deve corresponder a um pregão válido da B3.', errorCode: 'INVALID_EXECUTION_DATE_NON_TRADING_DAY' };
+    }
 
     const maneuverEventId = generateId('strat_mnv');
     const now = new Date().toISOString();
 
-    db.transaction((tx) => {
-      // 7.1 Criar Strategy Maneuver Event PRIMEIRO (Precedência estrita)
-      tx.insert(strategyManeuverEvents).values({
-        id: maneuverEventId,
-        strategyId: params.strategyId,
-        maneuverType: 'SCALE_DOWN',
-        percentageReduced: params.percentageReduced,
-        unitsReduced: unitsToReduce,
-        executionDate,
-        auditRealizedPnlReais: totalAuditGrossRealizedPnl,
-        auditCapitalReleasedReais: null,
-        auditRatioBefore,
-        auditRatioAfter,
-        preservesOriginalRatio,
-        notes: params.notes || `Redução proporcional de ${params.percentageReduced}% da estrutura`,
-        createdAt: now,
-      }).run();
-
-      // 7.2 Gerar Execuções e Atualizar Pernas e Posições Condicionalmente
-      for (const leg of openLegs) {
-        const pos = positionsMap.get(leg.positionId)!;
-        const legInput = legInputMap.get(leg.id)!;
-        const qtyToClose = qtyToCloseByLegId.get(leg.id)!;
-
-        const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
-        const executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
-        const unitGrossPnl = isSell ? (pos.entryPrice - legInput.price) : (legInput.price - pos.entryPrice);
-        const grossRealizedPnlReais = Math.round(unitGrossPnl * qtyToClose * 100) / 100;
-        const fees = legInput.feesReais || 0;
-        const netRealizedPnlReais = Math.round((grossRealizedPnlReais - fees) * 100) / 100;
-
-        // Inserir execution com mesmo maneuverEventId
-        tx.insert(optionPositionExecutions).values({
-          id: generateId('opt_pos_exec'),
-          positionId: pos.id,
-          strategyId: params.strategyId,
-          strategyLegId: leg.id,
-          maneuverEventId,
-          executionType,
-          quantity: qtyToClose,
-          price: legInput.price,
-          executionDate,
-          entryPriceBasisReais: pos.entryPrice,
-          grossRealizedPnlReais,
-          feesReais: fees,
-          netRealizedPnlReais,
-          source: 'USER_MANUAL',
-          notes: params.notes,
-          createdAt: now,
-        }).run();
-
-        // Atualização atômica condicional da perna
-        const legRes = tx.run(sql`
-          UPDATE option_strategy_legs
-          SET open_allocated_quantity = open_allocated_quantity - ${qtyToClose},
-              closed_allocated_quantity = closed_allocated_quantity + ${qtyToClose}
-          WHERE id = ${leg.id} AND open_allocated_quantity >= ${qtyToClose}
-        `);
-        if (legRes.changes !== 1) {
-          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na perna.');
-        }
-
-        // Atualização atômica condicional da posição
-        const posRes = tx.run(sql`
-          UPDATE option_positions
-          SET open_quantity = open_quantity - ${qtyToClose},
-              closed_quantity = closed_quantity + ${qtyToClose},
-              realized_pnl_reais = realized_pnl_reais + ${netRealizedPnlReais},
-              status = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN 'CLOSED' ELSE status END,
-              exit_date = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN ${executionDate} ELSE exit_date END,
-              exit_price = CASE WHEN open_quantity - ${qtyToClose} = 0 THEN ${legInput.price} ELSE exit_price END,
-              updated_at = ${now}
-          WHERE id = ${pos.id} AND open_quantity >= ${qtyToClose}
-        `);
-        if (posRes.changes !== 1) {
-          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência ou saldo insuficiente na posição.');
-        }
+    const txRes = db.transaction((tx) => {
+      // 1. Recarregar dentro da transaction
+      const strategy = tx.query.optionStrategies.findFirst({
+        where: eq(optionStrategies.id, params.strategyId),
+      }).sync();
+      if (!strategy) {
+        return { success: false, error: 'STRATEGY_NOT_FOUND: Estratégia não encontrada.', errorCode: 'STRATEGY_NOT_FOUND' };
+      }
+      if (strategy.status !== 'OPEN') {
+        return { success: false, error: 'STRATEGY_NOT_OPEN: A estratégia não está aberta para manobras.', errorCode: 'STRATEGY_NOT_OPEN' };
       }
 
-      // 7.3 Evolução do Segmento de Funding (Transição Limpa)
+      const allLegs = tx.query.optionStrategyLegs.findMany({
+        where: eq(optionStrategyLegs.strategyId, params.strategyId),
+        orderBy: [asc(optionStrategyLegs.id)],
+      }).sync();
+
+      const openLegs = allLegs.filter((l) => {
+        const openQty = l.openAllocatedQuantity ?? Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0));
+        return openQty > 0;
+      });
+
+      const positionsMap = new Map<string, OptionPosition>();
+      for (const leg of allLegs) {
+        const pos = tx.query.optionPositions.findFirst({
+          where: eq(optionPositions.id, leg.positionId),
+        }).sync();
+        if (pos) positionsMap.set(leg.positionId, pos);
+      }
+
       const openSegment = tx.query.strategyFundingSegments.findFirst({
         where: and(
           eq(strategyFundingSegments.strategyId, params.strategyId),
@@ -2277,6 +2231,105 @@ export async function scaleDownOptionStrategyAction(
         ),
       }).sync();
 
+      // 2. Executar o MESMO planner puro compartilhado
+      const planResult = buildScaleDownManeuverPlan({
+        strategy,
+        allLegs,
+        openLegs,
+        positionsMap,
+        openSegment,
+        percentageReduced: params.percentageReduced,
+        executionDate,
+        legInputs: params.legs || [],
+        notes: params.notes,
+      });
+
+      if (!planResult.success) {
+        return { success: false, error: planResult.error, errorCode: planResult.errorCode };
+      }
+
+      const plan = planResult.plan;
+
+      // 3. Validação de Stale Preview (P0)
+      if (params.previewFingerprint && params.previewFingerprint !== plan.previewFingerprint) {
+        return {
+          success: false,
+          errorCode: 'STALE_MANEUVER_PREVIEW',
+          error: 'STALE_MANEUVER_PREVIEW: A estrutura mudou desde a simulação. Gere um novo preview antes de confirmar.',
+        };
+      }
+
+      // 4. Inserir Strategy Maneuver Event PRIMEIRO (Precedência estrita)
+      tx.insert(strategyManeuverEvents).values({
+        id: maneuverEventId,
+        strategyId: params.strategyId,
+        maneuverType: 'SCALE_DOWN',
+        percentageReduced: plan.percentageReduced,
+        unitsReduced: plan.unitsReduced,
+        executionDate,
+        auditRealizedPnlReais: plan.grossRealizedPnlReais,
+        auditCapitalReleasedReais: plan.capitalReleasedReais,
+        auditRatioBefore: plan.ratioBefore,
+        auditRatioAfter: plan.ratioAfter,
+        preservesOriginalRatio: plan.preservesOriginalRatio,
+        notes: params.notes || `Redução proporcional de ${plan.percentageReduced}% da estrutura`,
+        createdAt: now,
+      }).run();
+
+      // 5. Inserir Execuções e Atualizações Condicionais com verificação de changes === 1 (P0 Anti-Double-Submit)
+      for (const exec of plan.executions) {
+        tx.insert(optionPositionExecutions).values({
+          id: generateId('opt_pos_exec'),
+          positionId: exec.positionId,
+          strategyId: params.strategyId,
+          strategyLegId: exec.strategyLegId,
+          maneuverEventId,
+          executionType: exec.executionType,
+          quantity: exec.quantity,
+          price: exec.price,
+          executionDate,
+          entryPriceBasisReais: positionsMap.get(exec.positionId)!.entryPrice,
+          grossRealizedPnlReais: exec.grossRealizedPnlReais,
+          feesReais: exec.feesReais,
+          netRealizedPnlReais: exec.netRealizedPnlReais,
+          source: 'USER_MANUAL',
+          notes: params.notes,
+          createdAt: now,
+        }).run();
+
+        // Guard condicional da leg: open_allocated_quantity DEVE bater com o expectedLegOpenBefore
+        const legRes = tx.run(sql`
+          UPDATE option_strategy_legs
+          SET open_allocated_quantity = open_allocated_quantity - ${exec.quantity},
+              closed_allocated_quantity = closed_allocated_quantity + ${exec.quantity}
+          WHERE id = ${exec.strategyLegId}
+            AND open_allocated_quantity = ${exec.expectedLegOpenBefore}
+            AND open_allocated_quantity >= ${exec.quantity}
+        `);
+        if (legRes.changes !== 1) {
+          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência detectada ou saldo já modificado na perna.');
+        }
+
+        // Guard condicional da position: open_quantity DEVE bater com o expectedPositionOpenBefore
+        const posRes = tx.run(sql`
+          UPDATE option_positions
+          SET open_quantity = open_quantity - ${exec.quantity},
+              closed_quantity = closed_quantity + ${exec.quantity},
+              realized_pnl_reais = realized_pnl_reais + ${exec.netRealizedPnlReais},
+              status = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN 'CLOSED' ELSE status END,
+              exit_date = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN ${executionDate} ELSE exit_date END,
+              exit_price = CASE WHEN open_quantity - ${exec.quantity} = 0 THEN ${exec.price} ELSE exit_price END,
+              updated_at = ${now}
+        WHERE id = ${exec.positionId}
+          AND open_quantity = ${exec.expectedPositionOpenBefore}
+          AND open_quantity >= ${exec.quantity}
+        `);
+        if (posRes.changes !== 1) {
+          throw new Error('CONCURRENT_MODIFICATION_OR_INSUFFICIENT_QUANTITY: Concorrência detectada ou saldo já modificado na posição.');
+        }
+      }
+
+      // 6. Transição de Funding (Fechar antigo e abrir novo)
       if (openSegment) {
         tx.update(strategyFundingSegments)
           .set({ endDate: executionDate })
@@ -2284,25 +2337,10 @@ export async function scaleDownOptionStrategyAction(
           .run();
       }
 
-      // Recalcular novo benchmark capital para as pernas com saldos abertos residuais
-      const remainingLegsForBenchmark = openLegs.map((l) => {
-        const p = positionsMap.get(l.positionId)!;
-        return {
-          allocatedQuantity: newOpenByLegId.get(l.id)!,
-          economicRole: l.economicRole,
-          position: {
-            ...p,
-            optionType: p.optionType as 'CALL' | 'PUT',
-            side: p.side as 'SELL' | 'SHORT' | 'BUY' | 'LONG',
-          },
-        };
-      });
-
-      const residualRisk = calculateStrategyCanonicalResidualRisk(remainingLegsForBenchmark);
-      const newBenchmarkCapital = residualRisk.benchmarkCapitalReais;
+      const residualRisk = plan.afterRisk;
+      const newBenchmarkCapital = plan.afterBenchmarkCapitalReais;
       let newSegmentQuality = openSegment ? openSegment.quality : 'FULL';
 
-      // Fail-safe institucional para risco residual desconhecido ou ilimitado
       if (residualRisk.riskRecognitionQuality === 'UNKNOWN' || residualRisk.maxLossType === 'UNBOUNDED') {
         newSegmentQuality = 'INSUFFICIENT_DATA';
       }
@@ -2336,19 +2374,178 @@ export async function scaleDownOptionStrategyAction(
         createdAt: now,
       }).run();
 
-      // RECONCILIAÇÃO ATÔMICA DA STRATEGY ROW: atualiza o snapshot corrente no banco
       tx.update(optionStrategies).set({
         capitalRemuneratedReais: newCapitalRemunerated,
         collateralMode: currentMode,
         updatedAt: now,
       }).where(eq(optionStrategies.id, params.strategyId)).run();
+
+      return { success: true, maneuverEventId };
     });
 
-    safeRevalidate('/opcoes');
-    return { success: true, maneuverEventId };
+    if (txRes.success) {
+      safeRevalidate('/opcoes');
+    }
+    return txRes;
   } catch (err: any) {
     console.error('[Options Actions] Erro em scaleDownOptionStrategyAction:', err);
     return { success: false, error: err.message || 'Erro ao reduzir estratégia proporcionalmente' };
+  }
+}
+
+/**
+ * Consulta o recibo factual de uma manobra recém-executada.
+ */
+export async function getStrategyManeuverReceiptAction(maneuverEventId: string): Promise<{
+  success: boolean;
+  receipt?: ManeuverHistoryDTO;
+  error?: string;
+}> {
+  try {
+    const maneuver = await db.query.strategyManeuverEvents.findFirst({
+      where: eq(strategyManeuverEvents.id, maneuverEventId),
+    });
+    if (!maneuver) {
+      return { success: false, error: 'Maneuver event not found' };
+    }
+
+    const execs = await db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.maneuverEventId, maneuverEventId),
+      orderBy: [asc(optionPositionExecutions.id)],
+    });
+
+    const posIds = [...new Set(execs.map((e) => e.positionId))];
+    const positions = posIds.length > 0
+      ? await db.query.optionPositions.findMany({ where: inArray(optionPositions.id, posIds) })
+      : [];
+    const posMap = new Map(positions.map((p) => [p.id, p]));
+
+    const executionDTOs: ManeuverHistoryExecutionDTO[] = execs.map((e) => {
+      const p = posMap.get(e.positionId);
+      return {
+        executionId: e.id,
+        ticker: p?.tickerOption || e.positionId,
+        optionType: (p?.optionType || 'CALL') as 'CALL' | 'PUT',
+        side: p?.side || 'UNKNOWN',
+        executionType: e.executionType as 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE',
+        quantity: e.quantity,
+        price: e.price,
+        feesReais: e.feesReais ?? 0,
+        grossRealizedPnlReais: e.grossRealizedPnlReais ?? 0,
+        netRealizedPnlReais: e.netRealizedPnlReais ?? 0,
+      };
+    });
+
+    const grossRealizedPnlReais = executionDTOs.reduce((acc, e) => acc + e.grossRealizedPnlReais, 0);
+    const feesReais = executionDTOs.reduce((acc, e) => acc + e.feesReais, 0);
+    const netRealizedPnlReais = executionDTOs.reduce((acc, e) => acc + e.netRealizedPnlReais, 0);
+
+    return {
+      success: true,
+      receipt: {
+        maneuverEventId: maneuver.id,
+        strategyId: maneuver.strategyId,
+        executionDate: maneuver.executionDate,
+        createdAt: maneuver.createdAt || '',
+        maneuverType: maneuver.maneuverType as any,
+        percentageReduced: maneuver.percentageReduced,
+        unitsReduced: maneuver.unitsReduced,
+        auditRatioBefore: maneuver.auditRatioBefore,
+        auditRatioAfter: maneuver.auditRatioAfter,
+        preservesOriginalRatio: maneuver.preservesOriginalRatio,
+        auditCapitalReleasedReais: maneuver.auditCapitalReleasedReais,
+        executions: executionDTOs,
+        grossRealizedPnlReais: Math.round(grossRealizedPnlReais * 100) / 100,
+        feesReais: Math.round(feesReais * 100) / 100,
+        netRealizedPnlReais: Math.round(netRealizedPnlReais * 100) / 100,
+      },
+    };
+  } catch (err: any) {
+    console.error('[Options Actions] Erro ao buscar recibo de manejo:', err);
+    return { success: false, error: err.message || 'Erro ao buscar recibo' };
+  }
+}
+
+/**
+ * Consulta o histórico canônico de manobras de uma estratégia (Auditabilidade Visual).
+ * Os totais de P&L são rigorosamente derivados da soma das execuções (SUM(executions)).
+ */
+export async function getStrategyManeuverHistoryAction(strategyId: string): Promise<{
+  success: boolean;
+  history?: ManeuverHistoryDTO[];
+  error?: string;
+}> {
+  try {
+    const maneuvers = await db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, strategyId),
+      orderBy: [desc(strategyManeuverEvents.executionDate), desc(strategyManeuverEvents.createdAt)],
+    });
+
+    if (maneuvers.length === 0) {
+      return { success: true, history: [] };
+    }
+
+    const mnvIds = maneuvers.map((m) => m.id);
+    const allExecs = await db.query.optionPositionExecutions.findMany({
+      where: inArray(optionPositionExecutions.maneuverEventId, mnvIds),
+      orderBy: [asc(optionPositionExecutions.id)],
+    });
+
+    const posIds = [...new Set(allExecs.map((e) => e.positionId))];
+    const positions = posIds.length > 0
+      ? await db.query.optionPositions.findMany({ where: inArray(optionPositions.id, posIds) })
+      : [];
+    const posMap = new Map(positions.map((p) => [p.id, p]));
+
+    const execsByManeuverId = new Map<string, ManeuverHistoryExecutionDTO[]>();
+    for (const e of allExecs) {
+      if (!e.maneuverEventId) continue;
+      const list = execsByManeuverId.get(e.maneuverEventId) || [];
+      const p = posMap.get(e.positionId);
+      list.push({
+        executionId: e.id,
+        ticker: p?.tickerOption || e.positionId,
+        optionType: (p?.optionType || 'CALL') as 'CALL' | 'PUT',
+        side: p?.side || 'UNKNOWN',
+        executionType: e.executionType as 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE',
+        quantity: e.quantity,
+        price: e.price,
+        feesReais: e.feesReais ?? 0,
+        grossRealizedPnlReais: e.grossRealizedPnlReais ?? 0,
+        netRealizedPnlReais: e.netRealizedPnlReais ?? 0,
+      });
+      execsByManeuverId.set(e.maneuverEventId, list);
+    }
+
+    const history: ManeuverHistoryDTO[] = maneuvers.map((m) => {
+      const execs = execsByManeuverId.get(m.id) || [];
+      const grossRealizedPnlReais = execs.reduce((acc, e) => acc + e.grossRealizedPnlReais, 0);
+      const feesReais = execs.reduce((acc, e) => acc + e.feesReais, 0);
+      const netRealizedPnlReais = execs.reduce((acc, e) => acc + e.netRealizedPnlReais, 0);
+
+      return {
+        maneuverEventId: m.id,
+        strategyId: m.strategyId,
+        executionDate: m.executionDate,
+        createdAt: m.createdAt || '',
+        maneuverType: m.maneuverType as any,
+        percentageReduced: m.percentageReduced,
+        unitsReduced: m.unitsReduced,
+        auditRatioBefore: m.auditRatioBefore,
+        auditRatioAfter: m.auditRatioAfter,
+        preservesOriginalRatio: m.preservesOriginalRatio,
+        auditCapitalReleasedReais: m.auditCapitalReleasedReais,
+        executions: execs,
+        grossRealizedPnlReais: Math.round(grossRealizedPnlReais * 100) / 100,
+        feesReais: Math.round(feesReais * 100) / 100,
+        netRealizedPnlReais: Math.round(netRealizedPnlReais * 100) / 100,
+      };
+    });
+
+    return { success: true, history };
+  } catch (err: any) {
+    console.error('[Options Actions] Erro ao buscar histórico de manejos:', err);
+    return { success: false, error: err.message || 'Erro ao buscar histórico' };
   }
 }
 

@@ -14,6 +14,7 @@ interface OptionsPositionsTableProps {
   onOpenDetailDrawer: (position: EnrichedOptionPosition) => void;
   onOpenGroupModal: (selectedPositions: EnrichedOptionPosition[]) => void;
   onOpenFundingModal?: (strategy: EnrichedOptionStrategy) => void;
+  onOpenManageModal?: (strategy: EnrichedOptionStrategy, initialMode?: 'SCALE_DOWN' | 'LEG_CLOSE', initialLegId?: string) => void;
   onRefresh: () => void;
 }
 
@@ -26,6 +27,7 @@ export function OptionsPositionsTable({
   onOpenDetailDrawer,
   onOpenGroupModal,
   onOpenFundingModal,
+  onOpenManageModal,
   onRefresh,
 }: OptionsPositionsTableProps) {
   const [viewMode, setViewMode] = useState<'STRATEGIES' | 'LEGS'>('STRATEGIES');
@@ -389,6 +391,29 @@ export function OptionsPositionsTable({
                       </div>
                     </div>
 
+                    {/* Botão Manejar */}
+                    {strat.status === 'OPEN' && onOpenManageModal && (
+                      <button
+                        onClick={() => onOpenManageModal(strat, 'SCALE_DOWN')}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 text-amber-300 text-xs font-bold border border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
+                        title="Manejar Estrutura (Redução proporcional de contratos ou fechamento por perna)"
+                      >
+                        <span>⚡</span>
+                        <span>Manejar</span>
+                      </button>
+                    )}
+
+                    {/* Botão Histórico de Manejos */}
+                    {onOpenManageModal && (
+                      <button
+                        onClick={() => onOpenManageModal(strat, 'SCALE_DOWN', undefined)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 flex items-center gap-1 transition-all"
+                        title="Ver Histórico de Manejos da Estrutura"
+                      >
+                        <span>📜</span>
+                      </button>
+                    )}
+
                     {/* Botão Desagrupar */}
                     <button
                       onClick={() => handleUngroup(strat.id)}
@@ -486,13 +511,25 @@ export function OptionsPositionsTable({
                               </td>
 
                               <td className="py-2.5 px-3 text-center">
-                                <button
-                                  onClick={() => onOpenDetailDrawer(pos)}
-                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
-                                  title="Ver Detalhes da Perna"
-                                >
-                                  🔍
-                                </button>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {strat.status === 'OPEN' && (leg.openAllocatedQuantity ?? leg.allocatedQuantity) > 0 && onOpenManageModal && (
+                                    <button
+                                      onClick={() => onOpenManageModal(strat, 'LEG_CLOSE', leg.id)}
+                                      className="px-1.5 py-1 rounded bg-sky-500/15 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[10px] font-bold flex items-center gap-1 transition-all"
+                                      title="Fechar ou Reduzir Esta Perna (LEG_CLOSE)"
+                                    >
+                                      <span>✂</span>
+                                      <span className="hidden sm:inline">Reduzir</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => onOpenDetailDrawer(pos)}
+                                    className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                                    title="Ver Detalhes da Perna"
+                                  >
+                                    🔍
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
