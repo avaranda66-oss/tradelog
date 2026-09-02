@@ -232,60 +232,110 @@ export function OptionsKpiCards({
           </p>
         </div>
 
-        {/* Card 3: Benchmark CDI (Garantia Total) */}
+        {/* Card 3: Benchmark CDI — Capital Elegível */}
         <div className="bg-[#0f0e1c] border border-purple-500/30 rounded-xl p-4 space-y-2 shadow-lg">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">
-              BENCHMARK CDI (GARANTIA TOTAL)
+              BENCHMARK CDI — CAPITAL ELEGÍVEL
             </span>
             <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 text-[10px] font-bold">
-              {inc.cdiIsEstimated ? 'CDI ESTIMADO ⚠️' : 'CDI REALIZADO'}
+              {inc.cdiIsEstimated ? 'CDI ESTIMADO ⚠️' : 'B3 OFICIAL'}
             </span>
           </div>
           <div className="space-y-1">
             <div className="text-2xl font-bold text-purple-300 tracking-tight">
-              R$ {displayTotalCdi.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {summary.portfolioBenchmarkEligibleCount === 0 ? (
+                <span className="text-slate-500 text-lg">N/A</span>
+              ) : (
+                `R$ ${summary.portfolioBenchmarkCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              )}
             </div>
-            <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
-              <span>Renda: <strong className="text-purple-200 font-bold">R$ {displayIncomeCdi.toFixed(2)}</strong></span>
-              {displayHybridCdi > 0 && (
-                <span>· Estruturas: <strong className="text-amber-200 font-bold">R$ {displayHybridCdi.toFixed(2)}</strong></span>
+            {summary.portfolioBenchmarkEligibleCount > 0 ? (
+              <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
+                <span>Renda: <strong className="text-purple-200 font-bold">R$ {summary.incomeBook.benchmarkCdiReais.toFixed(2)}</strong></span>
+                {summary.hybridBook.benchmarkCdiReais > 0 && (
+                  <span>· Estruturas: <strong className="text-amber-200 font-bold">R$ {summary.hybridBook.benchmarkCdiReais.toFixed(2)}</strong></span>
+                )}
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-500">
+                Nenhuma posição elegível ao benchmark CDI.
+              </div>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-400 italic">
+            {summary.portfolioBenchmarkEligibleCount > 0
+              ? `Sobre R$ ${summary.portfolioBenchmarkEligibleCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de capital elegível · ${summary.portfolioBenchmarkEligibleCount} ${summary.portfolioBenchmarkEligibleCount === 1 ? 'operação incluída' : 'operações incluídas'} · ${summary.portfolioExcludedFromBenchmarkCount} ${summary.portfolioExcludedFromBenchmarkCount === 1 ? 'direcional excluída' : 'direcionais excluídas'}`
+              : 'Apenas posições direcionais/débito sem garantia alocada.'}
+          </p>
+        </div>
+
+        {/* Card 4: Valor Gerado Acima do CDI (Double Yield Institucional) */}
+        <div className="bg-[#12100a] border border-amber-500/40 rounded-xl p-4 space-y-2 shadow-lg">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+              {summary.portfolioEconomicPerformanceQuality === 'FULL'
+                ? 'VALOR GERADO ACIMA DO CDI'
+                : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
+                ? 'VALOR ESTIMADO ACIMA DO CDI'
+                : 'VALOR ACIMA DO CDI'}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {summary.portfolioEconomicPerformanceQuality === 'FULL' && (
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                  Double Yield Institucional
+                </span>
+              )}
+              {summary.portfolioEconomicPerformanceQuality === 'PARTIAL' && (
+                <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold" title="Parte da carteira possui funding não informado">
+                  Funding Parcial ⚠️
+                </span>
+              )}
+              {summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA' && (
+                <span className="px-2 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-bold">
+                  Inconclusivo
+                </span>
+              )}
+              <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                summary.portfolioTotalReturnToCdiMultiple !== null && summary.portfolioTotalReturnToCdiMultiple >= 1.5
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  : 'bg-slate-800 text-slate-400'
+              }`}>
+                {summary.portfolioTotalReturnToCdiMultiple !== null ? `${summary.portfolioTotalReturnToCdiMultiple.toFixed(2)}× CDI` : '---'}
+              </span>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className={`text-2xl font-bold tracking-tight ${
+              summary.portfolioExcessReturnVsCdiReais >= 0 ? 'text-amber-400' : 'text-slate-400'
+            }`}>
+              {summary.portfolioBenchmarkEligibleCount === 0 || summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA' ? (
+                <span className="text-slate-500 text-lg">N/A</span>
+              ) : (
+                `${summary.portfolioExcessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${summary.portfolioExcessReturnVsCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              )}
+            </div>
+            <div className="text-[11px] text-slate-400">
+              {summary.portfolioBenchmarkEligibleCount === 0 ? (
+                <span className="text-slate-500 italic">Sem posições elegíveis para apuração de excesso vs CDI.</span>
+              ) : (
+                <span>
+                  Excesso econômico vs CDI: <strong className={summary.portfolioExcessReturnVsCdiReais >= 0 ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+                    {summary.portfolioExcessReturnVsCdiReais >= 0
+                      ? `+R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} acima do CDI elegível`
+                      : `R$ ${summary.portfolioExcessReturnVsCdiReais.toFixed(2)} abaixo do CDI elegível`}
+                  </strong>
+                </span>
               )}
             </div>
           </div>
           <p className="text-[10px] text-slate-500 italic">
-            Acumulação diária sobre os R$ {summary.totalCapitalAllocated.toLocaleString('pt-BR', { minimumFractionDigits: 0 })} de garantia total.
-          </p>
-        </div>
-
-        {/* Card 4: Alpha Total vs CDI */}
-        <div className="bg-[#12100a] border border-amber-500/40 rounded-xl p-4 space-y-2 shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
-              ALPHA TOTAL VS CDI
-            </span>
-            <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
-              displayTotalCdiMultiple !== null && displayTotalCdiMultiple >= 1.5
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                : 'bg-slate-800 text-slate-400'
-            }`}>
-              {displayTotalCdiMultiple !== null ? `${displayTotalCdiMultiple.toFixed(2)}× CDI` : '---'}
-            </span>
-          </div>
-          <div className="space-y-1">
-            <div className={`text-2xl font-bold tracking-tight ${
-              isAlphaPositive ? 'text-amber-400' : 'text-slate-400'
-            }`}>
-              {displayTotalAlpha >= 0 ? '+' : ''}R$ {displayTotalAlpha.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="text-[11px] text-slate-400">
-              Excedente no Bolso: <span className={isAlphaPositive ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
-                {isAlphaPositive ? `+R$ ${displayTotalAlpha.toFixed(2)} acima do CDI total` : 'Abaixo do CDI'}
-              </span>
-            </div>
-          </div>
-          <p className="text-[10px] text-slate-500 italic">
-            Ganho real de toda a carteira acima da taxa DI acumulada.
+            {summary.portfolioEconomicPerformanceQuality === 'FULL'
+              ? 'Excesso econômico do universo elegível sobre o mesmo capital aplicado ao CDI.'
+              : summary.portfolioEconomicPerformanceQuality === 'PARTIAL'
+              ? 'Parte do capital possui funding não informado; resultado baseado nas premissas disponíveis.'
+              : 'Dados insuficientes para uma comparação econômica consistente.'}
+            {isNetView && ' (Narrativa de Double Yield e Múltiplos CDI calculada sobre a base bruta institucional).'}
           </p>
         </div>
       </div>

@@ -11,6 +11,7 @@ import { RollPositionModal } from './RollPositionModal';
 import { EditPositionModal } from './EditPositionModal';
 import { OptionDetailDrawer } from './OptionDetailDrawer';
 import { GroupPositionsModal } from './GroupPositionsModal';
+import { EditStrategyFundingModal } from './EditStrategyFundingModal';
 import { closeOptionPosition } from '../actions';
 import { useRouter } from 'next/navigation';
 
@@ -35,6 +36,7 @@ export function OptionsDashboardView({
   const [editPosition, setEditPosition] = useState<EnrichedOptionPosition | null>(null);
   const [selectedDrawerPosition, setSelectedDrawerPosition] = useState<EnrichedOptionPosition | null>(null);
   const [positionsToGroup, setPositionsToGroup] = useState<EnrichedOptionPosition[] | null>(null);
+  const [fundingStrategy, setFundingStrategy] = useState<EnrichedOptionStrategy | null>(null);
 
   const handleRefresh = () => {
     startTransition(() => {
@@ -96,6 +98,7 @@ export function OptionsDashboardView({
         onOpenEditModal={(pos) => setEditPosition(pos)}
         onOpenDetailDrawer={(pos) => setSelectedDrawerPosition(pos)}
         onOpenGroupModal={(selected) => setPositionsToGroup(selected)}
+        onOpenFundingModal={(strat) => setFundingStrategy(strat)}
         onRefresh={handleRefresh}
       />
 
@@ -105,6 +108,14 @@ export function OptionsDashboardView({
         isOpen={!!positionsToGroup && positionsToGroup.length >= 2}
         onClose={() => setPositionsToGroup(null)}
         onGroupCreated={handleRefresh}
+      />
+
+      {/* Modal de Edição de Funding / Remuneração de Garantia da Estrutura */}
+      <EditStrategyFundingModal
+        strategy={fundingStrategy}
+        isOpen={!!fundingStrategy}
+        onClose={() => setFundingStrategy(null)}
+        onUpdated={handleRefresh}
       />
 
       {/* Modais & Drawer Quant */}

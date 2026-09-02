@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import type { EnrichedOptionPosition, EnrichedOptionStrategy } from '../calculations';
 import { updateOptionMarketPrice, closeOptionPosition, deleteOptionPosition, ungroupOptionStrategyAction } from '../actions';
+import { StrategyEconomicStorytellingCard } from './StrategyEconomicStorytellingCard';
 
 interface OptionsPositionsTableProps {
   positions: (EnrichedOptionPosition & { allocatedQuantity: number; unallocatedQuantity: number; strategyId?: string })[];
@@ -12,6 +13,7 @@ interface OptionsPositionsTableProps {
   onOpenEditModal: (position: EnrichedOptionPosition) => void;
   onOpenDetailDrawer: (position: EnrichedOptionPosition) => void;
   onOpenGroupModal: (selectedPositions: EnrichedOptionPosition[]) => void;
+  onOpenFundingModal?: (strategy: EnrichedOptionStrategy) => void;
   onRefresh: () => void;
 }
 
@@ -23,6 +25,7 @@ export function OptionsPositionsTable({
   onOpenEditModal,
   onOpenDetailDrawer,
   onOpenGroupModal,
+  onOpenFundingModal,
   onRefresh,
 }: OptionsPositionsTableProps) {
   const [viewMode, setViewMode] = useState<'STRATEGIES' | 'LEGS'>('STRATEGIES');
@@ -338,9 +341,33 @@ export function OptionsPositionsTable({
                           {strat.legs.length} Pernas
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Fluxo Inicial: <strong className="text-emerald-400">{sm.isNetCredit ? '+' : '-'}R$ {Math.abs(sm.netInitialCreditDebitReais).toFixed(2)} {sm.isNetCredit ? 'Crédito' : 'Débito'}</strong> · Capital Reservado Cash-Secured: <strong className="text-slate-200">R$ {sm.totalCapitalReserved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
-                      </p>
+                      {preset === 'RENDA_CDI' ? (
+                        <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-300">
+                          <span>Cap. Benchmark: <strong className="text-slate-100 font-bold">R$ {strat.economicPerformance.benchmarkCapitalReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
+                          <span className="text-slate-600">·</span>
+                          <span>Cap. Remunerado: <strong className="text-purple-300 font-bold">R$ {strat.economicPerformance.capitalRemuneratedReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
+                          <span className="text-slate-600">·</span>
+                          <span>Carry Caixa: <strong className="text-purple-300 font-bold">+R$ {strat.economicPerformance.collateralCarryReais.toFixed(2)}</strong></span>
+                          <span className="text-slate-600">·</span>
+                          <span>Benchmark CDI: <strong className="text-slate-300 font-bold">+R$ {strat.economicPerformance.benchmarkCdiReais.toFixed(2)}</strong></span>
+                          <span className="text-slate-600">·</span>
+                          <span>Excesso: <strong className={strat.economicPerformance.excessReturnVsCdiReais >= 0 ? "text-emerald-300 font-bold" : "text-rose-300 font-bold"}>
+                            {strat.economicPerformance.excessReturnVsCdiReais >= 0 ? '+' : ''}R$ {strat.economicPerformance.excessReturnVsCdiReais.toFixed(2)}
+                          </strong></span>
+                          {strat.economicPerformance.totalReturnToCdiMultiple !== null && (
+                            <>
+                              <span className="text-slate-600">·</span>
+                              <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px]">
+                                {strat.economicPerformance.totalReturnToCdiMultiple.toFixed(2)}× CDI
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Fluxo Inicial: <strong className="text-emerald-400">{sm.isNetCredit ? '+' : '-'}R$ {Math.abs(sm.netInitialCreditDebitReais).toFixed(2)} {sm.isNetCredit ? 'Crédito' : 'Débito'}</strong> · Capital Reservado Cash-Secured: <strong className="text-slate-200">R$ {sm.totalCapitalReserved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -369,9 +396,15 @@ export function OptionsPositionsTable({
                   </div>
                 </div>
 
-                {/* Tabela de Pernas Aninhadas */}
+                {/* Tabela de Pernas Aninhadas e Storytelling Econômico */}
                 {isExpanded && (
-                  <div className="p-3 bg-[#060a12]">
+                  <div className="p-3 bg-[#060a12] space-y-3">
+                    {/* Storytelling Econômico Institucional & Double Yield */}
+                    <StrategyEconomicStorytellingCard
+                      strategy={strat}
+                      onOpenFundingModal={onOpenFundingModal}
+                    />
+
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
                         <tr className="border-b border-slate-800 text-slate-500 text-[9px] uppercase tracking-wider">
