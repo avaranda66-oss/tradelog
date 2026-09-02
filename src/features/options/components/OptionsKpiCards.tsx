@@ -25,6 +25,10 @@ export function OptionsKpiCards({
 }: OptionsKpiCardsProps) {
   const [isSyncingYahoo, setIsSyncingYahoo] = useState(false);
 
+  if (!summary) {
+    return null;
+  }
+
   const inc = summary.incomeBook;
   const dir = summary.directionalBook;
   const hyb = summary.hybridBook;

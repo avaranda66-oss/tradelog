@@ -34,7 +34,7 @@ export function OptionsPositionsTable({
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'OPEN' | 'CLOSED'>('OPEN');
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [expandedStrategyIds, setExpandedStrategyIds] = useState<Set<string>>(new Set(strategies.map((s) => s.id)));
+  const [expandedStrategyIds, setExpandedStrategyIds] = useState<Set<string>>(new Set((strategies || []).map((s) => s.id)));
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [editPriceVal, setEditPriceVal] = useState('');
   const [editSpotVal, setEditSpotVal] = useState('');

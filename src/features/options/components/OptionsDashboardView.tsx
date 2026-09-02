@@ -79,20 +79,22 @@ export function OptionsDashboardView({
   return (
     <div className="max-w-[1440px] mx-auto space-y-6 pb-16 animate-in fade-in">
       {/* 1. Header de Controles, Action Feed & 4 KPI Cards */}
-      <OptionsKpiCards
-        summary={initialSummary}
-        isNetView={isNetView}
-        onToggleNetView={setIsNetView}
-        onOpenCalculator={() => setIsCalculatorOpen(true)}
-        onOpenNewPosition={() => setIsNewPositionOpen(true)}
-        onRefresh={handleRefresh}
-        onSelectActionItem={handleSelectActionItem}
-      />
+      {initialSummary && (
+        <OptionsKpiCards
+          summary={initialSummary}
+          isNetView={isNetView}
+          onToggleNetView={setIsNetView}
+          onOpenCalculator={() => setIsCalculatorOpen(true)}
+          onOpenNewPosition={() => setIsNewPositionOpen(true)}
+          onRefresh={handleRefresh}
+          onSelectActionItem={handleSelectActionItem}
+        />
+      )}
 
       {/* 2. Tabela de Posições, Estruturas e Presets */}
       <OptionsPositionsTable
-        positions={initialPositions}
-        strategies={initialStrategies}
+        positions={initialPositions || []}
+        strategies={initialStrategies || []}
         isNetView={isNetView}
         onOpenRollModal={(pos) => setRollPosition(pos)}
         onOpenEditModal={(pos) => setEditPosition(pos)}
