@@ -241,6 +241,11 @@ sqlite.exec(`
     exit_date TEXT,
     allocated_capital REAL NOT NULL,
     status TEXT NOT NULL DEFAULT 'OPEN',
+    legacy_closed_quantity INTEGER NOT NULL DEFAULT 0,
+    legacy_quality TEXT,
+    closed_quantity INTEGER NOT NULL DEFAULT 0,
+    open_quantity INTEGER,
+    realized_pnl_reais REAL NOT NULL DEFAULT 0,
     delta REAL,
     gamma REAL,
     theta REAL,
@@ -279,6 +284,9 @@ sqlite.exec(`
     position_id TEXT NOT NULL REFERENCES option_positions(id) ON DELETE RESTRICT,
     allocated_quantity INTEGER NOT NULL,
     economic_role TEXT NOT NULL DEFAULT 'CUSTOM',
+    legacy_closed_allocated_quantity INTEGER NOT NULL DEFAULT 0,
+    closed_allocated_quantity INTEGER NOT NULL DEFAULT 0,
+    open_allocated_quantity INTEGER,
     created_at TEXT,
     UNIQUE(strategy_id, position_id)
   );
@@ -291,6 +299,79 @@ sqlite.exec(`
     allocated_quantity INTEGER NOT NULL,
     notes TEXT,
     timestamp TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS strategy_maneuver_events (
+    id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+    maneuver_type TEXT NOT NULL,
+    percentage_reduced REAL,
+    units_reduced INTEGER,
+    execution_date TEXT NOT NULL,
+    audit_realized_pnl_reais REAL NOT NULL,
+    audit_capital_released_reais REAL,
+    audit_ratio_before TEXT,
+    audit_ratio_after TEXT,
+    preserves_original_ratio INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS strategy_funding_events (
+    id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+    event_type TEXT NOT NULL,
+    effective_date TEXT NOT NULL,
+    previous_collateral_mode TEXT NOT NULL,
+    new_collateral_mode TEXT NOT NULL,
+    previous_coverage_pct REAL,
+    new_coverage_pct REAL,
+    previous_capital_remunerated REAL,
+    new_capital_remunerated REAL,
+    previous_pct_cdi REAL,
+    new_pct_cdi REAL,
+    notes TEXT,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS strategy_funding_segments (
+    id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+    capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+    collateral_mode TEXT NOT NULL,
+    collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+    source_type TEXT NOT NULL,
+    maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
+    funding_event_id TEXT REFERENCES strategy_funding_events(id) ON DELETE RESTRICT,
+    quality TEXT NOT NULL DEFAULT 'FULL',
+    created_at TEXT NOT NULL,
+    CHECK(end_date IS NULL OR end_date >= start_date)
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS one_open_funding_segment_per_strategy
+  ON strategy_funding_segments(strategy_id)
+  WHERE end_date IS NULL;
+
+  CREATE TABLE IF NOT EXISTS option_position_executions (
+    id TEXT PRIMARY KEY,
+    position_id TEXT NOT NULL REFERENCES option_positions(id) ON DELETE RESTRICT,
+    strategy_id TEXT REFERENCES option_strategies(id) ON DELETE RESTRICT,
+    strategy_leg_id TEXT REFERENCES option_strategy_legs(id) ON DELETE RESTRICT,
+    maneuver_event_id TEXT REFERENCES strategy_maneuver_events(id) ON DELETE RESTRICT,
+    execution_type TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity > 0),
+    price REAL NOT NULL CHECK(price >= 0),
+    execution_date TEXT NOT NULL,
+    entry_price_basis_reais REAL NOT NULL,
+    gross_realized_pnl_reais REAL NOT NULL,
+    fees_reais REAL NOT NULL DEFAULT 0,
+    net_realized_pnl_reais REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'USER_MANUAL',
+    notes TEXT,
+    created_at TEXT NOT NULL
   );
 `);
 

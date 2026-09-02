@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, real, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 // ─── Trading Days ────────────────────────────────────────────
 export const tradingDays = sqliteTable('trading_days', {
@@ -316,7 +317,7 @@ export const optionPositions = sqliteTable('option_positions', {
   side: text('side').notNull(), // "SELL" | "BUY"
   strategyType: text('strategy_type').notNull(), // "VENDA_PUT", "VENDA_CALL", "COMPRA_CALL", "COMPRA_PUT", "TRAVA_ALTA", "TRAVA_BAIXA", "OUTRA"
 
-  quantity: integer('quantity').notNull(),
+  quantity: integer('quantity').notNull(), // Quantidade original imutável de abertura
   strike: real('strike').notNull(),
   entryPrice: real('entry_price').notNull(), // Preço médio de entrada
   currentPrice: real('current_price').notNull(), // Preço atual de mercado
@@ -331,6 +332,13 @@ export const optionPositions = sqliteTable('option_positions', {
 
   allocatedCapital: real('allocated_capital').notNull(), // Garantia / Capital Alocado / Risco Máximo
   status: text('status').notNull().default('OPEN'), // "OPEN" | "CLOSED" | "EXERCISED" | "EXPIRED_WORTHLESS" | "ROLLED"
+
+  // Caches Denormalizados e Baseline Legacy (Reconciliação Canônica)
+  legacyClosedQuantity: integer('legacy_closed_quantity').notNull().default(0),
+  legacyQuality: text('legacy_quality'), // ex: "LEGACY_INCOMPLETE"
+  closedQuantity: integer('closed_quantity').notNull().default(0),
+  openQuantity: integer('open_quantity'), // Sincronizado: quantity - closedQuantity
+  realizedPnlReais: real('realized_pnl_reais').notNull().default(0),
 
   // Gregas e Métricas Operacionais
   delta: real('delta'),
@@ -358,7 +366,7 @@ export const optionStrategies = sqliteTable('option_strategies', {
   underlyingTicker: text('underlying_ticker').notNull(), // "ITUB4"
   collateralMode: text('collateral_mode').default('IDLE_CASH'), // "IDLE_CASH" | "REMUNERATED_100_CDI" | "CUSTOM"
   collateralYieldPctCDI: real('collateral_yield_pct_cdi'),
-  capitalRemuneratedReais: real('capital_remunerated_reais'), // Saldo de garantia efetivamente remunerado a CDI
+  capitalRemuneratedReais: real('capital_remunerated_reais'), // Saldo de garantia efetivamente remunerado a CDI (Snapshot Vigente)
   collateralCoveragePct: real('collateral_coverage_pct'), // % do capital reservado que está remunerado (ex: 100% ou 50%)
   status: text('status').notNull().default('OPEN'), // "OPEN" | "CLOSED" | "ROLLED"
   openedAt: text('opened_at').notNull(), // "YYYY-MM-DD"
@@ -378,15 +386,20 @@ export const optionStrategyLegs = sqliteTable('option_strategy_legs', {
   positionId: text('position_id')
     .notNull()
     .references(() => optionPositions.id, { onDelete: 'restrict' }), // Restrict para segurança de auditoria
-  allocatedQuantity: integer('allocated_quantity').notNull(), // Quantidade alocada (> 0)
+  allocatedQuantity: integer('allocated_quantity').notNull(), // Quantidade alocada original (> 0)
   economicRole: text('economic_role').notNull().default('CUSTOM'), // "FINANCING" | "DIRECTIONAL" | "HEDGE" | "INCOME" | "CUSTOM"
+
+  // Caches Denormalizados e Baseline Legacy de Alocação
+  legacyClosedAllocatedQuantity: integer('legacy_closed_allocated_quantity').notNull().default(0),
+  closedAllocatedQuantity: integer('closed_allocated_quantity').notNull().default(0),
+  openAllocatedQuantity: integer('open_allocated_quantity'), // allocatedQuantity - closedAllocatedQuantity
 
   createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
 }, (table) => [
   uniqueIndex('strategy_position_unique_idx').on(table.strategyId, table.positionId),
 ]);
 
-// ─── Strategy Allocation Events (Audit Trail Mínimo) ──────────
+// ─── Strategy Allocation Events (Audit Trail de Agrupamento) ──
 export const strategyAllocationEvents = sqliteTable('strategy_allocation_events', {
   id: text('id').primaryKey(),
   strategyId: text('strategy_id').notNull(),
@@ -396,6 +409,115 @@ export const strategyAllocationEvents = sqliteTable('strategy_allocation_events'
   notes: text('notes'),
   timestamp: text('timestamp').$defaultFn(() => new Date().toISOString()),
 });
+
+// ─── Strategy Maneuver Events (Audit Trail de Manejos da Estrutura) ───
+export const strategyManeuverEvents = sqliteTable('strategy_maneuver_events', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id')
+    .notNull()
+    .references(() => optionStrategies.id, { onDelete: 'restrict' }), // Restrict: proíbe hard-delete com histórico financeiro
+  maneuverType: text('maneuver_type').notNull(), // 'SCALE_DOWN' | 'LEG_CLOSE' | 'FULL_CLOSE' | 'ROLL'
+  percentageReduced: real('percentage_reduced'), // ex: 50.0 para SCALE_DOWN proporcional
+  unitsReduced: integer('units_reduced'), // Strategy units encerradas
+  executionDate: text('execution_date').notNull(), // "YYYY-MM-DD"
+
+  // Audit Snapshots (Não são fonte primária)
+  auditRealizedPnlReais: real('audit_realized_pnl_reais').notNull(),
+  auditCapitalReleasedReais: real('audit_capital_released_reais'),
+  auditRatioBefore: text('audit_ratio_before'),
+  auditRatioAfter: text('audit_ratio_after'),
+  preservesOriginalRatio: integer('preserves_original_ratio', { mode: 'boolean' }).notNull().default(true),
+
+  notes: text('notes'),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+});
+
+// ─── Strategy Funding Events (Audit Trail de Alterações de Funding) ───
+export const strategyFundingEvents = sqliteTable('strategy_funding_events', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id')
+    .notNull()
+    .references(() => optionStrategies.id, { onDelete: 'restrict' }), // Restrict: proíbe hard-delete com histórico
+  eventType: text('event_type').notNull(), // 'CHANGE' | 'CORRECTION'
+  effectiveDate: text('effective_date').notNull(), // "YYYY-MM-DD"
+
+  previousCollateralMode: text('previous_collateral_mode').notNull(),
+  newCollateralMode: text('new_collateral_mode').notNull(),
+
+  previousCoveragePct: real('previous_coverage_pct'),
+  newCoveragePct: real('new_coverage_pct'),
+
+  previousCapitalRemunerated: real('previous_capital_remunerated'),
+  newCapitalRemunerated: real('new_capital_remunerated'),
+
+  previousPctCdi: real('previous_pct_cdi'),
+  newPctCdi: real('new_pct_cdi'),
+
+  notes: text('notes'),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+});
+
+// ─── Strategy Funding Segments (Funding Timeline Concreta) ─────
+export const strategyFundingSegments = sqliteTable('strategy_funding_segments', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id')
+    .notNull()
+    .references(() => optionStrategies.id, { onDelete: 'restrict' }), // Restrict: preservação de histórico
+  startDate: text('start_date').notNull(), // "YYYY-MM-DD" (inclusive)
+  endDate: text('end_date'), // "YYYY-MM-DD" (exclusive; null indica segmento vigente aberto)
+
+  benchmarkCapitalReais: real('benchmark_capital_reais').notNull(),
+  capitalRemuneratedReais: real('capital_remunerated_reais').notNull(),
+  collateralMode: text('collateral_mode').notNull(), // "IDLE_CASH" | "REMUNERATED_100_CDI" | "CUSTOM"
+  collateralPctCdi: real('collateral_pct_cdi'),
+
+  sourceType: text('source_type').notNull(), // "CREATION" | "MANEUVER" | "FUNDING_CHANGE"
+  maneuverEventId: text('maneuver_event_id').references(() => strategyManeuverEvents.id, { onDelete: 'restrict' }),
+  fundingEventId: text('funding_event_id').references(() => strategyFundingEvents.id, { onDelete: 'restrict' }),
+
+  quality: text('quality').notNull().default('FULL'), // "FULL" | "INSUFFICIENT_DATA"
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+}, (table) => [
+  uniqueIndex('one_open_funding_segment_per_strategy')
+    .on(table.strategyId)
+    .where(sql`${table.endDate} IS NULL`),
+  check('funding_seg_end_date_check', sql`${table.endDate} IS NULL OR ${table.endDate} >= ${table.startDate}`),
+  check('funding_seg_benchmark_check', sql`${table.benchmarkCapitalReais} >= 0`),
+  check('funding_seg_remunerated_check', sql`${table.capitalRemuneratedReais} >= 0 AND ${table.capitalRemuneratedReais} <= ${table.benchmarkCapitalReais}`),
+  check('funding_seg_pct_cdi_check', sql`${table.collateralPctCdi} IS NULL OR ${table.collateralPctCdi} >= 0`),
+]);
+
+// ─── Option Position Executions (Execuções Financeiras Reais — Fonte Canônica) ───
+export const optionPositionExecutions = sqliteTable('option_position_executions', {
+  id: text('id').primaryKey(),
+  positionId: text('position_id')
+    .notNull()
+    .references(() => optionPositions.id, { onDelete: 'restrict' }),
+  strategyId: text('strategy_id')
+    .references(() => optionStrategies.id, { onDelete: 'restrict' }),
+  strategyLegId: text('strategy_leg_id')
+    .references(() => optionStrategyLegs.id, { onDelete: 'restrict' }),
+  maneuverEventId: text('maneuver_event_id')
+    .references(() => strategyManeuverEvents.id, { onDelete: 'restrict' }),
+
+  executionType: text('execution_type').notNull(), // 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' | 'EXPIRE_WORTHLESS'
+  quantity: integer('quantity').notNull(),
+  price: real('price').notNull(), // Preço unitário (0.0 para pó)
+  executionDate: text('execution_date').notNull(), // "YYYY-MM-DD"
+
+  // Fatos Contábeis Auditáveis (Calculados pelo Servidor)
+  entryPriceBasisReais: real('entry_price_basis_reais').notNull(),
+  grossRealizedPnlReais: real('gross_realized_pnl_reais').notNull(),
+  feesReais: real('fees_reais').notNull().default(0),
+  netRealizedPnlReais: real('net_realized_pnl_reais').notNull(),
+
+  source: text('source').notNull().default('USER_MANUAL'), // 'USER_MANUAL' | 'SYSTEM_AUTO' | 'LEGACY_MIGRATION'
+  notes: text('notes'),
+  createdAt: text('created_at').$defaultFn(() => new Date().toISOString()),
+}, (table) => [
+  check('exec_quantity_check', sql`${table.quantity} > 0`),
+  check('exec_price_check', sql`${table.price} >= 0`),
+]);
 
 // ─── Types ───────────────────────────────────────────────────
 export type TradingDay = typeof tradingDays.$inferSelect;
@@ -424,6 +546,15 @@ export type OptionStrategyLeg = typeof optionStrategyLegs.$inferSelect;
 export type NewOptionStrategyLeg = typeof optionStrategyLegs.$inferInsert;
 export type StrategyAllocationEvent = typeof strategyAllocationEvents.$inferSelect;
 export type NewStrategyAllocationEvent = typeof strategyAllocationEvents.$inferInsert;
+export type StrategyManeuverEvent = typeof strategyManeuverEvents.$inferSelect;
+export type NewStrategyManeuverEvent = typeof strategyManeuverEvents.$inferInsert;
+export type StrategyFundingEvent = typeof strategyFundingEvents.$inferSelect;
+export type NewStrategyFundingEvent = typeof strategyFundingEvents.$inferInsert;
+export type StrategyFundingSegment = typeof strategyFundingSegments.$inferSelect;
+export type NewStrategyFundingSegment = typeof strategyFundingSegments.$inferInsert;
+export type OptionPositionExecution = typeof optionPositionExecutions.$inferSelect;
+export type NewOptionPositionExecution = typeof optionPositionExecutions.$inferInsert;
+
 
 
 
