@@ -3,7 +3,12 @@
  * Acumulação diária oficial da Taxa DI (Fator DI) e projeção Selic Proxy.
  */
 
-import { type BusinessDate, parseBusinessDate, getB3TradingDays } from './b3-calendar';
+import {
+  type BusinessDate,
+  parseBusinessDate,
+  getB3TradingDays,
+  getDiObservationDates,
+} from './b3-calendar';
 
 export type AnnualRateDecimal = number; // Sempre em decimal: 0.14 = 14% a.a.
 
@@ -31,7 +36,7 @@ export function normalizeAnnualRate(raw: number, unit: 'PERCENT' | 'DECIMAL'): A
 
 /**
  * Calcula o Fator Diário oficial da Taxa DI da B3 em base 252 dias úteis
- * Fórmula oficial B3: FDI_k = (1 + TaxaAnualDecimal)^(1/252), arredondado para 8 casas decimais.
+ * Fórmula oficial B3: FDI_k = round( (1 + TaxaAnualDecimal)^(1/252), 8 )
  */
 export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): number {
   const safeRate = toAnnualRateDecimal(annualRateDecimal);
@@ -39,10 +44,27 @@ export function calculateB3DailyFactor(annualRateDecimal: AnnualRateDecimal): nu
   return Math.round(rawFactor * 100000000) / 100000000;
 }
 
-export interface DIDailyObservation {
-  date: BusinessDate;
+/**
+ * Realiza o produtório acumulado canônico da B3 com truncamento intermediário a 16 casas decimais
+ * e arredondamento final para 8 casas decimais conforme metodologia oficial do Índice DI.
+ */
+export function calculateB3AccumulatedFactor(dailyFactors: number[]): number {
+  if (dailyFactors.length === 0) return 1.0;
+  let acc = 1.0;
+  for (const factor of dailyFactors) {
+    acc = acc * factor;
+    // Truncamento a 16 casas decimais conforme B3
+    acc = Math.trunc(acc * 1e16) / 1e16;
+  }
+  // Arredondamento final a 8 casas decimais
+  return Math.round(acc * 1e8) / 1e8;
+}
+
+export interface DiAccrualObservation {
+  accrualDate: BusinessDate; // Data da sessão remunerada atingida (ex: 2026-08-25)
+  rateDate: BusinessDate;    // Data da observação da taxa DI aplicada (ex: 2026-08-24)
   annualRateDecimal: AnnualRateDecimal;
-  dailyFactor: number; // Fator diário oficial B3: (1 + DI_anual)^(1/252)
+  dailyFactor: number;
   source: string;
 }
 
@@ -61,16 +83,19 @@ export const CANONICAL_DI_RATES = new Map<BusinessDate, { annualRateDecimal: Ann
 ]);
 
 export interface RealizedDiResult {
-  accumulatedFactor: number; // Ex: 1.003105
-  periodYieldDecimal: number; // Factor - 1 (ex: 0.003105)
+  accumulatedFactor: number; // Ex: 1.00310356 (arredondado a 8 casas conforme B3)
+  periodYieldDecimal: number; // Factor - 1 (ex: 0.00310356)
   isEstimated: boolean;
   observationsCount: number;
-  datesUsed: BusinessDate[];
+  datesUsed: BusinessDate[]; // rateDates utilizadas
+  observations: DiAccrualObservation[];
 }
 
 /**
  * Calcula a acumulação diária realizada do CDI entre duas datas de negócio (openDate, valuationDate]
- * Aplica a convenção canônica B3: o primeiro dia (openDate) não acumula; acumula-se de openDate + 1 DU até valuationDate.
+ * Metodologia Oficial B3:
+ * O intervalo de taxas DI aplicáveis é [openDate, valuationDate) - Data inicial inclusive, data final exclusive.
+ * A taxa de openDate (D_0) remunera a primeira sessão decorrida (D_1 = openDate + 1 DU).
  */
 export function calculateRealizedDiFactor(
   openDateStr: BusinessDate,
@@ -83,45 +108,64 @@ export function calculateRealizedDiFactor(
   const safeFallback = toAnnualRateDecimal(fallbackAnnualRate);
   const series = customSeries ?? CANONICAL_DI_RATES;
 
-  const tradingDays = getB3TradingDays(openDate, valDate, 'EXCLUDE_START_INCLUDE_END');
+  // Rate observation dates: [openDate, valuationDate)
+  const rateDates = getDiObservationDates(openDate, valDate);
+  // Accrual dates: (openDate, valuationDate]
+  const accrualDates = getB3TradingDays(openDate, valDate, 'EXCLUDE_START_INCLUDE_END');
 
-  if (tradingDays.length === 0) {
+  if (rateDates.length === 0) {
     return {
       accumulatedFactor: 1.0,
       periodYieldDecimal: 0.0,
       isEstimated: false,
       observationsCount: 0,
       datesUsed: [],
+      observations: [],
     };
   }
 
-  let accumulatedFactor = 1.0;
   let isEstimated = false;
-  let count = 0;
-  const datesUsed: BusinessDate[] = [];
+  const dailyFactors: number[] = [];
+  const observations: DiAccrualObservation[] = [];
 
-  for (const day of tradingDays) {
-    const obs = series.get(day);
+  for (let i = 0; i < rateDates.length; i++) {
+    const rateDate = rateDates[i];
+    const accrualDate = accrualDates[i] || rateDate;
+    const obs = series.get(rateDate);
+
     if (obs) {
-      accumulatedFactor *= calculateB3DailyFactor(obs.annualRateDecimal);
-      count++;
-      datesUsed.push(day);
+      const dailyFactor = calculateB3DailyFactor(obs.annualRateDecimal);
+      dailyFactors.push(dailyFactor);
+      observations.push({
+        accrualDate,
+        rateDate,
+        annualRateDecimal: obs.annualRateDecimal,
+        dailyFactor,
+        source: obs.source,
+      });
     } else {
-      // Fallback para taxa diária derivada da taxa anual de referência normalizada
       const syntheticDailyFactor = calculateB3DailyFactor(safeFallback);
-      accumulatedFactor *= syntheticDailyFactor;
+      dailyFactors.push(syntheticDailyFactor);
       isEstimated = true;
-      count++;
-      datesUsed.push(day);
+      observations.push({
+        accrualDate,
+        rateDate,
+        annualRateDecimal: safeFallback,
+        dailyFactor: syntheticDailyFactor,
+        source: 'ESTIMATED_FALLBACK',
+      });
     }
   }
+
+  const accumulatedFactor = calculateB3AccumulatedFactor(dailyFactors);
 
   return {
     accumulatedFactor,
     periodYieldDecimal: accumulatedFactor - 1.0,
     isEstimated,
-    observationsCount: count,
-    datesUsed,
+    observationsCount: dailyFactors.length,
+    datesUsed: rateDates,
+    observations,
   };
 }
 

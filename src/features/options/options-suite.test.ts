@@ -16,6 +16,7 @@ import {
   calculateSignedPnL,
   getConservativeExitQuote,
   calculateEfficiencyScore,
+  isActionFeedEligible,
   calculateCollateralReturn,
   enrichOptionStrategy,
   type OptionMarketSnapshot,
@@ -66,12 +67,12 @@ export function runAllTests() {
     assert(true, 'countB3TradingDays valida boundary imediatamente e lança UnsupportedB3CalendarYearError');
   }
 
-  // ─── 2. CDI ACCRUAL TESTS (COM PRECISÃO B3 E CONVENÇÃO TEMPORAL) ───
+  // ─── 2. CDI ACCRUAL TESTS (CANÔNICO B3 [start, end) E TRUNCAMENTO 16 CASAS) ───
   console.log('\n2. CDI Accrual Engine Tests:');
   const di6du = calculateRealizedDiFactor('2026-08-24', '2026-09-01');
   assert(di6du.observationsCount === 6, 'DI acumulou exatamente 6 observações');
   assert(di6du.isEstimated === false, 'DI usou série oficial B3 sem fallback');
-  assert(Math.abs(di6du.periodYieldDecimal - 0.003104) < 0.0001, 'Yield CDI 6 DU é aproximadamente +0.3104%');
+  assert(Math.abs(di6du.periodYieldDecimal - 0.00310356) < 0.0001, 'Yield CDI 6 DU é aproximadamente +0.3104%');
 
   const diProj12 = calculateProjectedDiFactor(12, 0.14);
   assert(Math.abs(diProj12.periodYieldDecimal - 0.006259) < 0.0001, 'CDI projetado 12 DU é aproximadamente +0.6259%');
@@ -79,20 +80,23 @@ export function runAllTests() {
   assert(normalizeAnnualRate(14.0, 'PERCENT') === 0.14, 'normalizeAnnualRate normaliza PERCENT para decimal');
   assert(normalizeAnnualRate(0.14, 'DECIMAL') === 0.14, 'normalizeAnnualRate preserva DECIMAL');
 
-  // Teste de Convenção Temporal com Taxas Heterogêneas (D1 != D2)
+  // Teste de Convenção Temporal Canônica B3 [openDate, valuationDate) com Taxas Heterogêneas (D0 != D1)
   const customSeries = new Map<string, { annualRateDecimal: number; source: string }>([
-    ['2026-08-25', { annualRateDecimal: 0.1390, source: 'TEST' }], // D1
-    ['2026-08-26', { annualRateDecimal: 0.1500, source: 'TEST' }], // D2
+    ['2026-08-24', { annualRateDecimal: 0.1390, source: 'TEST_D0' }], // Taxa em 24/08 (D0)
+    ['2026-08-25', { annualRateDecimal: 0.1500, source: 'TEST_D1' }], // Taxa em 25/08 (D1)
   ]);
 
+  // 24/08 -> 25/08 (1 DU): deve utilizar a taxa de 24/08 (13.90%) para remunerar até 25/08
   const diD1 = calculateRealizedDiFactor('2026-08-24', '2026-08-25', 0.14, customSeries as any);
-  const fdi1 = Math.round(Math.pow(1 + 0.1390, 1 / 252.0) * 100000000) / 100000000;
-  assert(Math.abs(diD1.accumulatedFactor - fdi1) < 0.00000001, 'D0->D1 acumula estritamente o FDI do D1 (13.90%)');
+  const fdi24 = Math.round(Math.pow(1 + 0.1390, 1 / 252.0) * 100000000) / 100000000;
+  assert(Math.abs(diD1.accumulatedFactor - fdi24) < 0.00000001, '24/08 -> 25/08 (1 DU) acumula estritamente a taxa de 24/08 (13.90%)');
+  assert(diD1.observations[0].rateDate === '2026-08-24' && diD1.observations[0].accrualDate === '2026-08-25', 'DiAccrualObservation separa rateDate (24/08) de accrualDate (25/08)');
 
+  // 24/08 -> 26/08 (2 DU): deve acumular FDI(24/08) * FDI(25/08)
   const diD2 = calculateRealizedDiFactor('2026-08-24', '2026-08-26', 0.14, customSeries as any);
-  const fdi2 = Math.round(Math.pow(1 + 0.1500, 1 / 252.0) * 100000000) / 100000000;
-  const expectedProd = fdi1 * fdi2;
-  assert(Math.abs(diD2.accumulatedFactor - expectedProd) < 0.00000001, 'D0->D2 acumula FDI(D1) * FDI(D2), sem shift de sessão temporal');
+  const fdi25 = Math.round(Math.pow(1 + 0.1500, 1 / 252.0) * 100000000) / 100000000;
+  const expectedProd = Math.round(Math.trunc(fdi24 * fdi25 * 1e16) / 1e16 * 1e8) / 1e8;
+  assert(Math.abs(diD2.accumulatedFactor - expectedProd) < 0.00000001, '24/08 -> 26/08 (2 DU) acumula FDI(24/08) * FDI(25/08) com convenção canônica B3 [start, end)');
 
   // ─── 3. PRICING & EXIT QUOTE TESTS ───
   console.log('\n3. Pricing & Exit Quote Tests:');
@@ -195,13 +199,10 @@ export function runAllTests() {
   assert(effStale.executionQuality === 'STALE', 'Cotação stale marca executionQuality STALE');
   assert(effStale.decisionEligible === false, 'Cotação STALE bloqueia decisionEligible mesmo com score de reciclagem forte');
 
-  // Teste de Integração com ActionFeed Filter Rule
-  function shouldEnterActionFeed(eff: any): boolean {
-    return !!(eff.decisionEligible && (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA'));
-  }
-  assert(shouldEnterActionFeed(effExec) === true, 'Cotação LIVE Executável com tier ELEVADA entra no ActionFeed');
-  assert(shouldEnterActionFeed(effMtm) === false, 'Cotação MARK Indicativa NÃO entra no ActionFeed');
-  assert(shouldEnterActionFeed(effStale) === false, 'Cotação STALE NÃO entra no ActionFeed');
+  // Teste com a função exportada de produção isActionFeedEligible()
+  assert(isActionFeedEligible(effExec) === true, 'isActionFeedEligible: Cotação LIVE Executável com tier ELEVADA entra no ActionFeed');
+  assert(isActionFeedEligible(effMtm) === false, 'isActionFeedEligible: Cotação MARK Indicativa NÃO entra no ActionFeed');
+  assert(isActionFeedEligible(effStale) === false, 'isActionFeedEligible: Cotação STALE NÃO entra no ActionFeed');
 
   // Edge cases
   const effTZero = calculateEfficiencyScore(

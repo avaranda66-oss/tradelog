@@ -336,6 +336,14 @@ export function calculateEfficiencyScore(
   };
 }
 
+/**
+ * Determina se a análise de eficiência qualifica a posição para figurar no ActionFeed operacional.
+ * Regra: Requer cotação executável fresca (decisionEligible) E score classificado em RECICLAGEM_FORTE, AVALIAR_MANEJO ou ELEVADA.
+ */
+export function isActionFeedEligible(eff: EfficiencyAnalysis): boolean {
+  return eff.decisionEligible && (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA');
+}
+
 // ─── 7. COLLATERAL ENGINE (IDLE_CASH vs REMUNERATED vs CUSTOM) ───
 export interface CollateralResult {
   collateralReturnReais: number;

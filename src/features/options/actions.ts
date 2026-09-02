@@ -17,6 +17,7 @@ import { revalidatePath } from 'next/cache';
 import {
   enrichOptionPosition,
   enrichOptionStrategy,
+  isActionFeedEligible,
   type PositionCalculatedMetrics,
   type EnrichedOptionPosition,
   type EnrichedOptionStrategy,
@@ -337,7 +338,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             if (m.cdiIsEstimated) incomeCdiIsEstimated = true;
 
             const eff = m.efficiencyExecutable;
-            if (eff.decisionEligible && (eff.tier === 'RECICLAGEM_FORTE' || eff.tier === 'AVALIAR_MANEJO' || eff.tier === 'ELEVADA')) {
+            if (isActionFeedEligible(eff)) {
               actionFeedItems.push({
                 positionId: pos.id,
                 tickerOption: pos.tickerOption,

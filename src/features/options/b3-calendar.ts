@@ -124,14 +124,18 @@ export function isB3TradingDay(dateStr: BusinessDate): boolean {
   return true;
 }
 
+export type CalendarConvention =
+  | 'EXCLUDE_START_INCLUDE_END' // Padrão de contagem de dias úteis transcorridos (D0, Dn]
+  | 'INCLUDE_START_EXCLUDE_END' // Padrão canônico B3 para taxas DI acumuladas no período [D0, Dn)
+  | 'INCLUDE_BOTH';
+
 /**
  * Retorna todas as sessões de negociação da B3 entre duas datas
- * Convenção padrão: (start, end] (start excluído, end incluído)
  */
 export function getB3TradingDays(
   startStr: BusinessDate,
   endStr: BusinessDate,
-  convention: 'EXCLUDE_START_INCLUDE_END' | 'INCLUDE_BOTH' = 'EXCLUDE_START_INCLUDE_END'
+  convention: CalendarConvention = 'EXCLUDE_START_INCLUDE_END'
 ): BusinessDate[] {
   const start = parseBusinessDate(startStr);
   const end = parseBusinessDate(endStr);
@@ -160,7 +164,7 @@ export function getB3TradingDays(
     cur.setDate(cur.getDate() + 1);
   }
 
-  while (cur <= targetEnd) {
+  while (convention === 'INCLUDE_START_EXCLUDE_END' ? cur < targetEnd : cur <= targetEnd) {
     const yyyy = cur.getFullYear();
     const mm = String(cur.getMonth() + 1).padStart(2, '0');
     const dd = String(cur.getDate()).padStart(2, '0');
@@ -177,12 +181,22 @@ export function getB3TradingDays(
 
 /**
  * Conta o número de sessões B3 úteis entre duas datas
- * Convenção padrão: (start, end] (start excluído, end incluído)
  */
 export function countB3TradingDays(
   startStr: BusinessDate,
   endStr: BusinessDate,
-  convention: 'EXCLUDE_START_INCLUDE_END' | 'INCLUDE_BOTH' = 'EXCLUDE_START_INCLUDE_END'
+  convention: CalendarConvention = 'EXCLUDE_START_INCLUDE_END'
 ): number {
   return getB3TradingDays(startStr, endStr, convention).length;
+}
+
+/**
+ * Retorna as datas de observação da Taxa DI aplicáveis no período entre a abertura (openDate) e valorização (valuationDate)
+ * Metodologia Oficial B3: intervalo [openDate, valuationDate) onde cada dia D_k remunera a passagem para D_{k+1}.
+ */
+export function getDiObservationDates(
+  openDateStr: BusinessDate,
+  valuationDateStr: BusinessDate
+): BusinessDate[] {
+  return getB3TradingDays(openDateStr, valuationDateStr, 'INCLUDE_START_EXCLUDE_END');
 }
