@@ -571,6 +571,7 @@ export async function runActionsSuiteTests() {
       quantity: 100,
       strike: 30.00,
       entryPrice: 1.00,
+      currentPrice: 1.00,
       entryDate: '2026-08-15', // Sábado
       expirationDate: '2026-09-18',
       status: 'OPEN',
@@ -588,6 +589,7 @@ export async function runActionsSuiteTests() {
       quantity: 100,
       strike: 30.00,
       entryPrice: 1.00,
+      currentPrice: 1.00,
       entryDate: '2026-09-07', // Feriado Independência do Brasil
       expirationDate: '2026-09-18',
       status: 'OPEN',
@@ -605,6 +607,7 @@ export async function runActionsSuiteTests() {
       quantity: 100,
       strike: 30.00,
       entryPrice: 1.00,
+      currentPrice: 1.00,
       entryDate: '2026-08-24', // Segunda-feira útil de pregão B3
       expirationDate: '2026-09-18',
       status: 'OPEN',
