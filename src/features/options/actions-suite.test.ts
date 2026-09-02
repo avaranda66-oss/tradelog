@@ -5,17 +5,13 @@
  * Strategy Funding Updates, and Canonical Portfolio Economic Summary Aggregation (Double Yield Engine).
  */
 
-import {
-  getOptionPositions,
-  groupOptionPositionsAction,
-  updateOptionStrategyFundingAction,
-  createOptionPosition,
-  updateOptionPosition,
-  closeOptionPosition,
-  ungroupOptionStrategyAction,
-  type GetOptionPositionsResult,
-} from './actions';
-import { db } from '../../lib/db';
+if (process.env.TRADELOG_DB_PATH !== ':memory:') {
+  throw new Error(
+    'FAIL-FAST VIOLATION: actions-suite must ONLY be run against an in-memory database (:memory:) to prevent polluting local development database. Please run via: npx tsx src/features/options/actions-suite.runner.ts'
+  );
+}
+
+import type { GetOptionPositionsResult } from './actions';
 import {
   optionPositions,
   optionStrategies,
@@ -29,12 +25,6 @@ import {
 import { eq, inArray, and, isNull } from 'drizzle-orm';
 import { calculateRealizedDiFactor } from './cdi-engine';
 
-if (process.env.TRADELOG_DB_PATH !== ':memory:') {
-  throw new Error(
-    'FAIL-FAST VIOLATION: actions-suite must ONLY be run against an in-memory database (:memory:) to prevent polluting local development database. Please run via: npx tsx src/features/options/actions-suite.runner.ts'
-  );
-}
-
 function assert(condition: boolean, msg: string) {
   if (!condition) {
     throw new Error(`[ACTIONS TEST FAILED] ${msg}`);
@@ -43,6 +33,18 @@ function assert(condition: boolean, msg: string) {
 }
 
 export async function runActionsSuiteTests() {
+  const { db } = await import('../../lib/db');
+  const {
+    getOptionPositions,
+    groupOptionPositionsAction,
+    updateOptionStrategyFundingAction,
+    createOptionPosition,
+    updateOptionPosition,
+    closeOptionPosition,
+    ungroupOptionStrategyAction,
+    rollOptionPosition,
+  } = await import('./actions');
+
   console.log('\n========================================');
   console.log('🧪 RUNNING SERVER ACTIONS & INTEGRATION TEST SUITE (:memory:)');
   console.log('========================================\n');
@@ -898,6 +900,7 @@ export async function runActionsSuiteTests() {
     const expireCallRes = await closeOptionPosition({
       id: longCallId,
       exitPrice: 0,
+      exitDate: '2026-09-18', // No vencimento
       status: 'EXPIRED_WORTHLESS',
       notes: 'Virou pó no vencimento',
     });
@@ -927,6 +930,164 @@ export async function runActionsSuiteTests() {
     db.delete(optionStrategyLegs).where(eq(optionStrategyLegs.strategyId, auditStratId)).run();
     db.delete(optionStrategies).where(eq(optionStrategies.id, auditStratId)).run();
     db.delete(optionPositions).where(inArray(optionPositions.id, [newPos1Id, newPos2Id, standalonePutId, longCallId])).run();
+
+    console.log('\n7. Roll Protocol Suspension & Temporal Invariants Tests:');
+
+    // 7.1. Tentativa de Roll deve retornar NOT_SUPPORTED e NUNCA criar nova posição
+    const initialPosCount = db.query.optionPositions.findMany().sync().length;
+    const rollAttemptRes = await rollOptionPosition({
+      currentPositionId: 'dummy_id',
+      recompraPrice: 0.10,
+      newOptionTicker: 'VALEJ600',
+      newStrike: 62.00,
+      newEntryPrice: 1.50,
+      newExpirationDate: '2026-10-16',
+    });
+    assert(rollAttemptRes.success === false, 'P0.1: rollOptionPosition rejeitado temporariamente com sucesso');
+    assert(Boolean(rollAttemptRes.error?.includes('ROLL_NOT_SUPPORTED_UNTIL_MANEUVER_ENGINE')), 'P0.1: Erro ROLL_NOT_SUPPORTED_UNTIL_MANEUVER_ENGINE retornado');
+    const finalPosCount = db.query.optionPositions.findMany().sync().length;
+    assert(initialPosCount === finalPosCount, 'P0.1: Nenhuma nova posição criada na tentativa de roll');
+
+    // 7.2. Invariante Temporal: EXPIRED_WORTHLESS antes do vencimento deve ser bloqueado
+    const createEarlyExpPos = await createOptionPosition({
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEU600',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 100,
+      strike: 60.00,
+      entryPrice: 1.00,
+      currentPrice: 0.05,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18', // Vencimento em 18/09
+      status: 'OPEN',
+    });
+    const earlyExpPosId = createEarlyExpPos.id!;
+
+    const rejectEarlyExpireRes = await closeOptionPosition({
+      id: earlyExpPosId,
+      exitPrice: 0,
+      exitDate: '2026-09-02', // 02/09 < 18/09
+      status: 'EXPIRED_WORTHLESS',
+    });
+    assert(rejectEarlyExpireRes.success === false, 'P0.2: EXPIRED_WORTHLESS antes do vencimento bloqueado');
+    assert(Boolean(rejectEarlyExpireRes.error?.includes('EXPIRE_BEFORE_EXPIRATION_NOT_ALLOWED')), 'P0.2: Erro EXPIRE_BEFORE_EXPIRATION_NOT_ALLOWED retornado');
+
+    // 7.3. Validações estritas de CLOSED normal
+    // a) Preço negativo ou não finito
+    const rejectNegativePriceRes = await closeOptionPosition({
+      id: earlyExpPosId,
+      exitPrice: -0.50,
+      exitDate: '2026-09-02',
+      status: 'CLOSED',
+    });
+    assert(rejectNegativePriceRes.success === false, 'P0.2: Preço de saída negativo rejeitado');
+    assert(Boolean(rejectNegativePriceRes.error?.includes('INVALID_EXIT_PRICE')), 'P0.2: Erro INVALID_EXIT_PRICE retornado');
+
+    // b) exitDate não útil (sábado)
+    const rejectSaturdayCloseRes = await closeOptionPosition({
+      id: earlyExpPosId,
+      exitPrice: 0.20,
+      exitDate: '2026-08-29', // Sábado
+      status: 'CLOSED',
+    });
+    assert(rejectSaturdayCloseRes.success === false, 'P0.2: Data de saída em dia não útil rejeitada');
+    assert(Boolean(rejectSaturdayCloseRes.error?.includes('INVALID_EXIT_DATE_NON_TRADING_DAY')), 'P0.2: Erro INVALID_EXIT_DATE_NON_TRADING_DAY retornado');
+
+    // c) exitDate anterior à entryDate
+    const rejectPastCloseRes = await closeOptionPosition({
+      id: earlyExpPosId,
+      exitPrice: 0.20,
+      exitDate: '2026-08-21', // 21/08 < entryDate 24/08
+      status: 'CLOSED',
+    });
+    assert(rejectPastCloseRes.success === false, 'P0.2: Data de saída anterior à entrada rejeitada');
+    assert(Boolean(rejectPastCloseRes.error?.includes('EXIT_DATE_BEFORE_ENTRY_DATE')), 'P0.2: Erro EXIT_DATE_BEFORE_ENTRY_DATE retornado');
+
+    // Encerramento válido no vencimento com pó
+    const validExpireRes = await closeOptionPosition({
+      id: earlyExpPosId,
+      exitPrice: 0,
+      exitDate: '2026-09-18', // No vencimento
+      status: 'EXPIRED_WORTHLESS',
+    });
+    assert(validExpireRes.success === true, 'P0.2: EXPIRED_WORTHLESS no vencimento aceito com sucesso');
+
+    // 7.4. Golden Test: Estrutura legada com openedAt em sábado (ex: 2026-08-15)
+    const legacyStratId = 'strat_legacy_weekend_audit';
+    const legacyPosId = 'pos_legacy_weekend_audit';
+    const legacyLegId = 'leg_legacy_weekend_audit';
+
+    db.insert(optionPositions).values({
+      id: legacyPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 30.00,
+      entryPrice: 1.00,
+      currentPrice: 1.00,
+      allocatedCapital: 3000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-15T12:00:00.000Z',
+      updatedAt: '2026-08-15T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: legacyStratId,
+      name: 'Trava Legada Sábado',
+      strategyType: 'CUSTOM',
+      book: 'HYBRID',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      status: 'OPEN',
+      openedAt: '2026-08-15', // Sábado!
+      createdAt: '2026-08-15T12:00:00.000Z',
+      updatedAt: '2026-08-15T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: legacyLegId,
+      strategyId: legacyStratId,
+      positionId: legacyPosId,
+      allocatedQuantity: 100,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 0,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'FINANCING',
+      createdAt: '2026-08-15T12:00:00.000Z',
+    }).run();
+
+    // getOptionPositions NÃO PODE quebrar nem lançar Invariant Violation
+    const getLegacyRes = await getOptionPositions();
+    assert(getLegacyRes.success === true, 'P0/P1 Golden Test: getOptionPositions com strategy legacy em sábado retorna success: true sem quebrar');
+    assert(getLegacyRes.strategies !== null, 'P0/P1 Golden Test: strategies carregadas');
+    const weekendStrat = getLegacyRes.strategies?.find((s) => s.id === legacyStratId);
+    assert(Boolean(weekendStrat), 'P0/P1 Golden Test: Estrutura com data de sábado encontrada');
+    assert(weekendStrat?.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'P0/P1 Golden Test: economicPerformanceQuality === INSUFFICIENT_DATA');
+    assert(weekendStrat?.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0/P1 Golden Test: benchmarkQuality === NOT_AVAILABLE');
+    assert(weekendStrat?.economicPerformance.benchmarkCdiReais === 0, 'P0/P1 Golden Test: benchmarkCdiReais === 0');
+    assert(weekendStrat?.economicPerformance.collateralCarryReais === 0, 'P0/P1 Golden Test: collateralCarryReais === 0');
+    assert(
+      Boolean(weekendStrat?.economicPerformance.qualityNotes.some((n) => n.includes('INVALID_STRATEGY_OPENED_AT_NON_TRADING_DAY'))),
+      'P0/P1 Golden Test: qualityNotes contém INVALID_STRATEGY_OPENED_AT_NON_TRADING_DAY'
+    );
+
+    // Limpeza das fixtures de teste
+    db.delete(optionPositionExecutions).where(eq(optionPositionExecutions.positionId, earlyExpPosId)).run();
+    db.delete(optionStrategyLegs).where(eq(optionStrategyLegs.id, legacyLegId)).run();
+    db.delete(optionStrategies).where(eq(optionStrategies.id, legacyStratId)).run();
+    db.delete(optionPositions).where(inArray(optionPositions.id, [earlyExpPosId, legacyPosId])).run();
 
   } finally {
     // Limpeza Final de Segurança

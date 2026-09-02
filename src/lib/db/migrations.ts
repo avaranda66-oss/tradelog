@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { calculateStrategyCanonicalBenchmarkCapital } from '../../features/options/calculations';
+import { isB3TradingDay, type BusinessDate } from '../../features/options/b3-calendar';
 
 /**
  * Verifica se uma coluna existe na tabela SQLite e a adiciona via DDL se ausente.
@@ -315,6 +316,12 @@ function backfillOptionPositionsAndLegs(sqliteInstance: Database.Database): void
           }
         }
 
+        const startDateStr = (strat.opened_at || strat.created_at || '2026-08-24').slice(0, 10);
+        const isStartDateTradingDay = isB3TradingDay(startDateStr as BusinessDate);
+        if (!isStartDateTradingDay) {
+          quality = 'INSUFFICIENT_DATA';
+        }
+
         const segId = `seg_init_${strat.id}`;
         sqliteInstance.prepare(`
           INSERT OR IGNORE INTO strategy_funding_segments (
@@ -418,18 +425,18 @@ export function upgradeStrategyFundingSegmentsCoherenceCheck(
       if (failureInjection) {
         failureInjection();
       }
+
+      // 4. Executar verificação estrita de chaves estrangeiras
+      const fkViolations = sqliteInstance.prepare('PRAGMA foreign_key_check').all();
+      if (fkViolations.length > 0) {
+        throw new Error(`FOREIGN_KEY_VIOLATION_AFTER_UPGRADE: ${JSON.stringify(fkViolations)}`);
+      }
     });
 
     performUpgradeTransaction();
   } finally {
     // 3. Em bloco finally, religar foreign_keys incondicionalmente
     sqliteInstance.pragma('foreign_keys = ON');
-  }
-
-  // 4. Executar verificação estrita de chaves estrangeiras
-  const fkViolations = sqliteInstance.prepare('PRAGMA foreign_key_check').all();
-  if (fkViolations.length > 0) {
-    throw new Error(`FOREIGN_KEY_VIOLATION_AFTER_UPGRADE: ${JSON.stringify(fkViolations)}`);
   }
 }
 

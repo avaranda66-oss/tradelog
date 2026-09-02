@@ -650,6 +650,65 @@ export function runMigrationSmokeTest() {
 
   sqliteFailDb.close();
 
+  // 9. Teste de Violação de Chave Estrangeira com Rollback Atômico DENTRO da Transação
+  console.log('\n  -> Testando Detecção de Violação de FK dentro da Transação com Rollback...');
+  const sqliteFkDb = new Database(':memory:');
+  sqliteFkDb.pragma('foreign_keys = OFF'); // Desativa FK temporariamente para forçar inserção de dado órfão prévio
+
+  sqliteFkDb.exec(`
+    CREATE TABLE option_strategies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      strategy_type TEXT NOT NULL,
+      book TEXT NOT NULL,
+      underlying_ticker TEXT NOT NULL,
+      collateral_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      opened_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE strategy_funding_segments (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL REFERENCES option_strategies(id) ON DELETE RESTRICT,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      benchmark_capital_reais REAL NOT NULL CHECK(benchmark_capital_reais >= 0),
+      capital_remunerated_reais REAL NOT NULL CHECK(capital_remunerated_reais >= 0 AND capital_remunerated_reais <= benchmark_capital_reais),
+      collateral_mode TEXT NOT NULL,
+      collateral_pct_cdi REAL CHECK(collateral_pct_cdi IS NULL OR collateral_pct_cdi >= 0),
+      source_type TEXT NOT NULL,
+      maneuver_event_id TEXT,
+      funding_event_id TEXT,
+      quality TEXT NOT NULL DEFAULT 'FULL',
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  // Inserir segmento órfão (strategy_id inexistente)
+  sqliteFkDb.prepare(`
+    INSERT INTO strategy_funding_segments (id, strategy_id, start_date, end_date, benchmark_capital_reais, capital_remunerated_reais, collateral_mode, source_type, quality, created_at)
+    VALUES ('seg_orphan', 'non_existent_strat', '2026-08-01', NULL, 5000.0, 5000.0, 'IDLE_CASH', 'CREATION', 'FULL', '2026-08-01');
+  `).run();
+
+  let fkCheckThrew = false;
+  try {
+    upgradeStrategyFundingSegmentsCoherenceCheck(sqliteFkDb);
+  } catch (err: any) {
+    fkCheckThrew = err.message.includes('FOREIGN_KEY_VIOLATION_AFTER_UPGRADE');
+  }
+  assert(fkCheckThrew, 'FK Rollback: Violação de FK detectada dentro da transação e disparou rollback');
+
+  // Verificar que o rollback preservou a tabela original intacta
+  const orphanSeg = sqliteFkDb.prepare("SELECT * FROM strategy_funding_segments WHERE id = 'seg_orphan'").get() as any;
+  assert(Boolean(orphanSeg), 'FK Rollback: Tabela original preservada intacta após detecção de violação de FK');
+
+  // Verificar que a tabela temporária não existe
+  const tempTableFk = sqliteFkDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'strategy_funding_segments_upgrade'").get();
+  assert(!tempTableFk, 'FK Rollback: Tabela temporária _upgrade não comitada após violação');
+
+  sqliteFkDb.close();
+
   console.log('\n========================================');
   console.log('✅ ALL SQLITE MIGRATION SMOKE TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');

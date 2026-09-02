@@ -416,7 +416,7 @@ export interface StrategyEconomicPerformance {
   benchmarkCdiAccumulatedFactor: number | null;
   benchmarkCdiYieldDecimal: number | null;
   benchmarkCdiReais: number;
-  benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED';
+  benchmarkQuality: 'OFFICIAL_DI' | 'PARTIAL_ESTIMATE' | 'ESTIMATED' | 'NOT_AVAILABLE';
 
   // Carrego Real do Caixa (Collateral)
   collateralMode: CollateralMode;
@@ -544,6 +544,56 @@ export function calculateStrategyEconomicPerformance(
 
   if (params.legsOpenedAtDifferentDates) {
     qualityNotes.push('Pernas com datas de abertura distintas: benchmark linear aproximado (STATIC_APPROXIMATION)');
+  }
+
+  // P0/P1 Fail-Safe: Se startDate não for dia útil de pregão B3, não chamar CDI Engine e retornar indisponível
+  if (!isB3TradingDay(startDate)) {
+    return {
+      startDate,
+      valuationDate: valDate,
+      accrualValuationDate,
+      elapsedDU: 0,
+      resultNature,
+      capitalReservedReais,
+      capitalRemuneratedReais: 0,
+      benchmarkCapitalReais,
+      optionPnlReais: params.optionPnlReais,
+      collateralMode,
+      collateralPctCdi,
+      maxLossEconomicReais: params.maxLossEconomicReais ?? null,
+      maxLossType: params.maxLossType ?? 'UNKNOWN',
+      riskRecognitionQuality: params.riskRecognitionQuality ?? 'UNKNOWN',
+      benchmarkCdiAccumulatedFactor: null,
+      benchmarkCdiYieldDecimal: null,
+      benchmarkCdiReais: 0,
+      benchmarkQuality: 'NOT_AVAILABLE',
+      collateralAccumulatedFactor: null,
+      collateralYieldDecimal: null,
+      collateralCarryReais: 0,
+      totalEconomicReturnReais: params.optionPnlReais,
+      excessReturnVsCdiReais: params.optionPnlReais,
+      optionPnlToCdiMultiple: null,
+      totalReturnToCdiMultiple: null,
+      optionReturnOnBenchmarkCapitalPct: benchmarkCapitalReais > 0 ? (params.optionPnlReais / benchmarkCapitalReais) * 100 : null,
+      totalEconomicReturnPct: benchmarkCapitalReais > 0 ? (params.optionPnlReais / benchmarkCapitalReais) * 100 : null,
+      cdiPeriodReturnPct: null,
+      excessPeriodPctPoints: null,
+      excessReturnOnReservedCapitalPct: null,
+      excessReturnOnMaxRiskPct: null,
+      extraProfitPer1000RiskReais: null,
+      optionPnlEquivalentCdiDU: null,
+      thetaReaisPerComparableDay: null,
+      cdiCarryReaisPerComparableDay: null,
+      thetaToCdiDailyMultiple: null,
+      monthlyEquivalentPct: null,
+      annualizedEquivalentPct: null,
+      annualizationQuality: 'NOT_AVAILABLE',
+      capitalBasisMethod: 'STATIC',
+      economicPerformanceQuality: 'INSUFFICIENT_DATA',
+      qualityNotes: [
+        'INVALID_STRATEGY_OPENED_AT_NON_TRADING_DAY: A data de abertura desta estrutura legada não corresponde a um pregão válido da B3. Cálculo de CDI e carrego indisponível até correção explícita.',
+      ],
+    };
   }
 
   // 2. Benchmark CDI (100% CDI Puro)
@@ -1579,7 +1629,67 @@ export function enrichOptionStrategy(params: {
 
   let economicPerformance: StrategyEconomicPerformance;
 
-  if (isClosedOrRolledMissingDate) {
+  if (!isB3TradingDay(openedAtBusinessDate)) {
+    economicPerformance = {
+      startDate: openedAtBusinessDate,
+      valuationDate: valuationDateStr,
+      accrualValuationDate: valuationDateStr,
+      elapsedDU: 0,
+      resultNature,
+
+      capitalReservedReais: totalCapitalReserved,
+      capitalRemuneratedReais: 0,
+      benchmarkCapitalReais: totalCapitalReserved,
+      optionPnlReais: netPnlMtmReais,
+
+      collateralMode: params.collateralMode,
+      collateralPctCdi: params.collateralYieldPctCDI ?? 0,
+
+      maxLossEconomicReais,
+      maxLossType,
+      riskRecognitionQuality: riskProfile.riskRecognitionQuality,
+
+      benchmarkCdiAccumulatedFactor: null,
+      benchmarkCdiYieldDecimal: null,
+      benchmarkCdiReais: 0,
+      benchmarkQuality: 'NOT_AVAILABLE',
+
+      collateralAccumulatedFactor: null,
+      collateralYieldDecimal: null,
+      collateralCarryReais: 0,
+
+      totalEconomicReturnReais: netPnlMtmReais,
+      excessReturnVsCdiReais: netPnlMtmReais,
+
+      optionPnlToCdiMultiple: null,
+      totalReturnToCdiMultiple: null,
+
+      optionReturnOnBenchmarkCapitalPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      totalEconomicReturnPct: totalCapitalReserved > 0 ? (netPnlMtmReais / totalCapitalReserved) * 100 : null,
+      cdiPeriodReturnPct: null,
+      excessPeriodPctPoints: null,
+
+      excessReturnOnReservedCapitalPct: null,
+      excessReturnOnMaxRiskPct: null,
+      extraProfitPer1000RiskReais: null,
+
+      optionPnlEquivalentCdiDU: null,
+
+      thetaReaisPerComparableDay: null,
+      cdiCarryReaisPerComparableDay: null,
+      thetaToCdiDailyMultiple: null,
+
+      monthlyEquivalentPct: null,
+      annualizedEquivalentPct: null,
+      annualizationQuality: 'NOT_AVAILABLE',
+
+      capitalBasisMethod: 'STATIC',
+      economicPerformanceQuality: 'INSUFFICIENT_DATA',
+      qualityNotes: [
+        'INVALID_STRATEGY_OPENED_AT_NON_TRADING_DAY: A data de abertura desta estrutura legada não corresponde a um pregão válido da B3. Cálculo de CDI e carrego indisponível até correção explícita.',
+      ],
+    };
+  } else if (isClosedOrRolledMissingDate) {
     economicPerformance = {
       startDate: openedAtBusinessDate,
       valuationDate: openedAtBusinessDate,

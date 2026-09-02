@@ -1405,10 +1405,41 @@ export async function closeOptionPosition(params: {
     const isSell = pos.side === 'SELL' || pos.side === 'SHORT';
     let executionType: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE' | 'EXPIRE_WORTHLESS' = isSell ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
     let effectivePrice = params.exitPrice;
+    const exitDate = params.exitDate || getBrazilTodayDate();
 
     if (params.status === 'EXPIRED_WORTHLESS') {
       executionType = 'EXPIRE_WORTHLESS';
       effectivePrice = 0;
+
+      // P0: Invariante Temporal estrito: pó só ocorre no vencimento ou após
+      if (exitDate < pos.expirationDate) {
+        return {
+          success: false,
+          error: `EXPIRE_BEFORE_EXPIRATION_NOT_ALLOWED: Uma opção só pode expirar como pó no vencimento ou após o vencimento (exitDate ${exitDate} < expirationDate ${pos.expirationDate}). Para encerramento antecipado, utilize o fechamento a mercado.`,
+        };
+      }
+    } else if (params.status === 'CLOSED') {
+      // P0: Validações estritas de preço e datas para encerramento a mercado
+      if (!Number.isFinite(params.exitPrice) || params.exitPrice < 0) {
+        return {
+          success: false,
+          error: 'INVALID_EXIT_PRICE: O preço de saída deve ser um número finito maior ou igual a zero.',
+        };
+      }
+
+      if (!isB3TradingDay(exitDate as BusinessDate)) {
+        return {
+          success: false,
+          error: 'INVALID_EXIT_DATE_NON_TRADING_DAY: A data de saída deve corresponder a um pregão válido da B3.',
+        };
+      }
+
+      if (exitDate < pos.entryDate) {
+        return {
+          success: false,
+          error: `EXIT_DATE_BEFORE_ENTRY_DATE: A data de saída (${exitDate}) não pode ser anterior à data de entrada da posição (${pos.entryDate}).`,
+        };
+      }
     }
 
     const unitPnl = isSell ? (pos.entryPrice - effectivePrice) : (effectivePrice - pos.entryPrice);
@@ -1417,7 +1448,6 @@ export async function closeOptionPosition(params: {
     const newClosedQuantity = (pos.closedQuantity ?? 0) + openQuantity;
 
     const execId = generateId('opt_pos_exec');
-    const exitDate = params.exitDate || getBrazilTodayDate();
     const now = new Date().toISOString();
 
     db.transaction((tx) => {
@@ -1436,12 +1466,12 @@ export async function closeOptionPosition(params: {
       }).run();
 
       tx.update(optionPositions).set({
-        exitPrice: effectivePrice,
-        exitDate,
-        status: params.status === 'EXPIRED_WORTHLESS' ? 'EXPIRED_WORTHLESS' : 'CLOSED',
+        status: params.status,
         openQuantity: 0,
         closedQuantity: newClosedQuantity,
         realizedPnlReais: newTotalRealizedPnl,
+        exitPrice: effectivePrice,
+        exitDate,
         notes: params.notes ?? pos.notes,
         updatedAt: now,
       }).where(eq(optionPositions.id, params.id)).run();
@@ -1456,7 +1486,7 @@ export async function closeOptionPosition(params: {
 }
 
 /**
- * 7. Protocolo de Rolagem
+ * 7. Protocolo de Rolagem (Bloqueado temporariamente até a integração do Maneuver Engine)
  */
 export async function rollOptionPosition(params: {
   currentPositionId: string;
@@ -1466,53 +1496,11 @@ export async function rollOptionPosition(params: {
   newEntryPrice: number;
   newExpirationDate: string;
   newQuantity?: number;
-}): Promise<{ success: boolean; newId?: string }> {
-  try {
-    const current = await db.query.optionPositions.findFirst({
-      where: eq(optionPositions.id, params.currentPositionId),
-    });
-    if (!current) throw new Error('Posição original não encontrada');
-
-    const todayStr = getBrazilTodayDate();
-
-    await closeOptionPosition({
-      id: params.currentPositionId,
-      exitPrice: params.recompraPrice,
-      exitDate: todayStr,
-      status: 'ROLLED',
-      notes: `Rolagem para ${params.newOptionTicker} (Strike R$ ${params.newStrike.toFixed(2)})`,
-    });
-
-    const newQty = params.newQuantity || current.quantity;
-    const newCapital = current.optionType === 'PUT' ? params.newStrike * newQty : current.allocatedCapital;
-
-    const res = await createOptionPosition({
-      portfolio: current.portfolio || 'Principal',
-      tickerUnderlying: current.tickerUnderlying,
-      tickerOption: params.newOptionTicker,
-      optionType: current.optionType as 'CALL' | 'PUT',
-      side: current.side as 'SELL' | 'BUY',
-      strategyType: current.strategyType || 'VENDA_PUT',
-      quantity: newQty,
-      strike: params.newStrike,
-      entryPrice: params.newEntryPrice,
-      currentPrice: params.newEntryPrice,
-      underlyingEntrySpot: current.underlyingCurrentSpot ?? current.underlyingEntrySpot ?? undefined,
-      underlyingCurrentSpot: current.underlyingCurrentSpot ?? current.underlyingEntrySpot ?? undefined,
-      entryDate: todayStr,
-      expirationDate: params.newExpirationDate,
-      allocatedCapital: newCapital,
-      cdiRateAnnual: current.cdiRateAnnual ?? undefined,
-      status: 'OPEN',
-      notes: `Rolagem originada de ${current.tickerOption}`,
-    });
-
-    safeRevalidate('/opcoes');
-    return { success: true, newId: res.id };
-  } catch (err: any) {
-    console.error('[Options Actions] Erro na rolagem:', err);
-    return { success: false };
-  }
+}): Promise<{ success: boolean; newId?: string; error?: string }> {
+  return {
+    success: false,
+    error: 'ROLL_NOT_SUPPORTED_UNTIL_MANEUVER_ENGINE: A funcionalidade de rolagem está temporariamente suspensa até a integração completa do motor de manobras compostas (Maneuver Engine). Encerre a posição atual via Fechamento a Mercado e cadastre a nova série.',
+  };
 }
 
 /**

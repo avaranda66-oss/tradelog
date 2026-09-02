@@ -51,7 +51,7 @@ export function RollPositionModal({
         onRolled();
         onClose();
       } else {
-        alert('Erro ao realizar rolagem');
+        alert(res.error || 'Erro ao realizar rolagem');
       }
     } finally {
       setIsRolling(false);
