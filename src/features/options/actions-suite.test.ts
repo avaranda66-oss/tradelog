@@ -1953,13 +1953,75 @@ export async function runActionsSuiteTests() {
     assert(missingExecPos.metrics.realizedNetPnlReais === null, 'P1.4 Missing Execs: realizedNetPnlReais === null');
     assert(Boolean(missingExecPos.metrics.qualityNotes?.includes('MISSING_CANONICAL_EXECUTION_HISTORY')), 'P1.4 Missing Execs: qualityNotes contém MISSING_CANONICAL_EXECUTION_HISTORY');
 
+    // 8.12. Fase 4.2.3 — Propagação Estrita de Qualidade para o Portfolio Summary (P0.1)
+    const summaryWithMissingExec = missingExecPosRes.summary!;
+    assert(summaryWithMissingExec.portfolioRealizedPnlQuality === 'NOT_AVAILABLE', 'P0.1 Summary: NOT_AVAILABLE propaga com precedência máxima para a carteira');
+    assert(summaryWithMissingExec.portfolioGrossRealizedPnlReais === null, 'P0.1 Summary: portfolioGrossRealizedPnlReais === null sob NOT_AVAILABLE');
+    assert(summaryWithMissingExec.portfolioNetRealizedPnlReais === null, 'P0.1 Summary: portfolioNetRealizedPnlReais === null sob NOT_AVAILABLE');
+    assert(summaryWithMissingExec.portfolioTotalGrossPnlReais === null, 'P0.1 Summary: portfolioTotalGrossPnlReais === null sob NOT_AVAILABLE');
+    assert(summaryWithMissingExec.portfolioTotalNetPnlReais === null, 'P0.1 Summary: portfolioTotalNetPnlReais === null sob NOT_AVAILABLE');
+    assert(summaryWithMissingExec.portfolioKnownGrossRealizedPnlReais !== null, 'P0.1 Summary: portfolioKnownGrossRealizedPnlReais preservado como fato conhecido');
+
+    // 8.13. Fase 4.2.3 — Isolamento de Books contra Estratégias Não-Comparáveis (P0.2)
+    // Strategy B (legacyIncStratId) é LEGACY_INCOMPLETE (INSUFFICIENT_DATA no Double Yield)
+    assert(summaryWithMissingExec.incomeBook.excludedFromBenchmarkCount >= 1, 'P0.2 Book Isolation: Strategy não-comparável contabilizada em excludedFromBenchmarkCount');
+    assert(summaryWithMissingExec.incomeBook.knownOptionPnlReais !== null, 'P0.2 Book Isolation: knownOptionPnlReais exposto no book');
+    // hybridBook possui apenas estruturas válidas (Golden ITUB e Remun Test); garantir que múltiplos não foram contaminados
+    if (summaryWithMissingExec.hybridBook.benchmarkEligibleCount > 0) {
+      assert(summaryWithMissingExec.hybridBook.benchmarkCdiReais > 0, 'P0.2 Book Isolation: benchmarkCdiReais computado apenas sobre elegíveis');
+      assert(summaryWithMissingExec.hybridBook.totalReturnToCdiMultiple !== null, 'P0.2 Book Isolation: múltiplo do livro calculado sobre benchmark válido');
+    }
+
+    // 8.14. Fase 4.2.3 — Performance Since Inception para Posição Avulsa (Standalone CSP) CLOSED (P0.3)
+    const standaloneCspId = 'pos_standalone_csp_test';
+    db.insert(optionPositions).values({
+      id: standaloneCspId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'LREN3',
+      tickerOption: 'LRENV104',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'VENDA_PUT',
+      quantity: 500,
+      openQuantity: 500,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 10.42,
+      entryPrice: 0.50,
+      currentPrice: 0.30,
+      allocatedCapital: 5210.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const summaryBeforeCspClose = (await getOptionPositions()).summary!;
+    const incomeCapitalBeforeCsp = summaryBeforeCspClose.incomeBook.capitalAllocated;
+    const realizedBeforeCsp = summaryBeforeCspClose.portfolioKnownGrossRealizedPnlReais;
+
+    const closeCspRes = await closeOptionPosition({
+      id: standaloneCspId,
+      exitPrice: 0.10,
+      status: 'CLOSED',
+      exitDate: '2026-09-02',
+    });
+    assert(closeCspRes.success === true, 'P0.3 Standalone CSP: closeOptionPosition executado com sucesso');
+
+    const summaryAfterCspClose = (await getOptionPositions()).summary!;
+    assert(summaryAfterCspClose.incomeBook.capitalAllocated < incomeCapitalBeforeCsp, 'P0.3 Standalone CSP: Current Exposure (capitalAllocated) cai após o fechamento');
+    assert(summaryAfterCspClose.portfolioKnownGrossRealizedPnlReais - realizedBeforeCsp === 200.0, 'P0.3 Standalone CSP: Realized factual de +R$ 200,00 adicionado');
+    assert(summaryAfterCspClose.incomeBook.knownOptionPnlReais >= 200.0, 'P0.3 Standalone CSP: Income Book preserva P&L histórico since inception');
+    assert(summaryAfterCspClose.incomeBook.benchmarkCdiReais > 0, 'P0.3 Standalone CSP: Income Book preserva benchmark CDI histórico da posição fechada');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
       itubPutId, itubCallId, lrenPutId, dirCallId,
       'pos_itub_golden_put', 'pos_itub_golden_call',
       'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call',
-      'pos_legacy_inc_test', 'pos_missing_exec_test'
+      'pos_legacy_inc_test', 'pos_missing_exec_test', 'pos_standalone_csp_test'
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',

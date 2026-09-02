@@ -22,6 +22,7 @@ export function StrategyEconomicStorytellingCard({
 
   const canCompareToCdi = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA' && ep.benchmarkCdiReais !== null && ep.excessReturnVsCdiReais !== null;
   const isMtm = ep.resultNature === 'MTM';
+  const hasRealizedPart = sm.strategyGrossRealizedPnlReais !== null && sm.strategyGrossRealizedPnlReais !== 0;
   const isPositivePnl = ep.optionPnlReais >= 0;
   const isPositiveExcess = ep.excessReturnVsCdiReais !== null && ep.excessReturnVsCdiReais >= 0;
   const isAssumedFunding = hasQualityNote(ep.qualityNotes, 'ASSUMED_FULL_COLLATERAL_COVERAGE');
@@ -29,7 +30,9 @@ export function StrategyEconomicStorytellingCard({
 
   // Narrativa temporal e de realização
   const timeContextText = isMtm
-    ? `Desde ${ep.startDate} (${ep.elapsedDU} DU decorridos), o resultado em aberto até agora:`
+    ? hasRealizedPart
+      ? `Desde ${ep.startDate} (${ep.elapsedDU} DU decorridos), resultado total consolidado (parcial realizada + residual em aberto):`
+      : `Desde ${ep.startDate} (${ep.elapsedDU} DU decorridos), o resultado em aberto até agora:`
     : `Durante a operação entre ${ep.startDate} e ${ep.valuationDate} (${ep.elapsedDU} DU decorridos), o resultado realizado:`;
 
   return (
@@ -133,15 +136,26 @@ export function StrategyEconomicStorytellingCard({
         {/* P&L das Opções */}
         <div className="bg-[#070b14] border border-slate-800/80 rounded-lg p-3 space-y-1">
           <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-            {isMtm ? 'P&L OPÇÕES (MTM)' : 'P&L OPÇÕES (REALIZADO)'}
+            {hasRealizedPart && isMtm
+              ? 'P&L TOTAL DA ESTRUTURA'
+              : isMtm
+              ? 'P&L OPÇÕES (MTM)'
+              : 'P&L OPÇÕES (REALIZADO)'}
           </div>
           <div className={`text-base font-bold ${isPositivePnl ? 'text-emerald-400' : 'text-rose-400'}`}>
             {isPositivePnl ? '+' : ''}R$ {ep.optionPnlReais.toFixed(2)}
           </div>
           <div className="text-[10px] text-slate-500">
-            {ep.optionReturnOnBenchmarkCapitalPct !== null
-              ? `${ep.optionReturnOnBenchmarkCapitalPct >= 0 ? '+' : ''}${ep.optionReturnOnBenchmarkCapitalPct.toFixed(2)}% s/ garantia`
-              : 'Resultado derivativo'}
+            {hasRealizedPart && isMtm ? (
+              <span className="flex flex-col gap-0.5">
+                <span>Realizado: <strong className="text-emerald-300 font-semibold">{sm.strategyKnownGrossRealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyKnownGrossRealizedPnlReais.toFixed(2)}</strong></span>
+                <span>Em aberto (MTM): <strong className="text-sky-300 font-semibold">{sm.strategyUnrealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyUnrealizedPnlReais.toFixed(2)}</strong></span>
+              </span>
+            ) : ep.optionReturnOnBenchmarkCapitalPct !== null ? (
+              `${ep.optionReturnOnBenchmarkCapitalPct >= 0 ? '+' : ''}${ep.optionReturnOnBenchmarkCapitalPct.toFixed(2)}% s/ garantia`
+            ) : (
+              'Resultado derivativo'
+            )}
           </div>
         </div>
 
