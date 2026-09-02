@@ -890,7 +890,7 @@ export function runAllTests() {
   assert(diagStrat.metrics.maxLossEconomicReais === null, 'Diagonal Fail-Safe: maxLossEconomicReais é null');
   assert(diagStrat.economicPerformance.extraProfitPer1000RiskReais === null, 'Diagonal Fail-Safe: Bloqueia extraProfitPer1000RiskReais (null)');
 
-  // 8.11. CLOSED sem closedAt (Detecção Estrita de Falha de Dados)
+  // 8.11. CLOSED sem closedAt (Detecção Estrita de Falha de Dados e Falha Fechada)
   const closedWithoutDateStrat = enrichOptionStrategy({
     id: 'strat_closed_missing_date',
     portfolio: 'BTG',
@@ -907,7 +907,8 @@ export function runAllTests() {
     ],
   });
   assert(closedWithoutDateStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'CLOSED sem data: Marca economicPerformanceQuality INSUFFICIENT_DATA');
-  assert(closedWithoutDateStrat.economicPerformance.qualityNotes.some((n) => n.includes('CLOSED_OR_ROLLED_WITHOUT_CLOSED_AT')), 'CLOSED sem data: Registra nota de alerta específica');
+  assert(closedWithoutDateStrat.economicPerformance.benchmarkCdiReais === 0, 'CLOSED sem data: Falha fechado com benchmarkCdiReais zerado (0)');
+  assert(closedWithoutDateStrat.economicPerformance.qualityNotes.some((n) => n.includes('CLOSED_AT_REQUIRED')), 'CLOSED sem data: Registra erro de domínio CLOSED_AT_REQUIRED');
 
   // 8.12. ROLLED Result Nature e Split Capital Integrado no enrichOptionStrategy()
   const rolledSplitStrat = enrichOptionStrategy({
@@ -932,11 +933,216 @@ export function runAllTests() {
   assert(rolledSplitStrat.metrics.alphaReais === rolledSplitStrat.economicPerformance.excessReturnVsCdiReais, 'Single Source of Truth: metrics.alphaReais é idêntico a economicPerformance.excessReturnVsCdiReais');
   assert(rolledSplitStrat.metrics.cdiMultiple === rolledSplitStrat.economicPerformance.totalReturnToCdiMultiple, 'Single Source of Truth: metrics.cdiMultiple é idêntico a economicPerformance.totalReturnToCdiMultiple');
 
+  // 8.13. Coverage 0%, 50%, 100% de Capital Remunerado
+  const stratCov0 = enrichOptionStrategy({
+    id: 'strat_cov_0',
+    portfolio: 'BTG',
+    name: 'ITUB4 — 0% Cobertura CDI',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    collateralCoveragePct: 0,
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [{ id: 'l1', strategyId: 'strat_cov_0', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
+  });
+  assert(stratCov0.economicPerformance.capitalRemuneratedReais === 0, 'Coverage 0%: Capital remunerado é rigorosamente R$ 0,00');
+
+  const stratCov100 = enrichOptionStrategy({
+    id: 'strat_cov_100',
+    portfolio: 'BTG',
+    name: 'ITUB4 — 100% Cobertura CDI',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    collateralCoveragePct: 100,
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [{ id: 'l1', strategyId: 'strat_cov_100', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
+  });
+  assert(stratCov100.economicPerformance.capitalRemuneratedReais === 16000.0, 'Coverage 100%: Capital remunerado é 100% da garantia (R$ 16.000,00)');
+
+  // 8.14. Rejeição de Cobertura Inválida (>100% ou <0%)
+  let coverageExceedError = false;
+  try {
+    enrichOptionStrategy({
+      id: 'strat_cov_invalid',
+      portfolio: 'BTG',
+      name: 'ITUB4 — 150% Cobertura',
+      strategyType: 'VENDA_PUT',
+      book: 'INCOME',
+      underlyingTicker: 'ITUB4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: 150, // Inválido
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      legs: [{ id: 'l1', strategyId: 'strat_cov_invalid', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
+    });
+  } catch (e: any) {
+    coverageExceedError = e.message.includes('INVALID_COLLATERAL_COVERAGE_PERCENT');
+  }
+  assert(coverageExceedError, 'Coverage >100% é rigorosamente rejeitado com erro INVALID_COLLATERAL_COVERAGE_PERCENT');
+
+  // 8.15. Rejeição de Capital Remunerado > Benchmark Capital
+  let capitalExceedError = false;
+  try {
+    calculateStrategyEconomicPerformance({
+      startDate: '2026-08-24',
+      valuationDate: '2026-09-01',
+      capitalReservedReais: 10000,
+      benchmarkCapitalReais: 10000,
+      capitalRemuneratedReais: 15000, // Maior que o benchmark
+      optionPnlReais: 500,
+      collateralMode: 'REMUNERATED_100_CDI',
+    });
+  } catch (e: any) {
+    capitalExceedError = e.message.includes('REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK');
+  }
+  assert(capitalExceedError, 'Capital remunerado > benchmarkCapitalReais é rejeitado com REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK');
+
+  // 8.16. Assumed Funding Degrada Quality para PARTIAL
+  const assumedFundingStrat = enrichOptionStrategy({
+    id: 'strat_assumed_funding',
+    portfolio: 'BTG',
+    name: 'ITUB4 — Funding Assumido 100%',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    // Sem capitalRemuneratedReais e sem collateralCoveragePct
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [{ id: 'l1', strategyId: 'strat_assumed_funding', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
+  });
+  assert(assumedFundingStrat.economicPerformance.economicPerformanceQuality === 'PARTIAL', 'Funding assumido: Degrada economicPerformanceQuality para PARTIAL');
+  assert(assumedFundingStrat.economicPerformance.qualityNotes.some((n) => n.includes('ASSUMED_FULL_COLLATERAL_COVERAGE')), 'Funding assumido: Registra nota ASSUMED_FULL_COLLATERAL_COVERAGE');
+
+  // 8.17. ROLLED sem closedAt Falha Fechado
+  const rolledWithoutDateStrat = enrichOptionStrategy({
+    id: 'strat_rolled_missing_date',
+    portfolio: 'BTG',
+    name: 'ITUB4 — Rolada sem data de fechamento',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    status: 'ROLLED',
+    openedAt: '2026-08-24',
+    closedAt: undefined,
+    legs: [{ id: 'l1', strategyId: 'strat_rolled_missing_date', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut }],
+  });
+  assert(rolledWithoutDateStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'ROLLED sem data: Marca economicPerformanceQuality INSUFFICIENT_DATA');
+  assert(rolledWithoutDateStrat.economicPerformance.benchmarkCdiReais === 0, 'ROLLED sem data: Falha fechado com benchmarkCdiReais zerado (0)');
+
+  // 8.18. Trava de Alta com Put (BPS) com Inconsistência Econômica (Débito Pago) => UNKNOWN
+  const bpsInconsistentStrat = enrichOptionStrategy({
+    id: 'strat_bps_inconsistent',
+    portfolio: 'BTG',
+    name: 'BPS Inconsistente (Débito)',
+    strategyType: 'TRAVA_ALTA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_bps_inconsistent', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: { ...bpsShortPut, entryPrice: 0.50 } }, // Vendeu por 0.50
+      { id: 'l2', strategyId: 'strat_bps_inconsistent', positionId: bpsLongPut.id, allocatedQuantity: 400, economicRole: 'HEDGE', position: { ...bpsLongPut, entryPrice: 1.50 } },   // Comprou por 1.50 (Débito)
+    ],
+  });
+  assert(bpsInconsistentStrat.metrics.riskRecognitionQuality === 'UNKNOWN', 'BPS com fluxo de débito: Classifica riskRecognitionQuality como UNKNOWN');
+  assert(bpsInconsistentStrat.metrics.maxLossType === 'UNKNOWN', 'BPS com fluxo de débito: maxLossType é UNKNOWN');
+  assert(bpsInconsistentStrat.metrics.maxLossEconomicReais === null, 'BPS com fluxo de débito: maxLossEconomicReais é null');
+
+  // 8.19. Trava de Baixa com Call (BCS) com Inconsistência Econômica (Débito Pago) => UNKNOWN
+  const bcsInconsistentShortCall: any = {
+    id: 'pos_bcs_sc_inconsistent',
+    optionType: 'CALL',
+    side: 'SELL',
+    quantity: 100,
+    strike: 40.0,
+    entryPrice: 0.50, // Vendeu por 0.50
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.50, estimatedExitPrice: 0.50, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bcsInconsistentLongCall: any = {
+    id: 'pos_bcs_lc_inconsistent',
+    optionType: 'CALL',
+    side: 'BUY',
+    quantity: 100,
+    strike: 45.0,
+    entryPrice: 1.50, // Comprou por 1.50 (Débito pago em spread de crédito)
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 1.50, estimatedExitPrice: 1.50, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bcsInconsistentStrat = enrichOptionStrategy({
+    id: 'strat_bcs_inconsistent',
+    portfolio: 'BTG',
+    name: 'BCS Inconsistente (Débito)',
+    strategyType: 'TRAVA_BAIXA_CALL',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_bcs_inconsistent', positionId: bcsInconsistentShortCall.id, allocatedQuantity: 100, economicRole: 'INCOME', position: bcsInconsistentShortCall },
+      { id: 'l2', strategyId: 'strat_bcs_inconsistent', positionId: bcsInconsistentLongCall.id, allocatedQuantity: 100, economicRole: 'HEDGE', position: bcsInconsistentLongCall },
+    ],
+  });
+  assert(bcsInconsistentStrat.metrics.riskRecognitionQuality === 'UNKNOWN', 'BCS com fluxo de débito: Classifica riskRecognitionQuality como UNKNOWN');
+
+  // 8.20. Short Puts com Múltiplos Strikes Diferentes não fabricam Break-Even médio
+  const shortPutStrike38: any = {
+    id: 'pos_sp_38',
+    optionType: 'PUT',
+    side: 'SELL',
+    quantity: 100,
+    strike: 38.0,
+    entryPrice: 1.00,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.50, estimatedExitPrice: 0.50, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const shortPutStrike42: any = {
+    id: 'pos_sp_42',
+    optionType: 'PUT',
+    side: 'SELL',
+    quantity: 100,
+    strike: 42.0,
+    entryPrice: 2.00,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 1.50, estimatedExitPrice: 1.50, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const multiStrikeCspStrat = enrichOptionStrategy({
+    id: 'strat_multi_strike_csp',
+    portfolio: 'BTG',
+    name: 'Multi Strike CSP',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_multi_strike_csp', positionId: shortPutStrike38.id, allocatedQuantity: 100, economicRole: 'INCOME', position: shortPutStrike38 },
+      { id: 'l2', strategyId: 'strat_multi_strike_csp', positionId: shortPutStrike42.id, allocatedQuantity: 100, economicRole: 'INCOME', position: shortPutStrike42 },
+    ],
+  });
+  assert(multiStrikeCspStrat.metrics.maxLossType === 'FINITE', 'Multi Strike CSP: Max loss permanece calculável (FINITE)');
+  assert(multiStrikeCspStrat.metrics.breakEvenInferior === null, 'Multi Strike CSP: breakEvenInferior é null (não fabrica break-even médio enganoso)');
+
   console.log('\n========================================');
-  console.log('✅ ALL 75 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
+  console.log('✅ ALL 86 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');
 }
 
 if (require.main === module || typeof process !== 'undefined') {
   runAllTests();
 }
+

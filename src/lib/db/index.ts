@@ -207,15 +207,36 @@ sqlite.exec(`
   );
 `);
 
-try { sqlite.exec('ALTER TABLE option_strategies ADD COLUMN capital_remunerated_reais REAL;'); } catch {}
-try { sqlite.exec('ALTER TABLE option_strategies ADD COLUMN collateral_coverage_pct REAL;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_bias TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_key_levels TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_news TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN farol_insights TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN sleep_time TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trading_days ADD COLUMN strategy_tags TEXT;'); } catch {}
-try { sqlite.exec('ALTER TABLE trade_images ADD COLUMN trading_day_id TEXT;'); } catch {}
+export function ensureColumn(
+  sqliteInstance: Database.Database,
+  table: string,
+  column: string,
+  ddl: string
+): boolean {
+  try {
+    const tableInfo = sqliteInstance.pragma(`table_info(${table})`) as Array<{ name: string; type: string }>;
+    const exists = tableInfo.some((col) => col.name.toLowerCase() === column.toLowerCase());
+    if (!exists) {
+      sqliteInstance.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl};`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[DB Migration] Falha ao verificar ou adicionar coluna ${column} na tabela ${table}:`, err);
+    throw err;
+  }
+}
+
+// ─── Migrações Auditáveis de Schema ───
+ensureColumn(sqlite, 'option_strategies', 'capital_remunerated_reais', 'REAL');
+ensureColumn(sqlite, 'option_strategies', 'collateral_coverage_pct', 'REAL');
+ensureColumn(sqlite, 'trading_days', 'farol_bias', 'TEXT');
+ensureColumn(sqlite, 'trading_days', 'farol_key_levels', 'TEXT');
+ensureColumn(sqlite, 'trading_days', 'farol_news', 'TEXT');
+ensureColumn(sqlite, 'trading_days', 'farol_insights', 'TEXT');
+ensureColumn(sqlite, 'trading_days', 'sleep_time', 'TEXT');
+ensureColumn(sqlite, 'trading_days', 'strategy_tags', 'TEXT');
+ensureColumn(sqlite, 'trade_images', 'trading_day_id', 'TEXT');
 
 // Semeia todas as categorias padrão no SQLite se a tabela custom_tags estiver vazia
 const tagSeeds: Record<string, string[]> = {

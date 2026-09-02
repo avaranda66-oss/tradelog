@@ -18,6 +18,11 @@ export function GroupPositionsModal({
   onGroupCreated,
 }: GroupPositionsModalProps) {
   const [strategyName, setStrategyName] = useState('');
+  const [collateralMode, setCollateralMode] = useState<'IDLE_CASH' | 'REMUNERATED_100_CDI' | 'CUSTOM'>('REMUNERATED_100_CDI');
+  const [collateralPctCDI, setCollateralPctCDI] = useState<string>('100');
+  const [fundingType, setFundingType] = useState<'FULL' | 'SPLIT_REAIS' | 'SPLIT_PCT'>('FULL');
+  const [capitalRemuneratedReaisVal, setCapitalRemuneratedReaisVal] = useState<string>('');
+  const [collateralCoveragePctVal, setCollateralCoveragePctVal] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen || selectedPositions.length < 2) return null;
@@ -75,11 +80,31 @@ export function GroupPositionsModal({
     e.preventDefault();
     setIsSubmitting(true);
     try {
+      let capitalRemunerated: number | null = null;
+      let coveragePct: number | null = null;
+
+      if (fundingType === 'SPLIT_REAIS' && capitalRemuneratedReaisVal) {
+        capitalRemunerated = parseFloat(capitalRemuneratedReaisVal.replace(',', '.')) || null;
+      } else if (fundingType === 'SPLIT_PCT' && collateralCoveragePctVal) {
+        coveragePct = parseFloat(collateralCoveragePctVal.replace(',', '.')) || null;
+      } else if (fundingType === 'FULL') {
+        coveragePct = 100;
+      }
+
+      const parsedPctCDI = collateralMode === 'CUSTOM'
+        ? (parseFloat(collateralPctCDI.replace(',', '.')) || 100)
+        : collateralMode === 'REMUNERATED_100_CDI' ? 100 : 0;
+
       const res = await groupOptionPositionsAction({
         name: nameToUse,
         strategyType: 'CUSTOM_MULTI_LEG',
         book: 'HYBRID',
         portfolio: selectedPositions[0].portfolio || 'Principal',
+        underlyingTicker,
+        collateralMode,
+        collateralYieldPctCDI: parsedPctCDI,
+        capitalRemuneratedReais: capitalRemunerated,
+        collateralCoveragePct: coveragePct,
         legs: selectedPositions.map((p) => ({
           positionId: p.id,
           allocatedQuantity: p.quantity,
@@ -175,6 +200,139 @@ export function GroupPositionsModal({
                 );
               })}
             </div>
+          </div>
+
+          {/* Configuração de Funding & Remuneração de Garantia (Double Yield) */}
+          <div className="bg-[#0b121f] border border-cyan-500/30 rounded-xl p-3.5 space-y-3">
+            <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+              <span className="text-[10px] font-bold text-cyan-300 uppercase tracking-wider">
+                💰 REMUNERAÇÃO DE CAIXA / GARANTIA (DOUBLE YIELD)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold">
+                FUNDING ENGINE
+              </span>
+            </div>
+
+            {/* Modo de Remuneração */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400">Remuneração do Caixa / Colateral:</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCollateralMode('IDLE_CASH')}
+                  className={`p-2 rounded-lg border text-center transition-all ${
+                    collateralMode === 'IDLE_CASH'
+                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Não Remunerado
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCollateralMode('REMUNERATED_100_CDI')}
+                  className={`p-2 rounded-lg border text-center transition-all ${
+                    collateralMode === 'REMUNERATED_100_CDI'
+                      ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 font-bold'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  100% CDI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCollateralMode('CUSTOM')}
+                  className={`p-2 rounded-lg border text-center transition-all ${
+                    collateralMode === 'CUSTOM'
+                      ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 font-bold'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Custom % CDI
+                </button>
+              </div>
+            </div>
+
+            {collateralMode === 'CUSTOM' && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400">Taxa Customizada (% do CDI):</label>
+                <input
+                  type="text"
+                  value={collateralPctCDI}
+                  onChange={(e) => setCollateralPctCDI(e.target.value)}
+                  placeholder="Ex: 110"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-100 text-xs"
+                />
+              </div>
+            )}
+
+            {/* Split de Capital Remunerado */}
+            {collateralMode !== 'IDLE_CASH' && (
+              <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                <label className="text-[10px] font-bold text-slate-400">Capital Efetivamente Remunerado:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFundingType('FULL')}
+                    className={`p-1.5 rounded-lg border text-center transition-all ${
+                      fundingType === 'FULL'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    100% Garantia
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFundingType('SPLIT_PCT')}
+                    className={`p-1.5 rounded-lg border text-center transition-all ${
+                      fundingType === 'SPLIT_PCT'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    % Cobertura
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFundingType('SPLIT_REAIS')}
+                    className={`p-1.5 rounded-lg border text-center transition-all ${
+                      fundingType === 'SPLIT_REAIS'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Valor Fixo R$
+                  </button>
+                </div>
+
+                {fundingType === 'SPLIT_PCT' && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400">Cobertura da Garantia (%):</label>
+                    <input
+                      type="text"
+                      value={collateralCoveragePctVal}
+                      onChange={(e) => setCollateralCoveragePctVal(e.target.value)}
+                      placeholder="Ex: 50 (para 50% do capital)"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-100 text-xs"
+                    />
+                  </div>
+                )}
+
+                {fundingType === 'SPLIT_REAIS' && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400">Capital em R$ Remunerado a CDI:</label>
+                    <input
+                      type="text"
+                      value={capitalRemuneratedReaisVal}
+                      onChange={(e) => setCapitalRemuneratedReaisVal(e.target.value)}
+                      placeholder={`Máx: R$ ${totalCapitalReserved.toFixed(2)}`}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-100 text-xs"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Card de Preview Consolidado */}

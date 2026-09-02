@@ -173,14 +173,28 @@ export async function syncYahooSpotPricesAction(): Promise<{
   }
 }
 
+export type GetOptionPositionsResult =
+  | {
+      success: true;
+      positions: (EnrichedOptionPosition & { allocatedQuantity: number; unallocatedQuantity: number; strategyId?: string })[];
+      strategies: EnrichedOptionStrategy[];
+      summary: OptionsPortfolioSummary;
+      error?: undefined;
+      errorCode?: undefined;
+    }
+  | {
+      success: false;
+      error: string;
+      errorCode: string;
+      positions: null;
+      strategies: null;
+      summary: null;
+    };
+
 /**
  * 1. Agregação Geral: Posições, Estruturas e Síntese de Carteira
  */
-export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED'): Promise<{
-  positions: (EnrichedOptionPosition & { allocatedQuantity: number; unallocatedQuantity: number; strategyId?: string })[];
-  strategies: EnrichedOptionStrategy[];
-  summary: OptionsPortfolioSummary;
-}> {
+export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED'): Promise<GetOptionPositionsResult> {
   try {
     const rawPositions = await db.query.optionPositions.findMany({
       orderBy: [desc(optionPositions.entryDate), desc(optionPositions.createdAt)],
@@ -417,6 +431,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     }
 
     return {
+      success: true,
       positions: finalPositions,
       strategies: enrichedStrategies,
       summary: {
@@ -470,113 +485,82 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
   } catch (err) {
     console.error('[Options Actions] Erro ao buscar posições e estratégias:', err);
     return {
-      positions: [],
-      strategies: [],
-      summary: {
-        totalCapitalAllocated: 0,
-        totalPnlMtmReais: 0,
-        overallRoicPct: 0,
-        openPositionsCount: 0,
-        closedPositionsCount: 0,
-        openStrategiesCount: 0,
-        totalThetaReaisPerDay: 0,
-        totalDeltaEquivUnits: 0,
-        totalCdiRealizedReais: 0,
-        totalNetCdiBenchmarkReais: 0,
-        totalAlphaReais: 0,
-        totalNetAlphaReais: 0,
-        totalCdiMultiple: null,
-        totalNetCdiMultiple: null,
-        incomeBook: {
-          capitalAllocated: 0,
-          pnlMtmReais: 0,
-          cdiRealizedReais: 0,
-          alphaReais: 0,
-          cdiMultiple: null,
-          cdiRealizedYieldPct: 0,
-          cdiIsEstimated: false,
-          netPnlReaisWithTax: 0,
-          netCdiBenchmarkReais: 0,
-          netAlphaReais: 0,
-          netCdiMultiple: null,
-        },
-        directionalBook: {
-          capitalAtRisk: 0,
-          pnlMtmReais: 0,
-          roiOnPremiumPct: 0,
-        },
-        hybridBook: {
-          capitalAllocated: 0,
-          pnlMtmReais: 0,
-          netInitialCreditDebitReais: 0,
-          netPnlReaisWithTax: 0,
-          cdiRealizedReais: 0,
-          netCdiBenchmarkReais: 0,
-          alphaReais: 0,
-          netAlphaReais: 0,
-          cdiMultiple: null,
-          netCdiMultiple: null,
-        },
-        actionFeedItems: [],
-      },
+      success: false,
+      error: err instanceof Error ? err.message : 'Erro ao carregar dados de opções do banco de dados.',
+      errorCode: 'DATABASE_LOAD_ERROR',
+      positions: null,
+      strategies: null,
+      summary: null,
     };
   }
 }
 
 /**
- * 2. Agrupa Posições em uma Estrutura Multi-Pernas (Transacional)
+ * 2. Agrupamento de Posições Existentes em Estrutura Multi-Leg
  */
 export async function groupOptionPositionsAction(params: {
-  name: string;
-  strategyType?: string;
-  book?: StrategyBook;
   portfolio?: string;
+  name: string;
+  strategyType: string;
+  book?: StrategyBook;
+  underlyingTicker: string;
   collateralMode?: CollateralMode;
+  collateralYieldPctCDI?: number | null;
+  capitalRemuneratedReais?: number | null;
+  collateralCoveragePct?: number | null;
   notes?: string;
   legs: Array<{
     positionId: string;
-    allocatedQuantity?: number;
+    allocatedQuantity: number;
     economicRole?: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM';
   }>;
 }): Promise<{ success: boolean; strategyId?: string; error?: string }> {
   try {
     if (!params.legs || params.legs.length < 2) {
-      return { success: false, error: 'Selecione pelo menos 2 pernas para agrupar em uma estrutura.' };
+      return { success: false, error: 'Uma estrutura deve conter pelo menos 2 pernas (legs).' };
+    }
+
+    // Validações estritas de funding
+    if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+      if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
+        return { success: false, error: 'INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.' };
+      }
+    }
+    if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
+      if (params.capitalRemuneratedReais < 0) {
+        return { success: false, error: 'INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.' };
+      }
     }
 
     const posIds = params.legs.map((l) => l.positionId);
+    const rawPositions = await db.query.optionPositions.findMany({
+      where: inArray(optionPositions.id, posIds),
+    });
+
+    if (rawPositions.length !== posIds.length) {
+      return { success: false, error: 'Uma ou mais posições selecionadas não foram encontradas.' };
+    }
+
+    const underlyingTicker = rawPositions[0].tickerUnderlying.toUpperCase();
+    const allSameUnderlying = rawPositions.every((p) => p.tickerUnderlying.toUpperCase() === underlyingTicker);
+    if (!allSameUnderlying) {
+      return { success: false, error: 'Todas as pernas devem pertencer ao mesmo ativo subjacente.' };
+    }
+
+    const existingLegs = await db.query.optionStrategyLegs.findMany({
+      where: inArray(optionStrategyLegs.positionId, posIds),
+    });
+
     let strategyIdResult = '';
 
     await db.transaction(async (tx) => {
-      // 1. Leitura das posições dentro da transação
-      const rawPositions = await tx.query.optionPositions.findMany({
-        where: inArray(optionPositions.id, posIds),
-      });
-
-      if (rawPositions.length !== posIds.length) {
-        throw new Error('Uma ou mais posições selecionadas não foram encontradas no banco.');
-      }
-
-      // 2. Verifica se pertencem ao mesmo ativo subjacente (Validação Estrita)
-      const underlyingTickers = new Set(rawPositions.map((p) => p.tickerUnderlying.toUpperCase()));
-      if (underlyingTickers.size > 1) {
-        throw new Error(`Todas as pernas selecionadas devem pertencer ao mesmo ativo subjacente (Encontrados: ${Array.from(underlyingTickers).join(', ')}).`);
-      }
-      const underlyingTicker = Array.from(underlyingTickers)[0] || 'MULTI';
-
-      // 3. Checagem de Alocação Disponível com lock transacional
-      const existingLegs = await tx.query.optionStrategyLegs.findMany({
-        where: inArray(optionStrategyLegs.positionId, posIds),
-      });
-
-      const allocatedSum = new Map<string, number>();
-      for (const el of existingLegs) {
-        allocatedSum.set(el.positionId, (allocatedSum.get(el.positionId) || 0) + el.allocatedQuantity);
-      }
-
+      // Validação de quantidade disponível
       for (const legParam of params.legs) {
         const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
-        const alreadyAllocated = allocatedSum.get(pos.id) || 0;
+        const alreadyAllocated = existingLegs
+          .filter((l) => l.positionId === pos.id)
+          .reduce((sum, l) => sum + l.allocatedQuantity, 0);
+
         const desiredQty = legParam.allocatedQuantity ?? pos.quantity;
 
         if (desiredQty <= 0) {
@@ -593,16 +577,8 @@ export async function groupOptionPositionsAction(params: {
       const now = new Date().toISOString();
       const openedAt = rawPositions.reduce((min, p) => (p.entryDate < min ? p.entryDate : min), rawPositions[0].entryDate);
 
-      // Detecção Automática de Tipo e Livro
       let detectedType = params.strategyType || 'CUSTOM_MULTI_LEG';
       let detectedBook: StrategyBook = params.book || 'HYBRID';
-
-      const hasShortPut = rawPositions.some((p) => (p.side === 'SELL' || p.side === 'SHORT') && p.optionType === 'PUT');
-      const hasLongCall = rawPositions.some((p) => (p.side === 'BUY' || p.side === 'LONG') && p.optionType === 'CALL');
-      if (hasShortPut && hasLongCall) {
-        detectedType = 'CUSTOM_MULTI_LEG';
-        detectedBook = 'HYBRID';
-      }
 
       const strategyName = params.name || `${underlyingTicker} — Estrutura Financiada 2:1`;
 
@@ -614,6 +590,9 @@ export async function groupOptionPositionsAction(params: {
         book: detectedBook,
         underlyingTicker,
         collateralMode: params.collateralMode || 'IDLE_CASH',
+        collateralYieldPctCDI: params.collateralYieldPctCDI ?? null,
+        capitalRemuneratedReais: params.capitalRemuneratedReais ?? null,
+        collateralCoveragePct: params.collateralCoveragePct ?? null,
         status: 'OPEN',
         openedAt,
         notes: params.notes,
@@ -626,14 +605,7 @@ export async function groupOptionPositionsAction(params: {
         const allocQty = legParam.allocatedQuantity ?? pos.quantity;
         const legId = generateId('opt_strat_leg');
 
-        let econRole: 'FINANCING' | 'DIRECTIONAL' | 'HEDGE' | 'INCOME' | 'CUSTOM' = legParam.economicRole || 'CUSTOM';
-        if (!legParam.economicRole) {
-          if ((pos.side === 'SELL' || pos.side === 'SHORT') && pos.optionType === 'PUT') {
-            econRole = 'FINANCING';
-          } else if ((pos.side === 'BUY' || pos.side === 'LONG') && pos.optionType === 'CALL') {
-            econRole = 'DIRECTIONAL';
-          }
-        }
+        let econRole = legParam.economicRole || 'CUSTOM';
 
         await tx.insert(optionStrategyLegs).values({
           id: legId,
@@ -660,7 +632,7 @@ export async function groupOptionPositionsAction(params: {
     return { success: true, strategyId: strategyIdResult };
   } catch (err: any) {
     console.error('[Options Actions] Erro ao agrupar posições:', err);
-    return { success: false, error: err.message || 'Erro ao agrupar posições' };
+    return { success: false, error: err.message || 'Erro ao agrupar posições em estrutura.' };
   }
 }
 

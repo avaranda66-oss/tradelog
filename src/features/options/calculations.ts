@@ -514,13 +514,28 @@ export function calculateStrategyEconomicPerformance(
     collateralPctCdi = params.collateralPctCdi;
   }
 
-  const capitalRemuneratedReais = collateralMode === 'IDLE_CASH'
-    ? 0
-    : (params.capitalRemuneratedReais !== undefined ? Math.max(0, params.capitalRemuneratedReais) : capitalReservedReais);
-
   const benchmarkCapitalReais = params.benchmarkCapitalReais !== undefined
     ? Math.max(0, params.benchmarkCapitalReais)
     : capitalReservedReais;
+
+  if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
+    if (params.capitalRemuneratedReais < 0) {
+      throw new Error('INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.');
+    }
+    if (benchmarkCapitalReais > 0 && params.capitalRemuneratedReais > benchmarkCapitalReais + 0.001) {
+      throw new Error(
+        'REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK: Capital remunerado (R$ ' +
+        params.capitalRemuneratedReais.toFixed(2) +
+        ') não pode exceder o capital de referência do benchmark (R$ ' +
+        benchmarkCapitalReais.toFixed(2) +
+        ').'
+      );
+    }
+  }
+
+  const capitalRemuneratedReais = collateralMode === 'IDLE_CASH'
+    ? 0
+    : (params.capitalRemuneratedReais !== undefined ? Math.max(0, params.capitalRemuneratedReais) : capitalReservedReais);
 
   const capitalBasisMethod: 'STATIC' | 'STATIC_APPROXIMATION' | 'DAILY_WEIGHTED' = params.legsOpenedAtDifferentDates
     ? 'STATIC_APPROXIMATION'
@@ -1192,8 +1207,8 @@ export function detectStrategyRiskAndPayoff(params: {
     const sameExp = sp.expiration === lp.expiration;
 
     if (sameExp && sp.qty === lp.qty) {
-      // 2a. Bull Put Spread (Crédito): Long Strike < Short Strike
-      if (lp.strike < sp.strike) {
+      // 2a. Bull Put Spread (Crédito): Long Strike < Short Strike E netCredit > 0
+      if (lp.strike < sp.strike && netCredit > 0) {
         const spreadWidthReais = (sp.strike - lp.strike) * sp.qty;
         riskRecognitionQuality = 'EXACT';
         maxLossType = 'FINITE';
@@ -1201,23 +1216,25 @@ export function detectStrategyRiskAndPayoff(params: {
         capitalReservedReais = spreadWidthReais;
         breakEvenInferior = sp.strike - (netCredit / sp.qty);
       }
-      // 2b. Bear Put Spread (Débito): Long Strike > Short Strike
-      else if (lp.strike > sp.strike) {
+      // 2b. Bear Put Spread (Débito): Long Strike > Short Strike E netCredit < 0
+      else if (lp.strike > sp.strike && netCredit < 0) {
         riskRecognitionQuality = 'EXACT';
         maxLossType = 'FINITE';
         maxLossEconomicReais = Math.max(0, Math.abs(netCredit));
         capitalReservedReais = Math.max(1, Math.abs(netCredit));
         breakEvenInferior = lp.strike - (Math.abs(netCredit) / lp.qty);
       } else {
-        // Strikes idênticos ou não padrão
+        // Inconsistência econômica ou strikes inválidos
         riskRecognitionQuality = 'UNKNOWN';
         maxLossType = 'UNKNOWN';
+        maxLossEconomicReais = null;
         capitalReservedReais = Math.max(1, Math.abs(netCredit));
       }
     } else {
       // Vencimentos diferentes (calendário / diagonal) ou quantidades assimétricas
       riskRecognitionQuality = 'UNKNOWN';
       maxLossType = 'UNKNOWN';
+      maxLossEconomicReais = null;
       capitalReservedReais = totalShortPutStrikeVal > 0 ? totalShortPutStrikeVal : Math.max(1, Math.abs(netCredit));
     }
   }
@@ -1228,8 +1245,8 @@ export function detectStrategyRiskAndPayoff(params: {
     const sameExp = sc.expiration === lc.expiration;
 
     if (sameExp && sc.qty === lc.qty) {
-      // 3a. Bear Call Spread (Crédito): Long Strike > Short Strike
-      if (lc.strike > sc.strike) {
+      // 3a. Bear Call Spread (Crédito): Long Strike > Short Strike E netCredit > 0
+      if (lc.strike > sc.strike && netCredit > 0) {
         const spreadWidthReais = (lc.strike - sc.strike) * sc.qty;
         riskRecognitionQuality = 'EXACT';
         maxLossType = 'FINITE';
@@ -1237,22 +1254,25 @@ export function detectStrategyRiskAndPayoff(params: {
         capitalReservedReais = spreadWidthReais;
         breakEvenSuperior = sc.strike + (netCredit / sc.qty);
       }
-      // 3b. Bull Call Spread (Débito): Long Strike < Short Strike
-      else if (lc.strike < sc.strike) {
+      // 3b. Bull Call Spread (Débito): Long Strike < Short Strike E netCredit < 0
+      else if (lc.strike < sc.strike && netCredit < 0) {
         riskRecognitionQuality = 'EXACT';
         maxLossType = 'FINITE';
         maxLossEconomicReais = Math.max(0, Math.abs(netCredit));
         capitalReservedReais = Math.max(1, Math.abs(netCredit));
         breakEvenSuperior = lc.strike + (Math.abs(netCredit) / lc.qty);
       } else {
+        // Inconsistência econômica ou strikes inválidos
         riskRecognitionQuality = 'UNKNOWN';
         maxLossType = 'UNKNOWN';
+        maxLossEconomicReais = null;
         capitalReservedReais = Math.max(1, Math.abs(netCredit));
       }
     } else {
       // Vencimentos diferentes (calendário / diagonal) ou quantidades assimétricas
       riskRecognitionQuality = 'UNKNOWN';
       maxLossType = 'UNKNOWN';
+      maxLossEconomicReais = null;
       capitalReservedReais = shortCalls.reduce((acc, c) => acc + c.spot * c.qty, 0) || Math.max(1, Math.abs(netCredit));
     }
   }
@@ -1262,7 +1282,10 @@ export function detectStrategyRiskAndPayoff(params: {
     maxLossType = 'FINITE';
     maxLossEconomicReais = Math.max(0, totalShortPutStrikeVal - netCredit);
     capitalReservedReais = totalShortPutStrikeVal;
-    breakEvenInferior = (totalShortPutStrikeVal - netCredit) / shortPutUnits;
+    const uniqueShortPutStrikes = new Set(shortPuts.map((p) => p.strike));
+    breakEvenInferior = uniqueShortPutStrikes.size === 1
+      ? (totalShortPutStrikeVal - netCredit) / shortPutUnits
+      : null; // Múltiplos strikes não produzem um break-even único falso
   }
   // 5. Estrutura Financiada: Short Puts Financiando Long Calls (ex: ITUB 2:1)
   else if (shortPuts.length >= 1 && longCalls.length >= 1 && longPuts.length === 0 && shortCalls.length === 0) {
@@ -1270,7 +1293,10 @@ export function detectStrategyRiskAndPayoff(params: {
     maxLossType = 'FINITE';
     maxLossEconomicReais = Math.max(0, totalShortPutStrikeVal - netCredit);
     capitalReservedReais = totalShortPutStrikeVal;
-    breakEvenInferior = (totalShortPutStrikeVal - netCredit) / shortPutUnits;
+    const uniqueShortPutStrikes = new Set(shortPuts.map((p) => p.strike));
+    breakEvenInferior = uniqueShortPutStrikes.size === 1
+      ? (totalShortPutStrikeVal - netCredit) / shortPutUnits
+      : null;
   }
   // 6. Estruturas Long Only (Apenas opções compradas, sem nenhuma venda)
   else if (shortPutUnits === 0 && shortCallUnits === 0 && (longPutUnits > 0 || longCallUnits > 0)) {
@@ -1452,6 +1478,12 @@ export function enrichOptionStrategy(params: {
     }
   }
 
+  if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+    if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
+      throw new Error('INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.');
+    }
+  }
+
   // Definição estrita da base de capital remunerado
   let capitalRemuneratedReais = 0;
   let assumedCoverageNote = false;
@@ -1487,12 +1519,17 @@ export function enrichOptionStrategy(params: {
   });
 
   if (assumedCoverageNote && params.collateralMode !== 'IDLE_CASH') {
-    economicPerformance.qualityNotes.push('ASSUMED_FULL_COLLATERAL_COVERAGE: Capital remunerado não especificado; assumido 100% do capital reservado.');
+    economicPerformance.economicPerformanceQuality = 'PARTIAL';
+    economicPerformance.qualityNotes.push('ASSUMED_FULL_COLLATERAL_COVERAGE: Capital remunerado não especificado; assumido 100% do capital reservado (Quality: PARTIAL).');
   }
 
   if (isClosedOrRolledMissingDate) {
     economicPerformance.economicPerformanceQuality = 'INSUFFICIENT_DATA';
-    economicPerformance.qualityNotes.push('CLOSED_OR_ROLLED_WITHOUT_CLOSED_AT: Estratégia encerrada/rolada sem closedAt; valuation não congelado.');
+    economicPerformance.benchmarkCdiReais = 0;
+    economicPerformance.collateralCarryReais = 0;
+    economicPerformance.excessReturnVsCdiReais = economicPerformance.optionPnlReais;
+    economicPerformance.totalEconomicReturnReais = economicPerformance.optionPnlReais;
+    economicPerformance.qualityNotes.push('CLOSED_AT_REQUIRED: Data de encerramento/rolagem ausente; benchmark econômico indisponível.');
   }
 
   return {
