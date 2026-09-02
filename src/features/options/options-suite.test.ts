@@ -573,6 +573,23 @@ export function runAllTests() {
   assert(perfM.elapsedDU === 0 && perfM.benchmarkCdiReais === 0.0, 'Cenário M: Sábado normaliza para 0 DU e 0 CDI');
   assert(perfM.excessReturnVsCdiReais === 50.0, 'Cenário M: Retorno das opções preservado sem contaminação temporal');
 
+  // M.2. StartDate em Sábado / Não-Pregão (Pure Engine Fail-Safe)
+  const perfM2 = calculateStrategyEconomicPerformance({
+    startDate: '2026-08-29', // Sábado
+    valuationDate: '2026-09-01',
+    capitalReservedReais: 15476.0,
+    optionPnlReais: 50.0,
+    collateralMode: 'REMUNERATED_100_CDI',
+  });
+  assert(perfM2.benchmarkQuality === 'NOT_AVAILABLE', 'Cenário M.2: StartDate em sábado resulta em benchmarkQuality NOT_AVAILABLE');
+  assert(perfM2.benchmarkCdiReais === null, 'Cenário M.2: StartDate em sábado resulta em benchmarkCdiReais === null');
+  assert(perfM2.excessReturnVsCdiReais === null, 'Cenário M.2: excessReturnVsCdiReais === null');
+  assert(perfM2.optionPnlToCdiMultiple === null, 'Cenário M.2: optionPnlToCdiMultiple === null');
+  assert(perfM2.totalReturnToCdiMultiple === null, 'Cenário M.2: totalReturnToCdiMultiple === null');
+  assert(perfM2.optionReturnOnBenchmarkCapitalPct === null, 'Cenário M.2: optionReturnOnBenchmarkCapitalPct === null');
+  assert(perfM2.totalEconomicReturnPct === null, 'Cenário M.2: totalEconomicReturnPct === null');
+  assert(perfM2.optionPnlReais === 50.0, 'Cenário M.2: P&L de opções preservado como fato conhecido');
+
   // N. P&L Negativo das Opções
   const perfN = calculateStrategyEconomicPerformance({
     startDate: '2026-08-24',

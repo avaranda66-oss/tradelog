@@ -349,6 +349,7 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             originalAllocatedQuantity: origAlloc,
             closedAllocatedQuantity: closedAlloc,
             openAllocatedQuantity: openAlloc,
+            legacyClosedAllocatedQuantity: leg.legacyClosedAllocatedQuantity ?? 0,
             economicRole: leg.economicRole as any,
             position: p,
           });
@@ -1101,6 +1102,13 @@ export async function groupOptionPositionsAction(params: {
       }
 
       // Inserir o segmento de funding inicial concreto (Bootstrap da Timeline para a nova estrutura)
+      const initialFundingQuality: 'FULL' | 'INSUFFICIENT_DATA' =
+        riskProfile.riskRecognitionQuality === 'UNKNOWN' ||
+        riskProfile.maxLossType === 'UNBOUNDED' ||
+        riskProfile.maxLossType === 'UNKNOWN'
+          ? 'INSUFFICIENT_DATA'
+          : 'FULL';
+
       tx.insert(strategyFundingSegments).values({
         id: generateId('strat_fnd_seg'),
         strategyId,
@@ -1111,7 +1119,7 @@ export async function groupOptionPositionsAction(params: {
         collateralMode: effectiveCollateralMode,
         collateralPctCdi: params.collateralYieldPctCDI ?? null,
         sourceType: 'CREATION',
-        quality: 'FULL',
+        quality: initialFundingQuality,
         createdAt: now,
       }).run();
     });

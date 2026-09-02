@@ -2435,6 +2435,371 @@ export async function runActionsSuiteTests() {
     assert(advStrat2.metrics.strategyRealizedPnlQuality === 'FULL', 'P0/P1 Lineage: Quando todas as pernas reconciliam, strategyRealizedPnlQuality === FULL');
     assert(advStrat2.metrics.strategyGrossRealizedPnlReais === 50.0, 'P0/P1 Lineage: strategyGrossRealizedPnlReais reconcilia em +R$ 50,00 (-50 + 100)');
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 8.18. Fase 4.2.5 — Propagação do Baseline Legado da Strategy Leg (P0/P1)
+    // ══════════════════════════════════════════════════════════════════════
+    const posLegPropAId = 'pos_leg_prop_a';
+    const stratLegPropAId = 'strat_leg_prop_a';
+    const legPropAId = 'leg_prop_a';
+
+    db.insert(optionPositions).values({
+      id: posLegPropAId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 0,
+      closedQuantity: 200,
+      legacyClosedQuantity: 200,
+      strike: 30.0,
+      entryPrice: 1.00,
+      currentPrice: 0.10,
+      allocatedCapital: 6000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'CLOSED',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: stratLegPropAId,
+      portfolio: 'Principal',
+      name: 'Legacy Leg Prop Test A',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      status: 'CLOSED',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: 100,
+      capitalRemuneratedReais: 6000.0,
+      openedAt: '2026-08-24',
+      closedAt: '2026-09-01',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: legPropAId,
+      strategyId: stratLegPropAId,
+      positionId: posLegPropAId,
+      allocatedQuantity: 200,
+      closedAllocatedQuantity: 200,
+      openAllocatedQuantity: 0,
+      legacyClosedAllocatedQuantity: 200,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_leg_prop_a',
+      strategyId: stratLegPropAId,
+      startDate: '2026-08-24',
+      endDate: '2026-09-01',
+      benchmarkCapitalReais: 6000.0,
+      capitalRemuneratedReais: 6000.0,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralPctCdi: 100,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const legPropCheckA = await getOptionPositions();
+    const stratPropA = legPropCheckA.strategies!.find((s) => s.id === stratLegPropAId)!;
+    assert(stratPropA.metrics.strategyRealizedPnlQuality === 'LEGACY_INCOMPLETE', 'P0/P1 Leg Prop: Strategy com leg fechada legado (200 legacyClosedAllocated) resulta em LEGACY_INCOMPLETE');
+    assert(stratPropA.metrics.strategyRealizedPnlQuality !== 'NOT_AVAILABLE', 'P0/P1 Leg Prop: Strategy NÃO vira NOT_AVAILABLE quando baseline legado é conhecido');
+
+    // Caso B: closedAllocated = 200, legacyClosedAllocated = 0, executions = 0 -> NOT_AVAILABLE
+    const posLegPropBId = 'pos_leg_prop_b';
+    const stratLegPropBId = 'strat_leg_prop_b';
+    const legPropBId = 'leg_prop_b';
+
+    db.insert(optionPositions).values({
+      id: posLegPropBId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'PETR4',
+      tickerOption: 'PETRU310',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 0,
+      closedQuantity: 200,
+      legacyClosedQuantity: 0,
+      strike: 31.0,
+      entryPrice: 1.00,
+      currentPrice: 0.10,
+      allocatedCapital: 6200.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'CLOSED',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: stratLegPropBId,
+      portfolio: 'Principal',
+      name: 'Legacy Leg Prop Test B',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      status: 'CLOSED',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: 100,
+      capitalRemuneratedReais: 6200.0,
+      openedAt: '2026-08-24',
+      closedAt: '2026-09-01',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: legPropBId,
+      strategyId: stratLegPropBId,
+      positionId: posLegPropBId,
+      allocatedQuantity: 200,
+      closedAllocatedQuantity: 200,
+      openAllocatedQuantity: 0,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_leg_prop_b',
+      strategyId: stratLegPropBId,
+      startDate: '2026-08-24',
+      endDate: '2026-09-01',
+      benchmarkCapitalReais: 6200.0,
+      capitalRemuneratedReais: 6200.0,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralPctCdi: 100,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const legPropCheckB = await getOptionPositions();
+    const stratPropB = legPropCheckB.strategies!.find((s) => s.id === stratLegPropBId)!;
+    assert(stratPropB.metrics.strategyRealizedPnlQuality === 'NOT_AVAILABLE', 'P0/P1 Leg Prop: Strategy com closedAllocated 200, legacy 0 e 0 execuções resulta em NOT_AVAILABLE');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 8.19. Fase 4.2.5 — Funding de CREATION respeitando residual risk quality (P0)
+    // ══════════════════════════════════════════════════════════════════════
+    // Caso A: Bull Put Spread (Estrutura finita reconhecida) -> Funding FULL
+    const bpsShortPutId = 'pos_bps_short_put';
+    const bpsLongPutId = 'pos_bps_long_put';
+    db.insert(optionPositions).values({
+      id: bpsShortPutId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBSA3',
+      tickerOption: 'BBSAU300',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 30.0,
+      entryPrice: 1.50,
+      currentPrice: 1.20,
+      allocatedCapital: 3000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: bpsLongPutId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBSA3',
+      tickerOption: 'BBSAU280',
+      optionType: 'PUT',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 28.0,
+      entryPrice: 0.50,
+      currentPrice: 0.30,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const groupBpsRes = await groupOptionPositionsAction({
+      name: 'BPS Finite Test',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'BBSA3',
+      legs: [
+        { positionId: bpsShortPutId, allocatedQuantity: 100, economicRole: 'INCOME' },
+        { positionId: bpsLongPutId, allocatedQuantity: 100, economicRole: 'HEDGE' },
+      ],
+    });
+    assert(groupBpsRes.success === true, 'P0 Funding Creation A: Agrupamento BPS criado com sucesso');
+    const bpsStratId = groupBpsRes.strategyId!;
+
+    const segBps = db.query.strategyFundingSegments.findFirst({
+      where: eq(strategyFundingSegments.strategyId, bpsStratId),
+    }).sync();
+    assert(segBps?.quality === 'FULL', 'P0 Funding Creation A: Estrutura finita reconhecida nasce com funding quality FULL');
+
+    const bpsStratCheck = await getOptionPositions();
+    const bpsStrat = bpsStratCheck.strategies!.find((s) => s.id === bpsStratId)!;
+    assert(bpsStrat.economicPerformance.benchmarkQuality !== 'NOT_AVAILABLE', 'P0 Funding Creation A: benchmarkQuality elegível');
+    assert(bpsStrat.economicPerformance.benchmarkCdiReais !== null, 'P0 Funding Creation A: benchmarkCdiReais computado');
+
+    // Caso B: Estrutura contendo naked short call residual (Risco UNBOUNDED) -> Funding INSUFFICIENT_DATA
+    const unbShortCallId = 'pos_unb_naked_call';
+    const unbLongCallId = 'pos_unb_long_call_part';
+    db.insert(optionPositions).values({
+      id: unbShortCallId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEI700',
+      optionType: 'CALL',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 200,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 70.0,
+      entryPrice: 2.00,
+      currentPrice: 2.10,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: unbLongCallId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEI720',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 72.0,
+      entryPrice: 1.00,
+      currentPrice: 0.90,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const groupUnbRes = await groupOptionPositionsAction({
+      name: 'Naked Call Unbounded Test',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'VALE3',
+      legs: [
+        { positionId: unbShortCallId, allocatedQuantity: 200, economicRole: 'INCOME' },
+        { positionId: unbLongCallId, allocatedQuantity: 100, economicRole: 'HEDGE' },
+      ],
+    });
+    assert(groupUnbRes.success === true, 'P0 Funding Creation B: Agrupamento Naked Call criado com sucesso');
+    const unbCreationStratId = groupUnbRes.strategyId!;
+
+    const segUnb = db.query.strategyFundingSegments.findFirst({
+      where: eq(strategyFundingSegments.strategyId, unbCreationStratId),
+    }).sync();
+    assert(segUnb?.quality === 'INSUFFICIENT_DATA', 'P0 Funding Creation B: Risco UNBOUNDED nasce com funding quality INSUFFICIENT_DATA');
+
+    const unbStratCheck = await getOptionPositions();
+    const unbStrat = unbStratCheck.strategies!.find((s) => s.id === unbCreationStratId)!;
+    assert(unbStrat.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0 Funding Creation B: benchmarkQuality === NOT_AVAILABLE');
+    assert(unbStrat.economicPerformance.benchmarkCdiReais === null, 'P0 Funding Creation B: benchmarkCdiReais === null');
+    assert(unbStrat.economicPerformance.excessReturnVsCdiReais === null, 'P0 Funding Creation B: excessReturnVsCdiReais === null');
+
+    // Caso C: Unsupported diagonal spread (vencimentos distintos -> riskRecognition UNKNOWN) -> Funding INSUFFICIENT_DATA
+    const unsuppPos1 = 'pos_unsupp_diag_1';
+    const unsuppPos2 = 'pos_unsupp_diag_2';
+    db.insert(optionPositions).values({
+      id: unsuppPos1,
+      portfolio: 'Principal',
+      tickerUnderlying: 'ITUB4',
+      tickerOption: 'ITUBI350',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 35.0,
+      entryPrice: 1.00,
+      currentPrice: 0.90,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: unsuppPos2,
+      portfolio: 'Principal',
+      tickerUnderlying: 'ITUB4',
+      tickerOption: 'ITUBJ370',
+      optionType: 'CALL',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 100,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 37.0,
+      entryPrice: 0.80,
+      currentPrice: 0.70,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-10-16', // Vencimento distinto -> Diagonal -> UNKNOWN
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const groupUnsuppRes = await groupOptionPositionsAction({
+      name: 'Diagonal Unknown Test',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'ITUB4',
+      legs: [
+        { positionId: unsuppPos1, allocatedQuantity: 100, economicRole: 'DIRECTIONAL' },
+        { positionId: unsuppPos2, allocatedQuantity: 100, economicRole: 'INCOME' },
+      ],
+    });
+    assert(groupUnsuppRes.success === true, 'P0 Funding Creation C: Agrupamento diagonal criado com sucesso');
+    const unsuppStratId = groupUnsuppRes.strategyId!;
+
+    const segUnsupp = db.query.strategyFundingSegments.findFirst({
+      where: eq(strategyFundingSegments.strategyId, unsuppStratId),
+    }).sync();
+    assert(segUnsupp?.quality === 'INSUFFICIENT_DATA', 'P0 Funding Creation C: Estrutura UNKNOWN nasce com funding quality INSUFFICIENT_DATA');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
@@ -2443,12 +2808,15 @@ export async function runActionsSuiteTests() {
       'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call',
       'pos_legacy_inc_test', 'pos_missing_exec_test', 'pos_standalone_csp_test',
       'pos_group_test_a', 'pos_group_test_comp', 'pos_group_test_c', 'pos_group_test_c_comp', 'pos_group_test_closed',
-      'pos_ledger_check', 'pos_adv_call', 'pos_adv_put'
+      'pos_ledger_check', 'pos_adv_call', 'pos_adv_put',
+      'pos_leg_prop_a', 'pos_leg_prop_b',
+      'pos_bps_short_put', 'pos_bps_long_put', 'pos_unb_naked_call', 'pos_unb_long_call_part', 'pos_unsupp_diag_1', 'pos_unsupp_diag_2',
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',
       'strat_fee_test', 'strat_remun_test', 'strat_unbounded_test',
-      'strat_legacy_inc_test', 'strat_adv_lineage'
+      'strat_legacy_inc_test', 'strat_adv_lineage',
+      'strat_leg_prop_a', 'strat_leg_prop_b',
     ];
     const createdLegs = db.query.optionStrategyLegs.findMany({
       where: inArray(optionStrategyLegs.positionId, allCleanPosIds),
