@@ -70,7 +70,12 @@ export interface OptionsPortfolioSummary {
   totalThetaReaisPerDay: number;
   totalDeltaEquivUnits: number;
 
-  // Agregação Econômica Canônica da Carteira (Double Yield Consolidado)
+  // Agregação Econômica Canônica do Universo Benchmark-Eligible (Double Yield Consolidado)
+  portfolioBenchmarkEligibleCapital: number;
+  portfolioBenchmarkEligibleCount: number;
+  portfolioExcludedFromBenchmarkCount: number;
+  portfolioEconomicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA';
+
   portfolioOptionPnlReais: number;
   portfolioBenchmarkCdiReais: number;
   portfolioCollateralCarryReais: number;
@@ -87,13 +92,16 @@ export interface OptionsPortfolioSummary {
   totalCdiMultiple: number | null;
   totalNetCdiMultiple: number | null;
 
-  // Livro de Renda / Remuneração de Capital (Short Options & Covered avulsas)
+  // Livro de Renda / Remuneração de Capital (Short Options & Covered avulsas elegíveis)
   incomeBook: {
     capitalAllocated: number;
-    pnlMtmReais: number;
-    cdiRealizedReais: number;
-    alphaReais: number;
-    cdiMultiple: number | null;
+    optionPnlReais: number;
+    benchmarkCdiReais: number;
+    collateralCarryReais: number;
+    totalEconomicReturnReais: number;
+    excessReturnVsCdiReais: number;
+    totalReturnToCdiMultiple: number | null;
+    excessToCdiMultiple: number | null;
     cdiRealizedYieldPct: number;
     cdiIsEstimated: boolean;
 
@@ -114,14 +122,18 @@ export interface OptionsPortfolioSummary {
   // Livro Híbrido / Estruturas Multi-Pernas (ex: ITUB4 2:1)
   hybridBook: {
     capitalAllocated: number;
-    pnlMtmReais: number;
+    optionPnlReais: number;
     netInitialCreditDebitReais: number;
+    benchmarkCdiReais: number;
+    collateralCarryReais: number;
+    totalEconomicReturnReais: number;
+    excessReturnVsCdiReais: number;
+    totalReturnToCdiMultiple: number | null;
+    excessToCdiMultiple: number | null;
+
     netPnlReaisWithTax: number;
-    cdiRealizedReais: number;
     netCdiBenchmarkReais: number;
-    alphaReais: number;
     netAlphaReais: number;
-    cdiMultiple: number | null;
     netCdiMultiple: number | null;
   };
 
@@ -308,31 +320,41 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     let openPositionsCount = 0;
     let closedPositionsCount = 0;
 
-    // Income Book (Apenas posições de Renda NÃO alocadas a estratégias híbridas)
-    let incomeCapital = 0;
-    let incomePnl = 0;
-    let incomeCdiRealized = 0;
-    let incomeNetPnl = 0;
-    let incomeNetCdi = 0;
-    let incomeCdiIsEstimated = false;
+    // Benchmark Eligibility Counters & Capital
+    let portfolioBenchmarkEligibleCapital = 0;
+    let portfolioBenchmarkEligibleCount = 0;
+    let portfolioExcludedFromBenchmarkCount = 0;
+    let portfolioEconomicPerformanceQuality: 'FULL' | 'PARTIAL' | 'INSUFFICIENT_DATA' = 'FULL';
 
-    // Directional Book (Apenas posições direcionais NÃO alocadas a estratégias híbridas)
-    let directionalCapital = 0;
-    let directionalPnl = 0;
-
-    // Hybrid Book (Estruturas consolidadas)
-    let hybridCapital = 0;
-    let hybridPnl = 0;
-    let hybridNetCredit = 0;
-    let hybridCdiRealized = 0;
-    let hybridNetCdi = 0;
-
-    // Agregação Econômica Canônica da Carteira (Double Yield Consolidado)
+    // Agregação Econômica Canônica do Universo Benchmark-Eligible (Double Yield Consolidado)
     let portfolioOptionPnlReais = 0;
     let portfolioBenchmarkCdiReais = 0;
     let portfolioCollateralCarryReais = 0;
     let portfolioTotalEconomicReturnReais = 0;
     let portfolioExcessReturnVsCdiReais = 0;
+
+    // Subtotais dos Livros (seguindo a MESMA decomposição canônica)
+    let incomeCapital = 0;
+    let incomeOptionPnlReais = 0;
+    let incomeBenchmarkCdiReais = 0;
+    let incomeCollateralCarryReais = 0;
+    let incomeTotalEconomicReturnReais = 0;
+    let incomeExcessReturnVsCdiReais = 0;
+    let incomeNetPnl = 0;
+    let incomeNetCdi = 0;
+    let incomeCdiIsEstimated = false;
+
+    let hybridCapital = 0;
+    let hybridOptionPnlReais = 0;
+    let hybridNetCredit = 0;
+    let hybridBenchmarkCdiReais = 0;
+    let hybridCollateralCarryReais = 0;
+    let hybridTotalEconomicReturnReais = 0;
+    let hybridExcessReturnVsCdiReais = 0;
+    let hybridNetCdi = 0;
+
+    let directionalCapital = 0;
+    let directionalPnl = 0;
 
     const actionFeedItems: ActionFeedItem[] = [];
 
@@ -343,22 +365,43 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         totalPnlMtmReais += st.metrics.netPnlMtmReais;
 
         const ep = st.economicPerformance;
-        portfolioOptionPnlReais += ep.optionPnlReais;
-        portfolioBenchmarkCdiReais += ep.benchmarkCdiReais;
-        portfolioCollateralCarryReais += ep.collateralCarryReais;
-        portfolioTotalEconomicReturnReais += ep.totalEconomicReturnReais;
-        portfolioExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
+
+        // Estruturas com capital definido são benchmark-eligible
+        if (st.book === 'HYBRID' || st.book === 'INCOME') {
+          portfolioBenchmarkEligibleCount++;
+          portfolioBenchmarkEligibleCapital += ep.benchmarkCapitalReais;
+
+          if (ep.economicPerformanceQuality === 'PARTIAL' && portfolioEconomicPerformanceQuality !== 'INSUFFICIENT_DATA') {
+            portfolioEconomicPerformanceQuality = 'PARTIAL';
+          } else if (ep.economicPerformanceQuality === 'INSUFFICIENT_DATA') {
+            portfolioEconomicPerformanceQuality = 'INSUFFICIENT_DATA';
+          }
+
+          portfolioOptionPnlReais += ep.optionPnlReais;
+          portfolioBenchmarkCdiReais += ep.benchmarkCdiReais;
+          portfolioCollateralCarryReais += ep.collateralCarryReais;
+          portfolioTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+          portfolioExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
+        } else {
+          portfolioExcludedFromBenchmarkCount++;
+        }
 
         if (st.book === 'HYBRID') {
           hybridCapital += st.metrics.totalCapitalReserved;
-          hybridPnl += ep.optionPnlReais;
+          hybridOptionPnlReais += ep.optionPnlReais;
           hybridNetCredit += st.metrics.netInitialCreditDebitReais;
-          hybridCdiRealized += ep.benchmarkCdiReais;
+          hybridBenchmarkCdiReais += ep.benchmarkCdiReais;
+          hybridCollateralCarryReais += ep.collateralCarryReais;
+          hybridTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+          hybridExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
           hybridNetCdi += ep.benchmarkCdiReais * 0.775;
         } else if (st.book === 'INCOME') {
           incomeCapital += st.metrics.totalCapitalReserved;
-          incomePnl += ep.optionPnlReais;
-          incomeCdiRealized += ep.benchmarkCdiReais;
+          incomeOptionPnlReais += ep.optionPnlReais;
+          incomeBenchmarkCdiReais += ep.benchmarkCdiReais;
+          incomeCollateralCarryReais += ep.collateralCarryReais;
+          incomeTotalEconomicReturnReais += ep.totalEconomicReturnReais;
+          incomeExcessReturnVsCdiReais += ep.excessReturnVsCdiReais;
           incomeNetPnl += ep.optionPnlReais * 0.85;
           incomeNetCdi += ep.benchmarkCdiReais * 0.775;
         } else {
@@ -383,19 +426,30 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
           totalCapitalAllocated += unallocCapital;
           totalPnlMtmReais += unallocPnl;
 
-          portfolioOptionPnlReais += unallocPnl;
-          portfolioTotalEconomicReturnReais += unallocPnl;
-
           if (m.book === 'INCOME') {
+            // Posição avulsa de renda (ex: Short Put LREN3 não agrupada em strategy)
+            // Possui garantia, mas sem funding explícito (tratado como IDLE_CASH / PARTIAL)
+            portfolioBenchmarkEligibleCount++;
+            portfolioBenchmarkEligibleCapital += unallocCapital;
+            if (portfolioEconomicPerformanceQuality === 'FULL') {
+              portfolioEconomicPerformanceQuality = 'PARTIAL';
+            }
+
+            portfolioOptionPnlReais += unallocPnl;
+            portfolioBenchmarkCdiReais += unallocCdi;
+            portfolioCollateralCarryReais += 0;
+            portfolioTotalEconomicReturnReais += unallocPnl;
+            portfolioExcessReturnVsCdiReais += (unallocPnl - unallocCdi);
+
             incomeCapital += unallocCapital;
-            incomePnl += unallocPnl;
-            incomeCdiRealized += unallocCdi;
+            incomeOptionPnlReais += unallocPnl;
+            incomeBenchmarkCdiReais += unallocCdi;
+            incomeCollateralCarryReais += 0;
+            incomeTotalEconomicReturnReais += unallocPnl;
+            incomeExcessReturnVsCdiReais += (unallocPnl - unallocCdi);
             incomeNetPnl += m.netPnlMtmReaisWithTax * unallocRatio;
             incomeNetCdi += m.netCdiBenchmarkReais * unallocRatio;
             if (m.cdiIsEstimated) incomeCdiIsEstimated = true;
-
-            portfolioBenchmarkCdiReais += unallocCdi;
-            portfolioExcessReturnVsCdiReais += (unallocPnl - unallocCdi);
 
             const eff = m.efficiencyExecutable;
             if (isActionFeedEligible(eff)) {
@@ -417,9 +471,11 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
               });
             }
           } else {
+            // Posição Direcional Avulsa (ex: Long Call / Long Put)
+            // NOT_APPLICABLE para benchmark CDI: não contamina portfolioExcessReturnVsCdiReais
+            portfolioExcludedFromBenchmarkCount++;
             directionalCapital += unallocCapital;
             directionalPnl += unallocPnl;
-            portfolioExcessReturnVsCdiReais += unallocPnl;
           }
         }
       } else {
@@ -436,18 +492,18 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
     const portfolioTotalReturnToCdiMultiple = totalCdiMultiple;
     const portfolioExcessToCdiMultiple = Math.abs(portfolioBenchmarkCdiReais) >= 0.05 ? portfolioExcessReturnVsCdiReais / portfolioBenchmarkCdiReais : null;
 
-    const incomeAlphaReais = incomePnl - incomeCdiRealized;
-    const incomeCdiMultiple = Math.abs(incomeCdiRealized) >= 0.05 ? incomePnl / incomeCdiRealized : null;
-    const incomeCdiYieldPct = incomeCapital > 0 ? (incomeCdiRealized / incomeCapital) * 100 : 0;
+    const incomeTotalReturnToCdiMultiple = Math.abs(incomeBenchmarkCdiReais) >= 0.05 ? incomeTotalEconomicReturnReais / incomeBenchmarkCdiReais : null;
+    const incomeExcessToCdiMultiple = Math.abs(incomeBenchmarkCdiReais) >= 0.05 ? incomeExcessReturnVsCdiReais / incomeBenchmarkCdiReais : null;
+    const incomeCdiYieldPct = incomeCapital > 0 ? (incomeBenchmarkCdiReais / incomeCapital) * 100 : 0;
 
     const incomeNetAlphaReais = incomeNetPnl - incomeNetCdi;
     const incomeNetCdiMultiple = Math.abs(incomeNetCdi) >= 0.05 ? incomeNetPnl / incomeNetCdi : null;
 
     const directionalRoiOnPremiumPct = directionalCapital > 0 ? (directionalPnl / directionalCapital) * 100 : 0;
-    const hybridNetPnlWithTax = hybridPnl >= 0 ? hybridPnl * 0.85 : hybridPnl;
-    const hybridAlphaReais = hybridPnl; // Em 100% CDI, excess é exatamente o P&L das opções
+    const hybridNetPnlWithTax = hybridOptionPnlReais >= 0 ? hybridOptionPnlReais * 0.85 : hybridOptionPnlReais;
     const hybridNetAlphaReais = hybridNetPnlWithTax - hybridNetCdi;
-    const hybridCdiMultiple = Math.abs(hybridCdiRealized) >= 0.05 ? (hybridPnl + hybridCdiRealized) / hybridCdiRealized : null;
+    const hybridTotalReturnToCdiMultiple = Math.abs(hybridBenchmarkCdiReais) >= 0.05 ? hybridTotalEconomicReturnReais / hybridBenchmarkCdiReais : null;
+    const hybridExcessToCdiMultiple = Math.abs(hybridBenchmarkCdiReais) >= 0.05 ? hybridExcessReturnVsCdiReais / hybridBenchmarkCdiReais : null;
     const hybridNetCdiMultiple = Math.abs(hybridNetCdi) >= 0.05 ? hybridNetPnlWithTax / hybridNetCdi : null;
 
     // Métricas Consolidadas da Carteira Inteira (Garantia Total)
@@ -487,7 +543,12 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         totalThetaReaisPerDay,
         totalDeltaEquivUnits,
 
-        // Agregação Econômica Canônica da Carteira
+        // Agregação Econômica Canônica do Universo Benchmark-Eligible
+        portfolioBenchmarkEligibleCapital,
+        portfolioBenchmarkEligibleCount,
+        portfolioExcludedFromBenchmarkCount,
+        portfolioEconomicPerformanceQuality,
+
         portfolioOptionPnlReais,
         portfolioBenchmarkCdiReais,
         portfolioCollateralCarryReais,
@@ -506,10 +567,13 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
 
         incomeBook: {
           capitalAllocated: incomeCapital,
-          pnlMtmReais: incomePnl,
-          cdiRealizedReais: incomeCdiRealized,
-          alphaReais: incomeAlphaReais,
-          cdiMultiple: incomeCdiMultiple,
+          optionPnlReais: incomeOptionPnlReais,
+          benchmarkCdiReais: incomeBenchmarkCdiReais,
+          collateralCarryReais: incomeCollateralCarryReais,
+          totalEconomicReturnReais: incomeTotalEconomicReturnReais,
+          excessReturnVsCdiReais: incomeExcessReturnVsCdiReais,
+          totalReturnToCdiMultiple: incomeTotalReturnToCdiMultiple,
+          excessToCdiMultiple: incomeExcessToCdiMultiple,
           cdiRealizedYieldPct: incomeCdiYieldPct,
           cdiIsEstimated: incomeCdiIsEstimated,
           netPnlReaisWithTax: incomeNetPnl,
@@ -524,14 +588,17 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
         },
         hybridBook: {
           capitalAllocated: hybridCapital,
-          pnlMtmReais: hybridPnl,
+          optionPnlReais: hybridOptionPnlReais,
           netInitialCreditDebitReais: hybridNetCredit,
+          benchmarkCdiReais: hybridBenchmarkCdiReais,
+          collateralCarryReais: hybridCollateralCarryReais,
+          totalEconomicReturnReais: hybridTotalEconomicReturnReais,
+          excessReturnVsCdiReais: hybridExcessReturnVsCdiReais,
+          totalReturnToCdiMultiple: hybridTotalReturnToCdiMultiple,
+          excessToCdiMultiple: hybridExcessToCdiMultiple,
           netPnlReaisWithTax: hybridNetPnlWithTax,
-          cdiRealizedReais: hybridCdiRealized,
           netCdiBenchmarkReais: hybridNetCdi,
-          alphaReais: hybridAlphaReais,
           netAlphaReais: hybridNetAlphaReais,
-          cdiMultiple: hybridCdiMultiple,
           netCdiMultiple: hybridNetCdiMultiple,
         },
         actionFeedItems,
@@ -767,6 +834,108 @@ export async function ungroupOptionStrategyAction(strategyId: string): Promise<{
   } catch (err: any) {
     console.error('[Options Actions] Erro ao desagrupar estratégia:', err);
     return { success: false, error: err.message || 'Erro ao desagrupar estratégia' };
+  }
+}
+
+/**
+ * 3.1. Edição Explícita de Funding / Remuneração da Estrutura
+ */
+export async function updateOptionStrategyFundingAction(params: {
+  strategyId: string;
+  collateralMode: CollateralMode;
+  collateralYieldPctCDI?: number | null;
+  capitalRemuneratedReais?: number | null;
+  collateralCoveragePct?: number | null;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const existingStrategy = db.query.optionStrategies.findFirst({
+      where: eq(optionStrategies.id, params.strategyId),
+    }).sync();
+
+    if (!existingStrategy) {
+      return { success: false, error: 'Estrutura não encontrada.' };
+    }
+
+    if (params.collateralMode === 'CUSTOM') {
+      if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || params.collateralYieldPctCDI < 0) {
+        return { success: false, error: 'CUSTOM_COLLATERAL_PERCENT_REQUIRED: Informe um percentual válido e não-negativo (>= 0) para o CDI customizado.' };
+      }
+    }
+
+    if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+      if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
+        return { success: false, error: 'INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.' };
+      }
+    }
+
+    const legs = db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, params.strategyId),
+    }).sync();
+
+    const posIds = legs.map((l) => l.positionId);
+    const rawPositions = db.query.optionPositions.findMany({
+      where: inArray(optionPositions.id, posIds),
+    }).sync();
+
+    let netInitialCreditDebit = 0;
+    const legItemsForRisk = [];
+
+    for (const leg of legs) {
+      const pos = rawPositions.find((p) => p.id === leg.positionId);
+      if (pos) {
+        const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
+        if (isShort) netInitialCreditDebit += pos.entryPrice * leg.allocatedQuantity;
+        else netInitialCreditDebit -= pos.entryPrice * leg.allocatedQuantity;
+
+        legItemsForRisk.push({
+          allocatedQuantity: leg.allocatedQuantity,
+          economicRole: leg.economicRole,
+          position: enrichOptionPosition(pos),
+        });
+      }
+    }
+
+    const riskProfile = detectStrategyRiskAndPayoff({
+      legs: legItemsForRisk as any,
+      netInitialCreditDebitReais: netInitialCreditDebit,
+    });
+    const benchmarkCapitalReais = riskProfile.capitalReservedReais;
+
+    let finalCapitalRemunerated = params.capitalRemuneratedReais;
+    if (params.collateralMode === 'IDLE_CASH') {
+      finalCapitalRemunerated = 0;
+    } else if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
+      finalCapitalRemunerated = benchmarkCapitalReais * (params.collateralCoveragePct / 100);
+    }
+
+    if (finalCapitalRemunerated !== undefined && finalCapitalRemunerated !== null) {
+      if (finalCapitalRemunerated < 0) {
+        return { success: false, error: 'INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.' };
+      }
+      if (benchmarkCapitalReais > 0 && finalCapitalRemunerated > benchmarkCapitalReais + 0.01) {
+        return {
+          success: false,
+          error: `REMUNERATED_CAPITAL_EXCEEDS_BENCHMARK: Capital remunerado (R$ ${finalCapitalRemunerated.toFixed(2)}) não pode exceder o capital de referência do benchmark (R$ ${benchmarkCapitalReais.toFixed(2)}).`,
+        };
+      }
+    }
+
+    db.update(optionStrategies)
+      .set({
+        collateralMode: params.collateralMode,
+        collateralYieldPctCDI: params.collateralYieldPctCDI ?? null,
+        capitalRemuneratedReais: finalCapitalRemunerated ?? null,
+        collateralCoveragePct: params.collateralCoveragePct ?? null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(optionStrategies.id, params.strategyId))
+      .run();
+
+    safeRevalidate('/opcoes');
+    return { success: true };
+  } catch (err: any) {
+    console.error('[Options Actions] Erro ao atualizar funding da estratégia:', err);
+    return { success: false, error: err.message || 'Erro ao atualizar funding da estratégia' };
   }
 }
 

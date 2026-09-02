@@ -4,18 +4,105 @@ import * as schema from './schema';
 import path from 'node:path';
 import fs from 'node:fs';
 
-const dataDir = path.join(process.cwd(), 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const dbPath = process.env.TRADELOG_DB_PATH || path.join(process.cwd(), 'data', 'tradelog.db');
+
+if (dbPath !== ':memory:') {
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 }
 
-const dbPath = path.join(dataDir, 'tradelog.db');
-const sqlite = new Database(dbPath);
+export const sqlite = new Database(dbPath);
 
-sqlite.pragma('journal_mode = WAL');
+if (dbPath !== ':memory:') {
+  sqlite.pragma('journal_mode = WAL');
+}
 sqlite.pragma('foreign_keys = ON');
 
 sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS trading_days (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    sleep_time TEXT,
+    wake_up_time TEXT,
+    sleep_quality INTEGER,
+    mental_state TEXT,
+    personal_note TEXT,
+    macro_calendar TEXT,
+    overnight_note TEXT,
+    general_bias TEXT,
+    total_points REAL,
+    total_reais REAL,
+    trades_right INTEGER,
+    trades_wrong INTEGER,
+    avg_conviction REAL,
+    avg_execution REAL,
+    bias_correct INTEGER,
+    pre_market_done INTEGER DEFAULT 0,
+    overtrading INTEGER DEFAULT 0,
+    honest_phrase TEXT,
+    retrospective TEXT,
+    emotional_post TEXT,
+    farol_bias TEXT,
+    farol_key_levels TEXT,
+    farol_news TEXT,
+    farol_insights TEXT,
+    strategy_tags TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS trades (
+    id TEXT PRIMARY KEY,
+    trading_day_id TEXT REFERENCES trading_days(id) ON DELETE CASCADE,
+    trade_number INTEGER NOT NULL,
+    instrument TEXT NOT NULL,
+    open_time TEXT NOT NULL,
+    close_time TEXT NOT NULL,
+    duration TEXT,
+    side TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    contracts INTEGER NOT NULL,
+    points REAL,
+    reais REAL,
+    is_average INTEGER DEFAULT 0,
+    mep REAL,
+    men REAL,
+    drawdown REAL,
+    conviction INTEGER,
+    execution INTEGER,
+    what_i_saw_now TEXT,
+    retrospective TEXT,
+    strategy TEXT,
+    emotional_pre TEXT,
+    entry_type TEXT,
+    pre_trade_note TEXT,
+    market_regime TEXT,
+    day_phase TEXT,
+    stop_type TEXT,
+    did_partial INTEGER DEFAULT 0,
+    moved_stop INTEGER DEFAULT 0,
+    reduced_size INTEGER DEFAULT 0,
+    exited_early INTEGER DEFAULT 0,
+    during_trade_note TEXT,
+    emotional_post TEXT,
+    trade_quality INTEGER,
+    post_trade_note TEXT,
+    created_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS trade_images (
+    id TEXT PRIMARY KEY,
+    trade_id TEXT REFERENCES trades(id) ON DELETE CASCADE,
+    trading_day_id TEXT REFERENCES trading_days(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    caption TEXT,
+    image_type TEXT,
+    created_at TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS video_records (
     id TEXT PRIMARY KEY,
     trading_day_id TEXT REFERENCES trading_days(id) ON DELETE CASCADE,

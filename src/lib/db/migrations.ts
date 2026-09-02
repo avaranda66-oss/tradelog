@@ -11,6 +11,13 @@ export function ensureColumn(
   ddl: string
 ): boolean {
   try {
+    const tableExists = sqliteInstance
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+      .get(table);
+    if (!tableExists) {
+      return false;
+    }
+
     const tableInfo = sqliteInstance.pragma(`table_info(${table})`) as Array<{ name: string; type: string }>;
     const exists = tableInfo.some((col) => col.name.toLowerCase() === column.toLowerCase());
     if (!exists) {

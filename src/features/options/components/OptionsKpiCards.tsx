@@ -29,12 +29,12 @@ export function OptionsKpiCards({
   const dir = summary.directionalBook;
   const hyb = summary.hybridBook;
 
-  const totalNetPnl = inc.netPnlReaisWithTax + (dir.pnlMtmReais * 0.85) + (hyb?.netPnlReaisWithTax ?? hyb.pnlMtmReais * 0.85);
+  const totalNetPnl = inc.netPnlReaisWithTax + (dir.pnlMtmReais * 0.85) + (hyb?.netPnlReaisWithTax ?? (hyb ? hyb.optionPnlReais * 0.85 : 0));
   const displayPnl = isNetView ? totalNetPnl : summary.totalPnlMtmReais;
   const displayRoicPct = summary.totalCapitalAllocated > 0 ? (displayPnl / summary.totalCapitalAllocated) * 100 : 0;
 
-  const displayIncomePnl = isNetView ? inc.netPnlReaisWithTax : inc.pnlMtmReais;
-  const displayHybridPnl = isNetView ? (hyb?.netPnlReaisWithTax ?? hyb.pnlMtmReais * 0.85) : hyb.pnlMtmReais;
+  const displayIncomePnl = isNetView ? inc.netPnlReaisWithTax : inc.optionPnlReais;
+  const displayHybridPnl = isNetView ? (hyb?.netPnlReaisWithTax ?? (hyb ? hyb.optionPnlReais * 0.85 : 0)) : (hyb?.optionPnlReais ?? 0);
   const displayDirectionalPnl = isNetView ? dir.pnlMtmReais * 0.85 : dir.pnlMtmReais;
 
   // Benchmark CDI & Alpha Consolidados da Garantia Total da Carteira
@@ -42,8 +42,8 @@ export function OptionsKpiCards({
   const displayTotalAlpha = isNetView ? summary.totalNetAlphaReais : summary.totalAlphaReais;
   const displayTotalCdiMultiple = isNetView ? summary.totalNetCdiMultiple : summary.totalCdiMultiple;
 
-  const displayIncomeCdi = isNetView ? inc.netCdiBenchmarkReais : inc.cdiRealizedReais;
-  const displayHybridCdi = isNetView ? hyb?.netCdiBenchmarkReais ?? 0 : hyb?.cdiRealizedReais ?? 0;
+  const displayIncomeCdi = isNetView ? inc.netCdiBenchmarkReais : inc.benchmarkCdiReais;
+  const displayHybridCdi = isNetView ? hyb?.netCdiBenchmarkReais ?? 0 : hyb?.benchmarkCdiReais ?? 0;
 
   const isPositive = displayPnl >= 0;
   const isAlphaPositive = displayTotalAlpha >= 0;
@@ -219,7 +219,7 @@ export function OptionsKpiCards({
             </div>
             <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
               <span>Renda: <strong className="text-emerald-300 font-bold">{displayIncomePnl >= 0 ? '+' : ''}{displayIncomePnl.toFixed(2)}</strong></span>
-              {hyb.pnlMtmReais !== 0 && (
+              {(hyb?.optionPnlReais ?? 0) !== 0 && (
                 <span>· Estruturas: <strong className="text-amber-300 font-bold">{displayHybridPnl >= 0 ? '+' : ''}{displayHybridPnl.toFixed(2)}</strong></span>
               )}
               {dir.pnlMtmReais !== 0 && (

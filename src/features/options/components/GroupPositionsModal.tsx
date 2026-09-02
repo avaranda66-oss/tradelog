@@ -101,7 +101,7 @@ export function GroupPositionsModal({
       }
 
       const parsedPctCDI = collateralMode === 'CUSTOM'
-        ? (parseNumericInput(collateralPctCDI) ?? 100)
+        ? parseNumericInput(collateralPctCDI)
         : collateralMode === 'REMUNERATED_100_CDI' ? 100 : 0;
 
       const res = await groupOptionPositionsAction({
