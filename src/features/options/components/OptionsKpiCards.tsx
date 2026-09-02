@@ -233,56 +233,68 @@ export function OptionsKpiCards({
         </div>
 
         {/* Card 3: Benchmark CDI — Capital Elegível */}
-        <div className="bg-[#0f0e1c] border border-purple-500/30 rounded-xl p-4 space-y-2 shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">
-              BENCHMARK CDI — CAPITAL ELEGÍVEL
-            </span>
-            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-              summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
-                ? 'bg-purple-500/15 text-purple-300'
-                : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
-                ? 'bg-amber-500/15 text-amber-300'
-                : summary.portfolioBenchmarkQuality === 'ESTIMATED'
-                ? 'bg-amber-500/15 text-amber-300'
-                : 'bg-slate-800 text-slate-500'
-            }`}>
-              {summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
-                ? 'B3 OFICIAL'
-                : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
-                ? 'CDI PARCIAL ⚠️'
-                : summary.portfolioBenchmarkQuality === 'ESTIMATED'
-                ? 'CDI ESTIMADO ⚠️'
-                : 'N/A'}
-            </span>
-          </div>
-          <div className="space-y-1">
-            <div className="text-2xl font-bold text-purple-300 tracking-tight">
-              {summary.portfolioBenchmarkEligibleCount === 0 ? (
-                <span className="text-slate-500 text-lg">N/A</span>
-              ) : (
-                `R$ ${summary.portfolioBenchmarkCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              )}
-            </div>
-            {summary.portfolioBenchmarkEligibleCount > 0 ? (
-              <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
-                <span>Renda: <strong className="text-purple-200 font-bold">R$ {summary.incomeBook.benchmarkCdiReais.toFixed(2)}</strong></span>
-                {summary.hybridBook.benchmarkCdiReais > 0 && (
-                  <span>· Estruturas: <strong className="text-amber-200 font-bold">R$ {summary.hybridBook.benchmarkCdiReais.toFixed(2)}</strong></span>
+        {(() => {
+          const canShowPortfolioBenchmark =
+            summary.portfolioBenchmarkEligibleCount > 0 &&
+            summary.portfolioEconomicPerformanceQuality !== 'INSUFFICIENT_DATA';
+
+          return (
+            <div className="bg-[#0f0e1c] border border-purple-500/30 rounded-xl p-4 space-y-2 shadow-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">
+                  BENCHMARK CDI — CAPITAL ELEGÍVEL
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                  summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                    ? 'bg-purple-500/15 text-purple-300'
+                    : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
+                    ? 'bg-amber-500/15 text-amber-300'
+                    : summary.portfolioBenchmarkQuality === 'ESTIMATED'
+                    ? 'bg-amber-500/15 text-amber-300'
+                    : 'bg-slate-800 text-slate-500'
+                }`}>
+                  {summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                    ? 'B3 OFICIAL'
+                    : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
+                    ? 'CDI PARCIAL ⚠️'
+                    : summary.portfolioBenchmarkQuality === 'ESTIMATED'
+                    ? 'CDI ESTIMADO ⚠️'
+                    : 'N/A'}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <div className="text-2xl font-bold text-purple-300 tracking-tight">
+                  {!canShowPortfolioBenchmark ? (
+                    <span className="text-slate-500 text-lg">N/A</span>
+                  ) : (
+                    `R$ ${summary.portfolioBenchmarkCdiReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  )}
+                </div>
+                {canShowPortfolioBenchmark ? (
+                  <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-1.5">
+                    <span>Renda: <strong className="text-purple-200 font-bold">R$ {summary.incomeBook.benchmarkCdiReais.toFixed(2)}</strong></span>
+                    {summary.hybridBook.benchmarkCdiReais > 0 && (
+                      <span>· Estruturas: <strong className="text-amber-200 font-bold">R$ {summary.hybridBook.benchmarkCdiReais.toFixed(2)}</strong></span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-500">
+                    {summary.portfolioBenchmarkEligibleCount === 0
+                      ? 'Nenhuma posição elegível ao benchmark CDI.'
+                      : 'Dados temporais insuficientes para apuração do benchmark.'}
+                  </div>
                 )}
               </div>
-            ) : (
-              <div className="text-[11px] text-slate-500">
-                Nenhuma posição elegível ao benchmark CDI.
-              </div>
-            )}
-          </div>
-          <p className="text-[10px] text-slate-400 italic">
-            {summary.portfolioBenchmarkEligibleCount > 0
-              ? `Sobre R$ ${summary.portfolioBenchmarkEligibleCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de capital elegível · ${summary.portfolioBenchmarkEligibleCount} ${summary.portfolioBenchmarkEligibleCount === 1 ? 'operação incluída' : 'operações incluídas'} · ${summary.portfolioExcludedFromBenchmarkCount} ${summary.portfolioExcludedFromBenchmarkCount === 1 ? 'direcional excluída' : 'direcionais excluídas'}`
-              : 'Apenas posições direcionais/débito sem garantia alocada.'}
-          </p>
-        </div>
+              <p className="text-[10px] text-slate-400 italic">
+                {summary.portfolioBenchmarkEligibleCount === 0
+                  ? 'Apenas posições direcionais/débito sem garantia alocada.'
+                  : summary.portfolioEconomicPerformanceQuality === 'INSUFFICIENT_DATA'
+                  ? 'Dados temporais insuficientes para apuração do benchmark CDI.'
+                  : `Sobre R$ ${summary.portfolioBenchmarkEligibleCapital.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de capital elegível · ${summary.portfolioBenchmarkEligibleCount} ${summary.portfolioBenchmarkEligibleCount === 1 ? 'operação incluída' : 'operações incluídas'} · ${summary.portfolioExcludedFromBenchmarkCount} ${summary.portfolioExcludedFromBenchmarkCount === 1 ? 'direcional excluída' : 'direcionais excluídas'}`}
+              </p>
+            </div>
+          );
+        })()}
 
         {/* Card 4: Valor Gerado Acima do CDI (Double Yield Institucional) */}
         {(() => {
@@ -381,7 +393,23 @@ export function OptionsKpiCards({
             {summary.totalDeltaEquivUnits !== 0 ? `${summary.totalDeltaEquivUnits >= 0 ? '+' : ''}${summary.totalDeltaEquivUnits.toFixed(0)} ações` : 'Delta Neutro (0)'}
           </strong></span>
           <span className="text-slate-700">|</span>
-          <span>Série DI: <strong className="text-purple-300">B3 Oficial</strong></span>
+          <span>
+            Série DI: <strong className={
+              summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                ? 'text-purple-300'
+                : summary.portfolioBenchmarkQuality === 'NOT_AVAILABLE'
+                ? 'text-slate-500'
+                : 'text-amber-300'
+            }>
+              {summary.portfolioBenchmarkQuality === 'OFFICIAL_DI'
+                ? 'B3 Oficial'
+                : summary.portfolioBenchmarkQuality === 'PARTIAL_ESTIMATE'
+                ? 'Parcialmente estimado ⚠️'
+                : summary.portfolioBenchmarkQuality === 'ESTIMATED'
+                ? 'Estimado ⚠️'
+                : 'N/A'}
+            </strong>
+          </span>
           <span className="text-slate-700">|</span>
           <span>Selic Meta Base: <strong className="text-amber-300">14,00% a.a.</strong></span>
         </div>

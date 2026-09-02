@@ -239,7 +239,10 @@ export function StrategyEconomicStorytellingCard({
         <div className="text-slate-300 leading-relaxed text-xs">
           {!canCompareToCdi ? (
             <span>
-              Dados temporais insuficientes para apurar o benchmark CDI ou comparação de custo de oportunidade (ausência de data válida de encerramento da perna). As opções {isMtm ? 'estão registrando' : 'registraram'}{' '}
+              {ep.qualityNotes?.includes('CLOSED_AT_REQUIRED')
+                ? 'Data de encerramento da operação ausente no registro histórico.'
+                : 'Dados temporais ou base de capital insuficientes para uma comparação consistente com o CDI.'}{' '}
+              As opções {isMtm ? 'estão registrando' : 'registraram'}{' '}
               <strong className={isPositivePnl ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
                 {isPositivePnl ? '+' : ''}R$ {ep.optionPnlReais.toFixed(2)}
               </strong>.
@@ -352,7 +355,9 @@ export function StrategyEconomicStorytellingCard({
         {/* Notas de Transparência Institucional */}
         <div className="text-[10px] text-slate-500 italic space-x-2">
           <span>
-            {ep.benchmarkQuality === 'OFFICIAL_DI'
+            {!canCompareToCdi
+              ? 'Benchmark CDI indisponível para esta estratégia.'
+              : ep.benchmarkQuality === 'OFFICIAL_DI'
               ? 'Benchmark CDI apurado com observações oficiais B3.'
               : ep.benchmarkQuality === 'PARTIAL_ESTIMATE'
               ? 'Benchmark CDI parcialmente estimado; consulte os indicadores de qualidade.'

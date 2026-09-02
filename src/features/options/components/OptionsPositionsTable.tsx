@@ -341,29 +341,33 @@ export function OptionsPositionsTable({
                           {strat.legs.length} Pernas
                         </span>
                       </div>
-                      {preset === 'RENDA_CDI' ? (
-                        <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-300">
-                          <span>Cap. Benchmark: <strong className="text-slate-100 font-bold">R$ {strat.economicPerformance.benchmarkCapitalReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
-                          <span className="text-slate-600">·</span>
-                          <span>Cap. Remunerado: <strong className="text-purple-300 font-bold">R$ {strat.economicPerformance.capitalRemuneratedReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
-                          <span className="text-slate-600">·</span>
-                          <span>Carry Caixa: <strong className="text-purple-300 font-bold">+R$ {strat.economicPerformance.collateralCarryReais.toFixed(2)}</strong></span>
-                          <span className="text-slate-600">·</span>
-                          <span>Benchmark CDI: <strong className="text-slate-300 font-bold">+R$ {strat.economicPerformance.benchmarkCdiReais.toFixed(2)}</strong></span>
-                          <span className="text-slate-600">·</span>
-                          <span>Excesso: <strong className={strat.economicPerformance.excessReturnVsCdiReais >= 0 ? "text-emerald-300 font-bold" : "text-rose-300 font-bold"}>
-                            {strat.economicPerformance.excessReturnVsCdiReais >= 0 ? '+' : ''}R$ {strat.economicPerformance.excessReturnVsCdiReais.toFixed(2)}
-                          </strong></span>
-                          {strat.economicPerformance.totalReturnToCdiMultiple !== null && (
-                            <>
-                              <span className="text-slate-600">·</span>
-                              <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px]">
-                                {strat.economicPerformance.totalReturnToCdiMultiple.toFixed(2)}× CDI
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      ) : (
+                      {preset === 'RENDA_CDI' ? (() => {
+                        const ep = strat.economicPerformance;
+                        const canCompare = ep.economicPerformanceQuality !== 'INSUFFICIENT_DATA';
+                        return (
+                          <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-300">
+                            <span>Cap. Benchmark: <strong className="text-slate-100 font-bold">R$ {ep.benchmarkCapitalReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}</strong></span>
+                            <span className="text-slate-600">·</span>
+                            <span>Cap. Remunerado: <strong className="text-purple-300 font-bold">{canCompare && ep.collateralMode !== 'IDLE_CASH' ? `R$ ${ep.capitalRemuneratedReais.toLocaleString('pt-BR', { minimumFractionDigits: 0 })}` : ep.collateralMode === 'IDLE_CASH' ? 'R$ 0' : 'N/A'}</strong></span>
+                            <span className="text-slate-600">·</span>
+                            <span>Carry Caixa: <strong className="text-purple-300 font-bold">{canCompare ? `+R$ ${ep.collateralCarryReais.toFixed(2)}` : 'N/A'}</strong></span>
+                            <span className="text-slate-600">·</span>
+                            <span>Benchmark CDI: <strong className="text-slate-300 font-bold">{canCompare ? `+R$ ${ep.benchmarkCdiReais.toFixed(2)}` : 'N/A'}</strong></span>
+                            <span className="text-slate-600">·</span>
+                            <span>Excesso: <strong className={canCompare ? (ep.excessReturnVsCdiReais >= 0 ? "text-emerald-300 font-bold" : "text-rose-300 font-bold") : "text-slate-500"}>
+                              {canCompare ? `${ep.excessReturnVsCdiReais >= 0 ? '+' : ''}R$ ${ep.excessReturnVsCdiReais.toFixed(2)}` : 'N/A'}
+                            </strong></span>
+                            {canCompare && ep.totalReturnToCdiMultiple !== null && (
+                              <>
+                                <span className="text-slate-600">·</span>
+                                <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px]">
+                                  {ep.totalReturnToCdiMultiple.toFixed(2)}× CDI
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })() : (
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           Fluxo Inicial: <strong className="text-emerald-400">{sm.isNetCredit ? '+' : '-'}R$ {Math.abs(sm.netInitialCreditDebitReais).toFixed(2)} {sm.isNetCredit ? 'Crédito' : 'Débito'}</strong> · {strat.strategyType === 'CASH_SECURED_PUT' ? 'Capital Reservado Cash-Secured:' : 'Capital Reservado:'} <strong className="text-slate-200">R$ {sm.totalCapitalReserved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
                         </p>

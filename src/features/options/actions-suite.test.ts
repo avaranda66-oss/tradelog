@@ -433,6 +433,29 @@ export async function runActionsSuiteTests() {
     assert(updateMissingSplitRes.success === false, 'Funding Update: Rejeição de split nulo em modo remunerado');
     assert(Boolean(updateMissingSplitRes.error?.includes('EXPLICIT_FUNDING_SPLIT_REQUIRED')), 'Funding Update: Erro EXPLICIT_FUNDING_SPLIT_REQUIRED retornado');
 
+    // 5.4. Rejeitar NaN e Infinity na taxa CDI e Cobertura
+    const updateNaNRes = await updateOptionStrategyFundingAction({
+      strategyId: zeroFundingRes.strategyId!,
+      collateralMode: 'CUSTOM',
+      collateralYieldPctCDI: NaN,
+      collateralCoveragePct: 50,
+    });
+    assert(updateNaNRes.success === false, 'Server Boundary: Rejeição de NaN em collateralYieldPctCDI');
+
+    const updateInfRes = await updateOptionStrategyFundingAction({
+      strategyId: zeroFundingRes.strategyId!,
+      collateralMode: 'REMUNERATED_100_CDI',
+      collateralCoveragePct: Infinity,
+    });
+    assert(updateInfRes.success === false, 'Server Boundary: Rejeição de Infinity em collateralCoveragePct');
+
+    const updateNaNCapitalRes = await updateOptionStrategyFundingAction({
+      strategyId: zeroFundingRes.strategyId!,
+      collateralMode: 'REMUNERATED_100_CDI',
+      capitalRemuneratedReais: NaN,
+    });
+    assert(updateNaNCapitalRes.success === false, 'Server Boundary: Rejeição de NaN em capitalRemuneratedReais');
+
     // Limpeza da estrutura criada
     if (zeroFundingRes.strategyId) {
       db.delete(strategyAllocationEvents).where(eq(strategyAllocationEvents.strategyId, zeroFundingRes.strategyId)).run();

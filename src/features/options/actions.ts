@@ -669,14 +669,20 @@ export async function groupOptionPositionsAction(params: {
 
     // Validações imediatas de input
     if (params.collateralMode === 'CUSTOM') {
-      if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || params.collateralYieldPctCDI < 0) {
+      if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || !Number.isFinite(params.collateralYieldPctCDI) || params.collateralYieldPctCDI < 0) {
         return { success: false, error: 'CUSTOM_COLLATERAL_PERCENT_REQUIRED: Informe um percentual válido e não-negativo (>= 0) para o CDI customizado.' };
       }
     }
 
     if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
-      if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
+      if (!Number.isFinite(params.collateralCoveragePct) || params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
         return { success: false, error: 'INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.' };
+      }
+    }
+
+    if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
+      if (!Number.isFinite(params.capitalRemuneratedReais) || params.capitalRemuneratedReais < 0) {
+        return { success: false, error: 'INVALID_REMUNERATED_CAPITAL: Capital remunerado não pode ser negativo.' };
       }
     }
 
@@ -880,14 +886,20 @@ export async function updateOptionStrategyFundingAction(params: {
     }
 
     if (params.collateralMode === 'CUSTOM') {
-      if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || params.collateralYieldPctCDI < 0) {
+      if (params.collateralYieldPctCDI === undefined || params.collateralYieldPctCDI === null || !Number.isFinite(params.collateralYieldPctCDI) || params.collateralYieldPctCDI < 0) {
         return { success: false, error: 'CUSTOM_COLLATERAL_PERCENT_REQUIRED: Informe um percentual válido e não-negativo (>= 0) para o CDI customizado.' };
       }
     }
 
     if (params.collateralCoveragePct !== undefined && params.collateralCoveragePct !== null) {
-      if (params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
+      if (!Number.isFinite(params.collateralCoveragePct) || params.collateralCoveragePct < 0 || params.collateralCoveragePct > 100) {
         return { success: false, error: 'INVALID_COLLATERAL_COVERAGE_PERCENT: Cobertura de garantia deve estar entre 0% e 100%.' };
+      }
+    }
+
+    if (params.capitalRemuneratedReais !== undefined && params.capitalRemuneratedReais !== null) {
+      if (!Number.isFinite(params.capitalRemuneratedReais) || params.capitalRemuneratedReais < 0) {
+        return { success: false, error: 'INVALID_REMUNERATED_CAPITAL: Capital remunerado deve ser um número finito não-negativo.' };
       }
     }
 
