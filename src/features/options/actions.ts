@@ -956,22 +956,43 @@ export async function groupOptionPositionsAction(params: {
       // 2. Validação de quantidade disponível e montagem das pernas para cálculo de risco
       let netInitialCreditDebit = 0;
       const legItemsForRisk = [];
+      const desiredQtyByPosId = new Map<string, number>();
 
       for (const legParam of params.legs) {
         const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
-        const alreadyAllocated = existingLegs
+        if (pos.status !== 'OPEN') {
+          throw new Error(`CANNOT_GROUP_CLOSED_POSITION: Apenas posições abertas podem ser agrupadas em estruturas (${pos.tickerOption} está com status ${pos.status}).`);
+        }
+
+        const positionOpenQuantity = pos.openQuantity ?? Math.max(0, pos.quantity - (pos.closedQuantity ?? 0));
+        if (positionOpenQuantity <= 0) {
+          throw new Error(`INSUFFICIENT_FREE_OPEN_QUANTITY: Posição ${pos.tickerOption} não possui contratos abertos disponíveis.`);
+        }
+
+        const alreadyOpenAllocated = existingLegs
           .filter((l) => l.positionId === pos.id)
-          .reduce((sum, l) => sum + l.allocatedQuantity, 0);
+          .reduce(
+            (sum, l) =>
+              sum +
+              (l.openAllocatedQuantity ??
+                Math.max(0, l.allocatedQuantity - (l.closedAllocatedQuantity ?? 0))),
+            0
+          );
 
-        const desiredQty = legParam.allocatedQuantity ?? pos.quantity;
+        const freeOpenQuantity = positionOpenQuantity - alreadyOpenAllocated;
+        const desiredQty = legParam.allocatedQuantity !== undefined && legParam.allocatedQuantity !== null
+          ? legParam.allocatedQuantity
+          : freeOpenQuantity;
 
-        if (desiredQty <= 0) {
-          throw new Error(`Quantidade alocada deve ser maior que zero para ${pos.tickerOption}.`);
+        if (!Number.isInteger(desiredQty) || desiredQty <= 0) {
+          throw new Error(`INVALID_QUANTITY: Quantidade alocada deve ser um número inteiro positivo para ${pos.tickerOption}.`);
         }
 
-        if (alreadyAllocated + desiredQty > pos.quantity) {
-          throw new Error(`Quantidade insuficiente em ${pos.tickerOption}. Disponível: ${pos.quantity - alreadyAllocated}, Solicitado: ${desiredQty}.`);
+        if (desiredQty > freeOpenQuantity) {
+          throw new Error(`INSUFFICIENT_FREE_OPEN_QUANTITY: Quantidade insuficiente em ${pos.tickerOption}. Solicitado: ${desiredQty}, aberto livre disponível: ${freeOpenQuantity}.`);
         }
+
+        desiredQtyByPosId.set(pos.id, desiredQty);
 
         const isShort = pos.side === 'SELL' || pos.side === 'SHORT';
         if (isShort) netInitialCreditDebit += pos.entryPrice * desiredQty;
@@ -979,6 +1000,8 @@ export async function groupOptionPositionsAction(params: {
 
         legItemsForRisk.push({
           allocatedQuantity: desiredQty,
+          openAllocatedQuantity: desiredQty,
+          closedAllocatedQuantity: 0,
           economicRole: legParam.economicRole || 'CUSTOM',
           position: enrichOptionPosition(pos),
         });
@@ -1049,7 +1072,7 @@ export async function groupOptionPositionsAction(params: {
 
       for (const legParam of params.legs) {
         const pos = rawPositions.find((p) => p.id === legParam.positionId)!;
-        const allocQty = legParam.allocatedQuantity ?? pos.quantity;
+        const allocQty = desiredQtyByPosId.get(pos.id)!;
         const legId = generateId('opt_strat_leg');
 
         let econRole = legParam.economicRole || 'CUSTOM';

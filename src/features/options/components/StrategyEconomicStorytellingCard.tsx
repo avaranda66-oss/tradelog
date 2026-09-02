@@ -89,7 +89,7 @@ export function StrategyEconomicStorytellingCard({
               }`}
               title="Origem dos fatores da taxa DI"
             >
-              CDI: {ep.benchmarkQuality === 'OFFICIAL_DI' ? 'B3 OFICIAL' : ep.benchmarkQuality === 'PARTIAL_ESTIMATE' ? 'PARCIAL' : 'ESTIMADO'}
+              CDI: {ep.benchmarkQuality === 'OFFICIAL_DI' ? 'B3 OFICIAL' : ep.benchmarkQuality === 'PARTIAL_ESTIMATE' ? 'PARCIAL' : ep.benchmarkQuality === 'ESTIMATED' ? 'ESTIMADO' : 'N/A'}
             </span>
 
             {/* Risco */}
@@ -136,7 +136,9 @@ export function StrategyEconomicStorytellingCard({
         {/* P&L das Opções */}
         <div className="bg-[#070b14] border border-slate-800/80 rounded-lg p-3 space-y-1">
           <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-            {hasRealizedPart && isMtm
+            {sm.strategyRealizedPnlQuality !== 'FULL'
+              ? 'P&L CONHECIDO (PARCIAL)'
+              : hasRealizedPart && isMtm
               ? 'P&L TOTAL DA ESTRUTURA'
               : isMtm
               ? 'P&L OPÇÕES (MTM)'
@@ -146,7 +148,11 @@ export function StrategyEconomicStorytellingCard({
             {isPositivePnl ? '+' : ''}R$ {ep.optionPnlReais.toFixed(2)}
           </div>
           <div className="text-[10px] text-slate-500">
-            {hasRealizedPart && isMtm ? (
+            {sm.strategyRealizedPnlQuality !== 'FULL' ? (
+              <span className="text-amber-400/90 font-medium">
+                ⚠️ Histórico realizado incompleto (apenas execuções conhecidas)
+              </span>
+            ) : hasRealizedPart && isMtm ? (
               <span className="flex flex-col gap-0.5">
                 <span>Realizado: <strong className="text-emerald-300 font-semibold">{sm.strategyKnownGrossRealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyKnownGrossRealizedPnlReais.toFixed(2)}</strong></span>
                 <span>Em aberto (MTM): <strong className="text-sky-300 font-semibold">{sm.strategyUnrealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyUnrealizedPnlReais.toFixed(2)}</strong></span>

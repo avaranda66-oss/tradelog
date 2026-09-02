@@ -1028,27 +1028,31 @@ export function enrichOptionPosition(
   let feesReais = 0;
   const positionQualityNotes: string[] = [];
 
+  const expectedCanonicalExecutionQty = closedQuantity - (pos.legacyClosedQuantity ?? 0);
+  const actualCanonicalExecutionQty = executions ? executions.reduce((sum, e) => sum + e.quantity, 0) : 0;
+
   if (isLegacyIncomplete) {
     realizedPnlQuality = 'LEGACY_INCOMPLETE';
     realizedGrossPnlReais = null;
     realizedNetPnlReais = null;
+    feesReais = executions ? Math.round(executions.reduce((acc, x) => acc + (x.feesReais || 0), 0) * 100) / 100 : 0;
     positionQualityNotes.push('LEGACY_INCOMPLETE');
-  } else if (executions && executions.length > 0) {
-    realizedGrossPnlReais = Math.round(executions.reduce((acc, x) => acc + x.grossRealizedPnlReais, 0) * 100) / 100;
-    feesReais = Math.round(executions.reduce((acc, x) => acc + (x.feesReais || 0), 0) * 100) / 100;
-    realizedNetPnlReais = Math.round(executions.reduce((acc, x) => acc + x.netRealizedPnlReais, 0) * 100) / 100;
-    realizedPnlQuality = 'FULL';
   } else if (closedQuantity === 0) {
     realizedGrossPnlReais = 0;
     realizedNetPnlReais = 0;
     feesReais = 0;
     realizedPnlQuality = 'FULL';
+  } else if (expectedCanonicalExecutionQty === actualCanonicalExecutionQty && actualCanonicalExecutionQty > 0) {
+    realizedGrossPnlReais = Math.round(executions!.reduce((acc, x) => acc + x.grossRealizedPnlReais, 0) * 100) / 100;
+    feesReais = Math.round(executions!.reduce((acc, x) => acc + (x.feesReais || 0), 0) * 100) / 100;
+    realizedNetPnlReais = Math.round(executions!.reduce((acc, x) => acc + x.netRealizedPnlReais, 0) * 100) / 100;
+    realizedPnlQuality = 'FULL';
   } else {
-    // closedQuantity > 0, mas sem baseline legacy e sem histórico canônico de execuções
+    // closedQuantity > 0, mas quantidade esperada != quantidade de execuções canônicas
     realizedPnlQuality = 'NOT_AVAILABLE';
     realizedGrossPnlReais = null;
     realizedNetPnlReais = null;
-    feesReais = 0;
+    feesReais = executions ? Math.round(executions.reduce((acc, x) => acc + (x.feesReais || 0), 0) * 100) / 100 : 0;
     positionQualityNotes.push('MISSING_CANONICAL_EXECUTION_HISTORY');
   }
 
@@ -1814,6 +1818,8 @@ export function enrichOptionStrategy(params: {
     grossRealizedPnlReais: number;
     feesReais: number;
     netRealizedPnlReais: number;
+    strategyLegId?: string | null;
+    quantity?: number;
   }>;
   fundingSegments?: Array<{
     id: string;
@@ -1836,7 +1842,8 @@ export function enrichOptionStrategy(params: {
   let netEstimatedExitReais = 0;
   let maxElapsedDU = 0;
   let minRemainingDU = 999;
-  let hasLegacyIncomplete = false;
+  let hasStrategyNotAvailable = false;
+  let hasStrategyLegacyIncomplete = false;
 
   const normalizedLegs: EnrichedStrategyLeg[] = params.legs.map((leg) => {
     const orig = leg.originalAllocatedQuantity ?? leg.allocatedQuantity;
@@ -1876,14 +1883,24 @@ export function enrichOptionStrategy(params: {
       residualInitialCreditDebitReais -= pos.entryPrice * openQty;
     }
 
-    if (
-      pos.metrics.realizedPnlQuality === 'LEGACY_INCOMPLETE' ||
-      pos.metrics.realizedPnlQuality === 'NOT_AVAILABLE' ||
-      (pos as any).legacyQuality === 'LEGACY_INCOMPLETE' ||
+    const legExecutionQty = (params.executions || [])
+      .filter((e) => e.strategyLegId === leg.id)
+      .reduce((s, e) => s + (e.quantity || 0), 0);
+
+    const expectedLegExecutionQty =
+      (leg.closedAllocatedQuantity ?? 0) - ((leg as any).legacyClosedAllocatedQuantity ?? 0);
+
+    const isLegLegacy =
       ((leg as any).legacyClosedAllocatedQuantity && (leg as any).legacyClosedAllocatedQuantity > 0) ||
-      (leg.closedAllocatedQuantity > 0 && (params.executions || []).length === 0)
-    ) {
-      hasLegacyIncomplete = true;
+      (pos as any).legacyQuality === 'LEGACY_INCOMPLETE' ||
+      pos.metrics.realizedPnlQuality === 'LEGACY_INCOMPLETE';
+
+    if (pos.metrics.realizedPnlQuality === 'NOT_AVAILABLE') {
+      hasStrategyNotAvailable = true;
+    } else if (isLegLegacy) {
+      hasStrategyLegacyIncomplete = true;
+    } else if (expectedLegExecutionQty !== legExecutionQty) {
+      hasStrategyNotAvailable = true;
     }
 
     // P&L MTM Proporcional sobre contratos abertos residuais
@@ -1919,7 +1936,11 @@ export function enrichOptionStrategy(params: {
   netEstimatedExitReais = Math.round(netEstimatedExitReais * 100) / 100;
 
   const strategyRealizedPnlQuality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE' =
-    hasLegacyIncomplete ? 'LEGACY_INCOMPLETE' : 'FULL';
+    hasStrategyNotAvailable
+      ? 'NOT_AVAILABLE'
+      : hasStrategyLegacyIncomplete
+      ? 'LEGACY_INCOMPLETE'
+      : 'FULL';
 
   // Métricas Explícitas: Conhecido Factualmente vs Total Lifetime
   const strategyKnownGrossRealizedPnlReais = strategyGrossRealizedPnlReais;
@@ -2146,9 +2167,15 @@ export function enrichOptionStrategy(params: {
       economicPerformance.excessReturnOnReservedCapitalPct = null;
       economicPerformance.excessReturnOnMaxRiskPct = null;
       economicPerformance.extraProfitPer1000RiskReais = null;
-      economicPerformance.qualityNotes.push(
-        'LEGACY_INCOMPLETE_REALIZED_PNL: Histórico de execuções ou encerramentos parciais incompleto; métricas econômicas baseadas em P&L lifetime são indicativas e não devem ser apresentadas como totais auditados.'
-      );
+      if (strategyRealizedPnlQuality === 'NOT_AVAILABLE') {
+        economicPerformance.qualityNotes.push(
+          'MISSING_CANONICAL_EXECUTION_HISTORY: Quantidade fechada em perna da estratégia não reconcilia com legacyClosedAllocatedQuantity + sum(executions.quantity).'
+        );
+      } else {
+        economicPerformance.qualityNotes.push(
+          'LEGACY_INCOMPLETE_REALIZED_PNL: Histórico de execuções ou encerramentos parciais incompleto; métricas econômicas baseadas em P&L lifetime são indicativas e não devem ser apresentadas como totais auditados.'
+        );
+      }
     }
   }
 

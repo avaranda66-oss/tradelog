@@ -2015,25 +2015,457 @@ export async function runActionsSuiteTests() {
     assert(summaryAfterCspClose.incomeBook.knownOptionPnlReais >= 200.0, 'P0.3 Standalone CSP: Income Book preserva P&L histórico since inception');
     assert(summaryAfterCspClose.incomeBook.benchmarkCdiReais > 0, 'P0.3 Standalone CSP: Income Book preserva benchmark CDI histórico da posição fechada');
 
+    // 8.15. Fase 4.2.4 — Testes Obrigatórios de groupOptionPositionsAction Residual-Aware (P0)
+    // A: quantity = 400, closed = 100, open = 300 -> group 400 -> REJECT
+    const posAId = 'pos_group_test_a';
+    const posCompanionId = 'pos_group_test_comp';
+    db.insert(optionPositions).values({
+      id: posAId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEU600',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 400,
+      openQuantity: 300,
+      closedQuantity: 100,
+      legacyClosedQuantity: 100,
+      strike: 60.0,
+      entryPrice: 2.00,
+      currentPrice: 1.00,
+      allocatedCapital: 18000.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: posCompanionId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEI650',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 500,
+      openQuantity: 500,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 65.0,
+      entryPrice: 1.50,
+      currentPrice: 1.20,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // A: Tentar agrupar 400 (excede 300 abertos livres) -> REJEITAR
+    const groupReject400 = await groupOptionPositionsAction({
+      name: 'VALE Test Reject 400',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'VALE3',
+      legs: [
+        { positionId: posAId, allocatedQuantity: 400, economicRole: 'INCOME' },
+        { positionId: posCompanionId, allocatedQuantity: 200, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupReject400.success === false, 'P0 Group A: Tentar agrupar 400 quando open=300 é rejeitado');
+    assert(Boolean(groupReject400.error?.includes('INSUFFICIENT_FREE_OPEN_QUANTITY')), 'P0 Group A: Erro INSUFFICIENT_FREE_OPEN_QUANTITY retornado');
+
+    // B: Mesma posição -> agrupar 300 -> SUCESSO
+    const groupSuccess300 = await groupOptionPositionsAction({
+      name: 'VALE Test Success 300',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'VALE3',
+      legs: [
+        { positionId: posAId, allocatedQuantity: 300, economicRole: 'INCOME' },
+        { positionId: posCompanionId, allocatedQuantity: 150, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupSuccess300.success === true, 'P0 Group B: Agrupar exatamente os 300 contratos abertos é aceito com sucesso');
+
+    // C: Posição com open=300, já openAllocated=100 -> freeOpen=200
+    const posCId = 'pos_group_test_c';
+    db.insert(optionPositions).values({
+      id: posCId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBAS3',
+      tickerOption: 'BBASU280',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 300,
+      openQuantity: 300,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 28.0,
+      entryPrice: 1.00,
+      currentPrice: 0.80,
+      allocatedCapital: 8400.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const posCCompId = 'pos_group_test_c_comp';
+    db.insert(optionPositions).values({
+      id: posCCompId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBAS3',
+      tickerOption: 'BBASI300',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 500,
+      openQuantity: 500,
+      closedQuantity: 0,
+      legacyClosedQuantity: 0,
+      strike: 30.0,
+      entryPrice: 0.50,
+      currentPrice: 0.40,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // Primeira alocação de 100 em BBASU280
+    const groupC1 = await groupOptionPositionsAction({
+      name: 'BBAS Test 100',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'BBAS3',
+      legs: [
+        { positionId: posCId, allocatedQuantity: 100, economicRole: 'INCOME' },
+        { positionId: posCCompId, allocatedQuantity: 100, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupC1.success === true, 'P0 Group C: Alocação inicial de 100 aceita');
+
+    // Tentar agrupar 201 (freeOpen = 200) -> REJEITAR
+    const groupCReject201 = await groupOptionPositionsAction({
+      name: 'BBAS Test Reject 201',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'BBAS3',
+      legs: [
+        { positionId: posCId, allocatedQuantity: 201, economicRole: 'INCOME' },
+        { positionId: posCCompId, allocatedQuantity: 100, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupCReject201.success === false, 'P0 Group C: Tentar alocar 201 quando restam 200 é rejeitado');
+
+    // Agrupar 200 restantes -> SUCESSO
+    const groupCSuccess200 = await groupOptionPositionsAction({
+      name: 'BBAS Test Success 200',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'BBAS3',
+      legs: [
+        { positionId: posCId, allocatedQuantity: 200, economicRole: 'INCOME' },
+        { positionId: posCCompId, allocatedQuantity: 100, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupCSuccess200.success === true, 'P0 Group C: Alocação exata dos 200 restantes aceita com sucesso');
+
+    // Invariante de Quantidade Aberta Alocada
+    const legsC = db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.positionId, posCId),
+    }).sync();
+    const sumOpenAllocatedC = legsC.reduce((sum, l) => sum + (l.openAllocatedQuantity ?? l.allocatedQuantity), 0);
+    assert(sumOpenAllocatedC === 300, 'P0 Group Invariant: SUM(openAllocatedQuantity) === 300 (exatamente position.openQuantity)');
+
+    // D: Posição com status CLOSED (openQuantity = 0) -> REJEITAR
+    const posDId = 'pos_group_test_closed';
+    db.insert(optionPositions).values({
+      id: posDId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'VALE3',
+      tickerOption: 'VALEU550',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 0,
+      closedQuantity: 100,
+      legacyClosedQuantity: 100,
+      strike: 55.0,
+      entryPrice: 1.00,
+      currentPrice: 0.10,
+      allocatedCapital: 5500.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'CLOSED',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    const groupDClosedReject = await groupOptionPositionsAction({
+      name: 'VALE Test Closed Reject',
+      strategyType: 'CUSTOM',
+      underlyingTicker: 'VALE3',
+      legs: [
+        { positionId: posDId, allocatedQuantity: 50, economicRole: 'INCOME' },
+        { positionId: posCompanionId, allocatedQuantity: 50, economicRole: 'DIRECTIONAL' },
+      ],
+    });
+    assert(groupDClosedReject.success === false, 'P0 Group D: Agrupar posição com status CLOSED é terminantemente rejeitado');
+    assert(Boolean(groupDClosedReject.error?.includes('CANNOT_GROUP_CLOSED_POSITION')), 'P0 Group D: Erro CANNOT_GROUP_CLOSED_POSITION retornado');
+
+    // 8.16. Fase 4.2.4 — Completude Quantitativa do Ledger em enrichOptionPosition (P0/P1)
+    const ledgerPosId = 'pos_ledger_check';
+    db.insert(optionPositions).values({
+      id: ledgerPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'BBDC4',
+      tickerOption: 'BBDCU150',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 100,
+      openQuantity: 0,
+      closedQuantity: 100,
+      legacyClosedQuantity: 0,
+      strike: 15.0,
+      entryPrice: 0.80,
+      currentPrice: 0.20,
+      allocatedCapital: 1500.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'CLOSED',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // 1 execução de 50 (esperado: 100) -> NOT_AVAILABLE
+    db.insert(optionPositionExecutions).values({
+      id: 'exec_ledger_50_1',
+      positionId: ledgerPosId,
+      executionType: 'BUY_TO_CLOSE',
+      quantity: 50,
+      price: 0.20,
+      executionDate: '2026-09-01',
+      entryPriceBasisReais: 0.80,
+      feesReais: 1.0,
+      grossRealizedPnlReais: 30.0,
+      netRealizedPnlReais: 29.0,
+      createdAt: '2026-09-01T12:00:00.000Z',
+    }).run();
+
+    const ledgerCheck1 = await getOptionPositions();
+    const ledgerPos1 = ledgerCheck1.positions!.find((p) => p.id === ledgerPosId)!;
+    assert(ledgerPos1.metrics.realizedPnlQuality === 'NOT_AVAILABLE', 'P0/P1 Ledger: 50 execuções para 100 fechados resulta em NOT_AVAILABLE');
+
+    // Inserir segunda execução de 50 -> 50 + 50 = 100 (reconciliação exata) -> FULL
+    db.insert(optionPositionExecutions).values({
+      id: 'exec_ledger_50_2',
+      positionId: ledgerPosId,
+      executionType: 'BUY_TO_CLOSE',
+      quantity: 50,
+      price: 0.20,
+      executionDate: '2026-09-01',
+      entryPriceBasisReais: 0.80,
+      feesReais: 1.0,
+      grossRealizedPnlReais: 30.0,
+      netRealizedPnlReais: 29.0,
+      createdAt: '2026-09-01T12:00:00.000Z',
+    }).run();
+
+    const ledgerCheck2 = await getOptionPositions();
+    const ledgerPos2 = ledgerCheck2.positions!.find((p) => p.id === ledgerPosId)!;
+    assert(ledgerPos2.metrics.realizedPnlQuality === 'FULL', 'P0/P1 Ledger: 50+50 reconcilia perfeitamente com 100 fechados resultando em FULL');
+    assert(ledgerPos2.metrics.realizedGrossPnlReais === 60.0, 'P0/P1 Ledger: realizedGrossPnlReais === +R$ 60,00');
+
+    // 8.17. Fase 4.2.4 — Golden Adversarial: Lineage Completeness por Strategy Leg (P0/P1)
+    const advCallPosId = 'pos_adv_call';
+    const advPutPosId = 'pos_adv_put';
+    const advStratId = 'strat_adv_lineage';
+    const advCallLegId = 'leg_adv_call';
+    const advPutLegId = 'leg_adv_put';
+
+    db.insert(optionPositions).values({
+      id: advCallPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'CSNA3',
+      tickerOption: 'CSNAI120',
+      optionType: 'CALL',
+      side: 'BUY',
+      strategyType: 'CUSTOM',
+      quantity: 200,
+      openQuantity: 100,
+      closedQuantity: 100,
+      legacyClosedQuantity: 0,
+      strike: 12.0,
+      entryPrice: 1.00,
+      currentPrice: 0.50,
+      allocatedCapital: 0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionPositions).values({
+      id: advPutPosId,
+      portfolio: 'Principal',
+      tickerUnderlying: 'CSNA3',
+      tickerOption: 'CSNAU110',
+      optionType: 'PUT',
+      side: 'SELL',
+      strategyType: 'CUSTOM',
+      quantity: 400,
+      openQuantity: 200,
+      closedQuantity: 200,
+      legacyClosedQuantity: 0,
+      strike: 11.0,
+      entryPrice: 0.80,
+      currentPrice: 0.30,
+      allocatedCapital: 4400.0,
+      entryDate: '2026-08-24',
+      expirationDate: '2026-09-18',
+      status: 'OPEN',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategies).values({
+      id: advStratId,
+      portfolio: 'Principal',
+      name: 'Adversarial Lineage Strategy',
+      strategyType: 'CUSTOM',
+      book: 'HYBRID',
+      underlyingTicker: 'CSNA3',
+      collateralMode: 'IDLE_CASH',
+      status: 'OPEN',
+      openedAt: '2026-08-24',
+      createdAt: '2026-08-24T12:00:00.000Z',
+      updatedAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: advCallLegId,
+      strategyId: advStratId,
+      positionId: advCallPosId,
+      allocatedQuantity: 200,
+      openAllocatedQuantity: 100,
+      closedAllocatedQuantity: 100,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'DIRECTIONAL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(optionStrategyLegs).values({
+      id: advPutLegId,
+      strategyId: advStratId,
+      positionId: advPutPosId,
+      allocatedQuantity: 400,
+      openAllocatedQuantity: 200,
+      closedAllocatedQuantity: 200,
+      legacyClosedAllocatedQuantity: 0,
+      economicRole: 'INCOME',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    db.insert(strategyFundingSegments).values({
+      id: 'fnd_adv_seg',
+      strategyId: advStratId,
+      startDate: '2026-08-24',
+      endDate: null,
+      benchmarkCapitalReais: 2200.0,
+      capitalRemuneratedReais: 0,
+      collateralMode: 'IDLE_CASH',
+      collateralPctCdi: null,
+      sourceType: 'CREATION',
+      quality: 'FULL',
+      createdAt: '2026-08-24T12:00:00.000Z',
+    }).run();
+
+    // Execução canônica apenas para a perna CALL (100 contratos)
+    db.insert(optionPositionExecutions).values({
+      id: 'exec_adv_call_100',
+      positionId: advCallPosId,
+      strategyId: advStratId,
+      strategyLegId: advCallLegId,
+      executionType: 'SELL_TO_CLOSE',
+      quantity: 100,
+      price: 0.50,
+      executionDate: '2026-09-01',
+      entryPriceBasisReais: 1.00,
+      feesReais: 1.0,
+      grossRealizedPnlReais: -50.0,
+      netRealizedPnlReais: -51.0,
+      createdAt: '2026-09-01T12:00:00.000Z',
+    }).run();
+
+    // Strategy possui uma execution total, mas a PUT leg está sem executions -> NOT_AVAILABLE!
+    const advCheck1 = await getOptionPositions();
+    const advStrat1 = advCheck1.strategies!.find((s) => s.id === advStratId)!;
+    assert(advStrat1.metrics.strategyRealizedPnlQuality === 'NOT_AVAILABLE', 'P0/P1 Lineage: Strategy com leg PUT faltando histórico fica NOT_AVAILABLE');
+    assert(advStrat1.metrics.strategyGrossRealizedPnlReais === null, 'P0/P1 Lineage: strategyGrossRealizedPnlReais === null sob NOT_AVAILABLE');
+    assert(advStrat1.metrics.strategyTotalGrossPnlReais === null, 'P0/P1 Lineage: strategyTotalGrossPnlReais === null sob NOT_AVAILABLE');
+
+    // Inserir agora a execução canônica da perna PUT (200 contratos)
+    db.insert(optionPositionExecutions).values({
+      id: 'exec_adv_put_200',
+      positionId: advPutPosId,
+      strategyId: advStratId,
+      strategyLegId: advPutLegId,
+      executionType: 'BUY_TO_CLOSE',
+      quantity: 200,
+      price: 0.30,
+      executionDate: '2026-09-01',
+      entryPriceBasisReais: 0.80,
+      feesReais: 2.0,
+      grossRealizedPnlReais: 100.0,
+      netRealizedPnlReais: 98.0,
+      createdAt: '2026-09-01T12:00:00.000Z',
+    }).run();
+
+    // Agora ambas as pernas reconciliam perfeitamente -> FULL
+    const advCheck2 = await getOptionPositions();
+    const advStrat2 = advCheck2.strategies!.find((s) => s.id === advStratId)!;
+    assert(advStrat2.metrics.strategyRealizedPnlQuality === 'FULL', 'P0/P1 Lineage: Quando todas as pernas reconciliam, strategyRealizedPnlQuality === FULL');
+    assert(advStrat2.metrics.strategyGrossRealizedPnlReais === 50.0, 'P0/P1 Lineage: strategyGrossRealizedPnlReais reconcilia em +R$ 50,00 (-50 + 100)');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
       itubPutId, itubCallId, lrenPutId, dirCallId,
       'pos_itub_golden_put', 'pos_itub_golden_call',
       'pos_fee_test', 'pos_remun_test', 'pos_unb_short_call', 'pos_unb_long_call',
-      'pos_legacy_inc_test', 'pos_missing_exec_test', 'pos_standalone_csp_test'
+      'pos_legacy_inc_test', 'pos_missing_exec_test', 'pos_standalone_csp_test',
+      'pos_group_test_a', 'pos_group_test_comp', 'pos_group_test_c', 'pos_group_test_c_comp', 'pos_group_test_closed',
+      'pos_ledger_check', 'pos_adv_call', 'pos_adv_put'
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',
       'strat_fee_test', 'strat_remun_test', 'strat_unbounded_test',
-      'strat_legacy_inc_test'
+      'strat_legacy_inc_test', 'strat_adv_lineage'
     ];
+    const createdLegs = db.query.optionStrategyLegs.findMany({
+      where: inArray(optionStrategyLegs.positionId, allCleanPosIds),
+    }).sync();
+    for (const l of createdLegs) {
+      if (l.strategyId && !allCleanStratIds.includes(l.strategyId)) {
+        allCleanStratIds.push(l.strategyId);
+      }
+    }
+
     db.delete(optionPositionExecutions).where(inArray(optionPositionExecutions.positionId, allCleanPosIds)).run();
     db.delete(strategyFundingSegments).where(inArray(strategyFundingSegments.strategyId, allCleanStratIds)).run();
     db.delete(strategyFundingEvents).where(inArray(strategyFundingEvents.strategyId, allCleanStratIds)).run();
     db.delete(strategyManeuverEvents).where(inArray(strategyManeuverEvents.strategyId, allCleanStratIds)).run();
     db.delete(strategyAllocationEvents).where(inArray(strategyAllocationEvents.positionId, allCleanPosIds)).run();
     db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.strategyId, allCleanStratIds)).run();
+    db.delete(optionStrategyLegs).where(inArray(optionStrategyLegs.positionId, allCleanPosIds)).run();
     db.delete(optionStrategies).where(inArray(optionStrategies.id, allCleanStratIds)).run();
     db.delete(optionPositions).where(inArray(optionPositions.id, allCleanPosIds)).run();
   }
