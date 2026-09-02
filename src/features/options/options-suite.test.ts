@@ -759,8 +759,181 @@ export function runAllTests() {
   assert(Math.abs(perfSplitCollateral.benchmarkCdiReais - (15476.0 * 0.00310361)) < 0.01, 'Split Capital: Benchmark CDI é calculado sobre os R$ 15.476 de custo de oportunidade');
   assert(Math.abs(perfSplitCollateral.excessReturnVsCdiReais - (300.0 + 7738.0 * 0.00310361 - 15476.0 * 0.00310361)) < 0.01, 'Split Capital: Excesso vs CDI desconta o custo de oportunidade não remunerado');
 
+  // 8.8. Bull Call Spread de Débito Real (Integrado)
+  const bcsLongCall: any = {
+    id: 'pos_bcs_long',
+    optionType: 'CALL',
+    side: 'BUY',
+    quantity: 100,
+    strike: 40.0,
+    entryPrice: 2.00,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 2.50, estimatedExitPrice: 2.45, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bcsShortCall: any = {
+    id: 'pos_bcs_short',
+    optionType: 'CALL',
+    side: 'SELL',
+    quantity: 100,
+    strike: 45.0,
+    entryPrice: 0.80,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 1.00, estimatedExitPrice: 1.05, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bcsStrat = enrichOptionStrategy({
+    id: 'strat_bcs_1',
+    portfolio: 'BTG',
+    name: 'PETR4 — Bull Call Spread 40x45 Débito',
+    strategyType: 'TRAVA_ALTA_CALL',
+    book: 'DIRECTIONAL',
+    underlyingTicker: 'PETR4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_bcs_1', positionId: bcsLongCall.id, allocatedQuantity: 100, economicRole: 'DIRECTIONAL', position: bcsLongCall },
+      { id: 'l2', strategyId: 'strat_bcs_1', positionId: bcsShortCall.id, allocatedQuantity: 100, economicRole: 'FINANCING', position: bcsShortCall },
+    ],
+  });
+  assert(bcsStrat.metrics.netInitialCreditDebitReais === -120.0, 'BCS Débito: Fluxo inicial é débito de R$ 120,00 (-120.00)');
+  assert(bcsStrat.metrics.riskRecognitionQuality === 'EXACT', 'BCS Débito: Reconhecimento de risco é EXACT');
+  assert(bcsStrat.metrics.maxLossType === 'FINITE', 'BCS Débito: maxLossType é FINITE');
+  assert(bcsStrat.metrics.maxLossEconomicReais === 120.0, 'BCS Débito: Max Loss é rigorosamente o débito pago (R$ 120,00)');
+  assert(bcsStrat.metrics.breakEvenSuperior === 41.2, 'BCS Débito: Break-Even Superior é R$ 41,20 (40 + 1.20)');
+
+  // 8.9. Bear Put Spread de Débito Real (Integrado)
+  const bearPutLong: any = {
+    id: 'pos_bear_put_long',
+    optionType: 'PUT',
+    side: 'BUY',
+    quantity: 100,
+    strike: 45.0,
+    entryPrice: 2.50,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 2.80, estimatedExitPrice: 2.75, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bearPutShort: any = {
+    id: 'pos_bear_put_short',
+    optionType: 'PUT',
+    side: 'SELL',
+    quantity: 100,
+    strike: 40.0,
+    entryPrice: 1.00,
+    expirationDate: '2026-09-18',
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 1.10, estimatedExitPrice: 1.15, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const bearPutStrat = enrichOptionStrategy({
+    id: 'strat_bear_put_1',
+    portfolio: 'BTG',
+    name: 'VALE3 — Bear Put Spread 45x40 Débito',
+    strategyType: 'TRAVA_BAIXA_PUT',
+    book: 'DIRECTIONAL',
+    underlyingTicker: 'VALE3',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_bear_put_1', positionId: bearPutLong.id, allocatedQuantity: 100, economicRole: 'DIRECTIONAL', position: bearPutLong },
+      { id: 'l2', strategyId: 'strat_bear_put_1', positionId: bearPutShort.id, allocatedQuantity: 100, economicRole: 'FINANCING', position: bearPutShort },
+    ],
+  });
+  assert(bearPutStrat.metrics.netInitialCreditDebitReais === -150.0, 'Bear Put Débito: Fluxo inicial é débito de R$ 150,00 (-150.00)');
+  assert(bearPutStrat.metrics.riskRecognitionQuality === 'EXACT', 'Bear Put Débito: Reconhecimento de risco é EXACT');
+  assert(bearPutStrat.metrics.maxLossType === 'FINITE', 'Bear Put Débito: maxLossType é FINITE');
+  assert(bearPutStrat.metrics.maxLossEconomicReais === 150.0, 'Bear Put Débito: Max Loss é rigorosamente o débito pago (R$ 150,00)');
+  assert(bearPutStrat.metrics.breakEvenInferior === 43.5, 'Bear Put Débito: Break-Even Inferior é R$ 43,50 (45 - 1.50)');
+
+  // 8.10. Trava com Vencimentos Heterogêneos (Fail-Safe Institucional -> UNKNOWN)
+  const diagShortPut: any = {
+    id: 'pos_diag_short',
+    optionType: 'PUT',
+    side: 'SELL',
+    quantity: 100,
+    strike: 40.0,
+    entryPrice: 1.00,
+    expirationDate: '2026-09-18', // Vencimento Setembro
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.50, estimatedExitPrice: 0.55, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 12 },
+  };
+  const diagLongPut: any = {
+    id: 'pos_diag_long',
+    optionType: 'PUT',
+    side: 'BUY',
+    quantity: 100,
+    strike: 35.0,
+    entryPrice: 0.80,
+    expirationDate: '2026-10-16', // Vencimento Outubro (Calendário/Diagonal)
+    entryDate: '2026-08-24',
+    metrics: { markPrice: 0.60, estimatedExitPrice: 0.60, cdiRealizedReais: 0.0, elapsedTradingDays: 6, remainingTradingDays: 31 },
+  };
+  const diagStrat = enrichOptionStrategy({
+    id: 'strat_diag_1',
+    portfolio: 'BTG',
+    name: 'PETR4 — Diagonal Spread Set/Out',
+    strategyType: 'DIAGONAL_SPREAD',
+    book: 'INCOME',
+    underlyingTicker: 'PETR4',
+    collateralMode: 'IDLE_CASH',
+    status: 'OPEN',
+    openedAt: '2026-08-24',
+    legs: [
+      { id: 'l1', strategyId: 'strat_diag_1', positionId: diagShortPut.id, allocatedQuantity: 100, economicRole: 'INCOME', position: diagShortPut },
+      { id: 'l2', strategyId: 'strat_diag_1', positionId: diagLongPut.id, allocatedQuantity: 100, economicRole: 'HEDGE', position: diagLongPut },
+    ],
+  });
+  assert(diagStrat.metrics.riskRecognitionQuality === 'UNKNOWN', 'Diagonal Fail-Safe: Trava com vencimentos distintos classifica riskRecognitionQuality como UNKNOWN');
+  assert(diagStrat.metrics.maxLossType === 'UNKNOWN', 'Diagonal Fail-Safe: maxLossType é UNKNOWN');
+  assert(diagStrat.metrics.maxLossEconomicReais === null, 'Diagonal Fail-Safe: maxLossEconomicReais é null');
+  assert(diagStrat.economicPerformance.extraProfitPer1000RiskReais === null, 'Diagonal Fail-Safe: Bloqueia extraProfitPer1000RiskReais (null)');
+
+  // 8.11. CLOSED sem closedAt (Detecção Estrita de Falha de Dados)
+  const closedWithoutDateStrat = enrichOptionStrategy({
+    id: 'strat_closed_missing_date',
+    portfolio: 'BTG',
+    name: 'ITUB4 — Fechada sem data',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    status: 'CLOSED',
+    openedAt: '2026-08-24',
+    closedAt: null, // Sem data de fechamento informada
+    legs: [
+      { id: 'l1', strategyId: 'strat_closed_missing_date', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut },
+    ],
+  });
+  assert(closedWithoutDateStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'CLOSED sem data: Marca economicPerformanceQuality INSUFFICIENT_DATA');
+  assert(closedWithoutDateStrat.economicPerformance.qualityNotes.some((n) => n.includes('CLOSED_OR_ROLLED_WITHOUT_CLOSED_AT')), 'CLOSED sem data: Registra nota de alerta específica');
+
+  // 8.12. ROLLED Result Nature e Split Capital Integrado no enrichOptionStrategy()
+  const rolledSplitStrat = enrichOptionStrategy({
+    id: 'strat_rolled_split',
+    portfolio: 'BTG',
+    name: 'ITUB4 — Rolada com 50% de Cobertura CDI',
+    strategyType: 'VENDA_PUT',
+    book: 'INCOME',
+    underlyingTicker: 'ITUB4',
+    collateralMode: 'REMUNERATED_100_CDI',
+    collateralCoveragePct: 50, // 50% do capital remunerado no CDI
+    status: 'ROLLED',
+    openedAt: '2026-08-24',
+    closedAt: '2026-08-28',
+    legs: [
+      { id: 'l1', strategyId: 'strat_rolled_split', positionId: bpsShortPut.id, allocatedQuantity: 400, economicRole: 'INCOME', position: bpsShortPut },
+    ],
+  });
+  assert(rolledSplitStrat.economicPerformance.resultNature === 'REALIZED', 'ROLLED Integrado: resultNature é REALIZED');
+  assert(rolledSplitStrat.economicPerformance.capitalRemuneratedReais === 8000.0, 'ROLLED Integrado: Capital remunerado é 50% de R$ 16.000 (R$ 8.000,00)');
+  assert(rolledSplitStrat.metrics.cdiRealizedReais === rolledSplitStrat.economicPerformance.benchmarkCdiReais, 'Single Source of Truth: metrics.cdiRealizedReais é idêntico a economicPerformance.benchmarkCdiReais');
+  assert(rolledSplitStrat.metrics.alphaReais === rolledSplitStrat.economicPerformance.excessReturnVsCdiReais, 'Single Source of Truth: metrics.alphaReais é idêntico a economicPerformance.excessReturnVsCdiReais');
+  assert(rolledSplitStrat.metrics.cdiMultiple === rolledSplitStrat.economicPerformance.totalReturnToCdiMultiple, 'Single Source of Truth: metrics.cdiMultiple é idêntico a economicPerformance.totalReturnToCdiMultiple');
+
   console.log('\n========================================');
-  console.log('✅ ALL 65 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
+  console.log('✅ ALL 75 UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY!');
   console.log('========================================\n');
 }
 

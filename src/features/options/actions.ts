@@ -246,6 +246,8 @@ export async function getOptionPositions(filterStatus?: 'ALL' | 'OPEN' | 'CLOSED
             underlyingTicker: st.underlyingTicker,
             collateralMode: st.collateralMode as any,
             collateralYieldPctCDI: st.collateralYieldPctCDI,
+            capitalRemuneratedReais: (st as any).capitalRemuneratedReais,
+            collateralCoveragePct: (st as any).collateralCoveragePct,
             status: st.status as any,
             openedAt: st.openedAt,
             closedAt: st.closedAt,

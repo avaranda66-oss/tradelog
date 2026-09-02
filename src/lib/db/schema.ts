@@ -358,6 +358,8 @@ export const optionStrategies = sqliteTable('option_strategies', {
   underlyingTicker: text('underlying_ticker').notNull(), // "ITUB4"
   collateralMode: text('collateral_mode').default('IDLE_CASH'), // "IDLE_CASH" | "REMUNERATED_100_CDI" | "CUSTOM"
   collateralYieldPctCDI: real('collateral_yield_pct_cdi'),
+  capitalRemuneratedReais: real('capital_remunerated_reais'), // Saldo de garantia efetivamente remunerado a CDI
+  collateralCoveragePct: real('collateral_coverage_pct'), // % do capital reservado que está remunerado (ex: 100% ou 50%)
   status: text('status').notNull().default('OPEN'), // "OPEN" | "CLOSED" | "ROLLED"
   openedAt: text('opened_at').notNull(), // "YYYY-MM-DD"
   closedAt: text('closed_at'), // "YYYY-MM-DD"
