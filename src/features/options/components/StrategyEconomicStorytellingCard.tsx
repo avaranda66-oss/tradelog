@@ -157,7 +157,7 @@ export function StrategyEconomicStorytellingCard({
                 <span>Realizado: <strong className="text-emerald-300 font-semibold">{sm.strategyKnownGrossRealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyKnownGrossRealizedPnlReais.toFixed(2)}</strong></span>
                 <span>Em aberto (MTM): <strong className="text-sky-300 font-semibold">{sm.strategyUnrealizedPnlReais >= 0 ? '+' : ''}R$ {sm.strategyUnrealizedPnlReais.toFixed(2)}</strong></span>
               </span>
-            ) : ep.optionReturnOnBenchmarkCapitalPct !== null ? (
+            ) : canCompareToCdi && ep.optionReturnOnBenchmarkCapitalPct !== null ? (
               `${ep.optionReturnOnBenchmarkCapitalPct >= 0 ? '+' : ''}${ep.optionReturnOnBenchmarkCapitalPct.toFixed(2)}% s/ garantia`
             ) : (
               'Resultado derivativo'

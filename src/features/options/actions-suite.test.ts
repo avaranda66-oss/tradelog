@@ -2730,9 +2730,16 @@ export async function runActionsSuiteTests() {
 
     const unbStratCheck = await getOptionPositions();
     const unbStrat = unbStratCheck.strategies!.find((s) => s.id === unbCreationStratId)!;
+    assert(unbStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'P0 Funding Creation B: economicPerformanceQuality === INSUFFICIENT_DATA');
     assert(unbStrat.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0 Funding Creation B: benchmarkQuality === NOT_AVAILABLE');
     assert(unbStrat.economicPerformance.benchmarkCdiReais === null, 'P0 Funding Creation B: benchmarkCdiReais === null');
     assert(unbStrat.economicPerformance.excessReturnVsCdiReais === null, 'P0 Funding Creation B: excessReturnVsCdiReais === null');
+    assert(unbStrat.economicPerformance.optionReturnOnBenchmarkCapitalPct === null, 'P0 Funding Creation B: optionReturnOnBenchmarkCapitalPct === null');
+    assert(unbStrat.economicPerformance.totalEconomicReturnPct === null, 'P0 Funding Creation B: totalEconomicReturnPct === null');
+    assert(unbStrat.economicPerformance.optionPnlEquivalentCdiDU === null, 'P0 Funding Creation B: optionPnlEquivalentCdiDU === null');
+    assert(unbStrat.economicPerformance.monthlyEquivalentPct === null, 'P0 Funding Creation B: monthlyEquivalentPct === null');
+    assert(unbStrat.economicPerformance.annualizedEquivalentPct === null, 'P0 Funding Creation B: annualizedEquivalentPct === null');
+    assert(unbStrat.economicPerformance.annualizationQuality === 'NOT_AVAILABLE', 'P0 Funding Creation B: annualizationQuality === NOT_AVAILABLE');
 
     // Caso C: Unsupported diagonal spread (vencimentos distintos -> riskRecognition UNKNOWN) -> Funding INSUFFICIENT_DATA
     const unsuppPos1 = 'pos_unsupp_diag_1';
@@ -2799,6 +2806,19 @@ export async function runActionsSuiteTests() {
       where: eq(strategyFundingSegments.strategyId, unsuppStratId),
     }).sync();
     assert(segUnsupp?.quality === 'INSUFFICIENT_DATA', 'P0 Funding Creation C: Estrutura UNKNOWN nasce com funding quality INSUFFICIENT_DATA');
+
+    const unsuppStratCheck = await getOptionPositions();
+    const unsuppStrat = unsuppStratCheck.strategies!.find((s) => s.id === unsuppStratId)!;
+    assert(unsuppStrat.economicPerformance.economicPerformanceQuality === 'INSUFFICIENT_DATA', 'P0 Funding Creation C: economicPerformanceQuality === INSUFFICIENT_DATA');
+    assert(unsuppStrat.economicPerformance.benchmarkQuality === 'NOT_AVAILABLE', 'P0 Funding Creation C: benchmarkQuality === NOT_AVAILABLE');
+    assert(unsuppStrat.economicPerformance.benchmarkCdiReais === null, 'P0 Funding Creation C: benchmarkCdiReais === null');
+    assert(unsuppStrat.economicPerformance.excessReturnVsCdiReais === null, 'P0 Funding Creation C: excessReturnVsCdiReais === null');
+    assert(unsuppStrat.economicPerformance.optionReturnOnBenchmarkCapitalPct === null, 'P0 Funding Creation C: optionReturnOnBenchmarkCapitalPct === null');
+    assert(unsuppStrat.economicPerformance.totalEconomicReturnPct === null, 'P0 Funding Creation C: totalEconomicReturnPct === null');
+    assert(unsuppStrat.economicPerformance.optionPnlEquivalentCdiDU === null, 'P0 Funding Creation C: optionPnlEquivalentCdiDU === null');
+    assert(unsuppStrat.economicPerformance.monthlyEquivalentPct === null, 'P0 Funding Creation C: monthlyEquivalentPct === null');
+    assert(unsuppStrat.economicPerformance.annualizedEquivalentPct === null, 'P0 Funding Creation C: annualizedEquivalentPct === null');
+    assert(unsuppStrat.economicPerformance.annualizationQuality === 'NOT_AVAILABLE', 'P0 Funding Creation C: annualizationQuality === NOT_AVAILABLE');
 
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)

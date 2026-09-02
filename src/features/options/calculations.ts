@@ -736,7 +736,11 @@ export function calculateStrategyEconomicPerformance(
   let optionPnlToCdiMultiple: number | null = null;
   let totalReturnToCdiMultiple: number | null = null;
 
-  if (benchmarkQuality === 'NOT_AVAILABLE' || timelineHasInsufficient) {
+  const benchmarkComparable =
+    benchmarkQuality !== 'NOT_AVAILABLE' &&
+    !timelineHasInsufficient;
+
+  if (!benchmarkComparable) {
     benchmarkCdiReais = null;
     excessReturnVsCdiReais = null;
     optionPnlToCdiMultiple = null;
@@ -750,14 +754,14 @@ export function calculateStrategyEconomicPerformance(
     }
   }
 
-  // 6. Retornos do Período (%) — Nulos sob timeline segmentada para evitar médias espúrias
-  const optionReturnOnBenchmarkCapitalPct = (!isSegmentedTimeline && benchmarkCapitalReais > 0)
+  // 6. Retornos do Período (%) — Nulos sob timeline segmentada para evitar médias espúrias ou quando benchmark não é comparável
+  const optionReturnOnBenchmarkCapitalPct = (benchmarkComparable && !isSegmentedTimeline && benchmarkCapitalReais > 0)
     ? (optionPnlReais / benchmarkCapitalReais) * 100.0
     : null;
-  const totalEconomicReturnPct = (!isSegmentedTimeline && benchmarkCapitalReais > 0)
+  const totalEconomicReturnPct = (benchmarkComparable && !isSegmentedTimeline && benchmarkCapitalReais > 0)
     ? (totalEconomicReturnReais / benchmarkCapitalReais) * 100.0
     : null;
-  const cdiPeriodReturnPct = (!isSegmentedTimeline && benchmarkCdiYieldDecimal !== null && benchmarkQuality !== 'NOT_AVAILABLE')
+  const cdiPeriodReturnPct = (benchmarkComparable && !isSegmentedTimeline && benchmarkCdiYieldDecimal !== null && benchmarkQuality !== 'NOT_AVAILABLE')
     ? benchmarkCdiYieldDecimal * 100.0
     : null;
   const excessPeriodPctPoints = (totalEconomicReturnPct !== null && cdiPeriodReturnPct !== null)
@@ -787,7 +791,7 @@ export function calculateStrategyEconomicPerformance(
 
   // 8. Dias de CDI Equivalentes (Composição Logarítmica)
   let optionPnlEquivalentCdiDU: number | null = null;
-  if (!isSegmentedTimeline && elapsedDU > 0 && benchmarkCapitalReais > 0 && benchmarkCdiAccumulatedFactor !== null && benchmarkCdiAccumulatedFactor > 1.0) {
+  if (benchmarkComparable && !isSegmentedTimeline && elapsedDU > 0 && benchmarkCapitalReais > 0 && benchmarkCdiAccumulatedFactor !== null && benchmarkCdiAccumulatedFactor > 1.0) {
     const equivalentDailyFactor = Math.pow(benchmarkCdiAccumulatedFactor, 1.0 / elapsedDU);
     const optionReturn = optionPnlReais / benchmarkCapitalReais;
     if (equivalentDailyFactor > 1.00000001 && 1.0 + optionReturn > 0) {
@@ -809,8 +813,10 @@ export function calculateStrategyEconomicPerformance(
   let monthlyEquivalentPct: number | null = null;
   let annualizedEquivalentPct: number | null = null;
 
-  if (isSegmentedTimeline || elapsedDU < 5 || totalEconomicReturnPct === null || totalEconomicReturnPct <= -100) {
+  if (!benchmarkComparable || isSegmentedTimeline || elapsedDU < 5 || totalEconomicReturnPct === null || totalEconomicReturnPct <= -100) {
     annualizationQuality = 'NOT_AVAILABLE';
+    monthlyEquivalentPct = null;
+    annualizedEquivalentPct = null;
   } else {
     if (elapsedDU <= 15) {
       annualizationQuality = 'VERY_SHORT_PERIOD';
