@@ -2271,3 +2271,160 @@ export function enrichOptionStrategy(params: {
     },
   };
 }
+
+// ─── 14. STRATEGY HEADER P&L PRESENTATION HELPER (QUALITY-SAFE) ───────
+export interface StrategyHeaderPnlPresentation {
+  quality: 'FULL' | 'LEGACY_INCOMPLETE' | 'NOT_AVAILABLE';
+  badge: {
+    show: boolean;
+    label: string;
+    variant: 'warning' | 'danger';
+  } | null;
+  realized: {
+    label: string;
+    formattedValue: string;
+    rawValue: number | null;
+    isPositive: boolean | null;
+  };
+  unrealized: {
+    label: string;
+    formattedValue: string;
+    rawValue: number;
+    isPositive: boolean;
+  };
+  total: {
+    label: string;
+    formattedValue: string;
+    rawValue: number | null;
+    isPositive: boolean | null;
+  };
+  roic: {
+    show: boolean;
+    formattedValue: string | null;
+    rawValue: number | null;
+  };
+}
+
+export function getStrategyHeaderPnlPresentation(
+  strat: Pick<EnrichedOptionStrategy, 'metrics'>
+): StrategyHeaderPnlPresentation {
+  const m = strat.metrics;
+  const quality = m.strategyRealizedPnlQuality;
+
+  if (quality === 'FULL') {
+    const netRealized = m.strategyNetRealizedPnlReais;
+    const unrealized = m.strategyUnrealizedPnlReais;
+    const total = m.strategyTotalNetPnlReais;
+    const roic = m.roicPct;
+
+    return {
+      quality: 'FULL',
+      badge: null,
+      realized: {
+        label: 'Realizado',
+        formattedValue: netRealized !== null
+          ? `${netRealized >= 0 ? '+' : ''}R$ ${netRealized.toFixed(2)}`
+          : 'N/A',
+        rawValue: netRealized,
+        isPositive: netRealized !== null ? netRealized >= 0 : null,
+      },
+      unrealized: {
+        label: 'MTM Residual',
+        formattedValue: `${unrealized >= 0 ? '+' : ''}R$ ${unrealized.toFixed(2)}`,
+        rawValue: unrealized,
+        isPositive: unrealized >= 0,
+      },
+      total: {
+        label: 'P&L Total',
+        formattedValue: total !== null
+          ? `${total >= 0 ? '+' : ''}R$ ${total.toFixed(2)}`
+          : 'N/A',
+        rawValue: total,
+        isPositive: total !== null ? total >= 0 : null,
+      },
+      roic: {
+        show: true,
+        formattedValue: `${roic >= 0 ? '+' : ''}${roic.toFixed(1)}%`,
+        rawValue: roic,
+      },
+    };
+  }
+
+  if (quality === 'LEGACY_INCOMPLETE') {
+    const knownRealized = m.strategyKnownGrossRealizedPnlReais - m.strategyFeesReais;
+    const unrealized = m.strategyUnrealizedPnlReais;
+
+    return {
+      quality: 'LEGACY_INCOMPLETE',
+      badge: {
+        show: true,
+        label: 'LEGACY INCOMPLETO',
+        variant: 'warning',
+      },
+      realized: {
+        label: 'Realizado Conhecido',
+        formattedValue: `${knownRealized >= 0 ? '+' : ''}R$ ${knownRealized.toFixed(2)}`,
+        rawValue: knownRealized,
+        isPositive: knownRealized >= 0,
+      },
+      unrealized: {
+        label: 'MTM Residual',
+        formattedValue: `${unrealized >= 0 ? '+' : ''}R$ ${unrealized.toFixed(2)}`,
+        rawValue: unrealized,
+        isPositive: unrealized >= 0,
+      },
+      total: {
+        label: 'P&L Total',
+        formattedValue: 'N/A',
+        rawValue: null,
+        isPositive: null,
+      },
+      roic: {
+        show: false,
+        formattedValue: null,
+        rawValue: null,
+      },
+    };
+  }
+
+  // NOT_AVAILABLE
+  const unrealized = m.strategyUnrealizedPnlReais;
+  const hasKnownRealized = m.strategyKnownGrossRealizedPnlReais !== 0;
+  const knownRealized = hasKnownRealized
+    ? m.strategyKnownGrossRealizedPnlReais - m.strategyFeesReais
+    : null;
+
+  return {
+    quality: 'NOT_AVAILABLE',
+    badge: {
+      show: true,
+      label: 'HISTÓRICO INDISPONÍVEL',
+      variant: 'danger',
+    },
+    realized: {
+      label: hasKnownRealized ? 'Realizado Conhecido' : 'Realizado',
+      formattedValue: knownRealized !== null
+        ? `${knownRealized >= 0 ? '+' : ''}R$ ${knownRealized.toFixed(2)}`
+        : 'N/A',
+      rawValue: knownRealized,
+      isPositive: knownRealized !== null ? knownRealized >= 0 : null,
+    },
+    unrealized: {
+      label: 'MTM Residual',
+      formattedValue: `${unrealized >= 0 ? '+' : ''}R$ ${unrealized.toFixed(2)}`,
+      rawValue: unrealized,
+      isPositive: unrealized >= 0,
+    },
+    total: {
+      label: 'P&L Total',
+      formattedValue: 'N/A',
+      rawValue: null,
+      isPositive: null,
+    },
+    roic: {
+      show: false,
+      formattedValue: null,
+      rawValue: null,
+    },
+  };
+}

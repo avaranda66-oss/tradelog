@@ -1,7 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import type { EnrichedOptionPosition, EnrichedOptionStrategy } from '../calculations';
+import {
+  getStrategyHeaderPnlPresentation,
+  type EnrichedOptionPosition,
+  type EnrichedOptionStrategy,
+} from '../calculations';
 import { updateOptionMarketPrice, closeOptionPosition, deleteOptionPosition, ungroupOptionStrategyAction } from '../actions';
 import { StrategyEconomicStorytellingCard } from './StrategyEconomicStorytellingCard';
 
@@ -317,7 +321,8 @@ export function OptionsPositionsTable({
           {strategies.map((strat) => {
             const isExpanded = expandedStrategyIds.has(strat.id);
             const sm = strat.metrics;
-            const isProfit = sm.netPnlMtmReais >= 0;
+            const headerPnl = getStrategyHeaderPnlPresentation(strat);
+            const isProfit = (headerPnl.total.rawValue ?? sm.netPnlMtmReais) >= 0;
 
             return (
               <div
@@ -342,6 +347,15 @@ export function OptionsPositionsTable({
                         <span className="px-2 py-0.5 rounded bg-teal-500/10 text-teal-300 text-[10px] font-bold">
                           {strat.legs.length} Pernas
                         </span>
+                        {headerPnl.badge && (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            headerPnl.badge.variant === 'warning'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                              : 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                          }`}>
+                            {headerPnl.badge.label}
+                          </span>
+                        )}
                       </div>
                       {preset === 'RENDA_CDI' ? (() => {
                         const ep = strat.economicPerformance;
@@ -382,39 +396,47 @@ export function OptionsPositionsTable({
                     <div className="text-right flex items-center gap-3">
                       <div>
                         <div className="text-[9px] text-slate-400 uppercase font-bold">
-                          Realizado
+                          {headerPnl.realized.label}
                         </div>
                         <div className={`text-xs font-mono font-bold ${
-                          (strat.metrics.strategyNetRealizedPnlReais ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                          headerPnl.realized.isPositive === null
+                            ? 'text-slate-400'
+                            : headerPnl.realized.isPositive
+                              ? 'text-emerald-400'
+                              : 'text-rose-400'
                         }`}>
-                          {strat.metrics.strategyNetRealizedPnlReais !== null
-                            ? `${strat.metrics.strategyNetRealizedPnlReais >= 0 ? '+' : ''}R$ ${strat.metrics.strategyNetRealizedPnlReais.toFixed(2)}`
-                            : 'R$ 0,00'}
+                          {headerPnl.realized.formattedValue}
                         </div>
                       </div>
 
                       <div className="border-l border-slate-700/60 pl-3">
                         <div className="text-[9px] text-slate-400 uppercase font-bold">
-                          MTM Residual
+                          {headerPnl.unrealized.label}
                         </div>
                         <div className={`text-xs font-mono font-bold ${
-                          strat.metrics.strategyUnrealizedPnlReais >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                          headerPnl.unrealized.isPositive ? 'text-emerald-400' : 'text-rose-400'
                         }`}>
-                          {strat.metrics.strategyUnrealizedPnlReais >= 0 ? '+' : ''}R$ {strat.metrics.strategyUnrealizedPnlReais.toFixed(2)}
+                          {headerPnl.unrealized.formattedValue}
                         </div>
                       </div>
 
                       <div className="border-l border-slate-700/60 pl-3">
                         <div className="text-[9px] text-slate-400 uppercase font-bold">
-                          P&L Total
+                          {headerPnl.total.label}
                         </div>
                         <div className={`text-base font-bold font-mono ${
-                          (strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                          headerPnl.total.isPositive === null
+                            ? 'text-slate-400'
+                            : headerPnl.total.isPositive
+                              ? 'text-emerald-400'
+                              : 'text-rose-400'
                         }`}>
-                          {(strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais) >= 0 ? '+' : ''}R$ {(strat.metrics.strategyTotalNetPnlReais ?? sm.netPnlMtmReais).toFixed(2)}
-                          <span className="text-xs font-normal font-sans ml-1 text-emerald-400/80">
-                            ({sm.roicPct >= 0 ? '+' : ''}{sm.roicPct.toFixed(1)}%)
-                          </span>
+                          {headerPnl.total.formattedValue}
+                          {headerPnl.roic.show && headerPnl.roic.formattedValue && (
+                            <span className="text-xs font-normal font-sans ml-1 text-emerald-400/80">
+                              ({headerPnl.roic.formattedValue})
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -553,7 +575,14 @@ export function OptionsPositionsTable({
                                     {leg.legTotalPnlReais >= 0 ? '+' : ''}R$ {leg.legTotalPnlReais.toFixed(2)}
                                   </span>
                                 ) : (
-                                  <span className="text-slate-500 font-sans text-[10px]" title="Histórico anterior incompleto (LEGACY_INCOMPLETE)">
+                                  <span
+                                    className="text-slate-500 font-sans text-[10px]"
+                                    title={
+                                      leg.legRealizedPnlQuality === 'LEGACY_INCOMPLETE'
+                                        ? 'Histórico anterior incompleto (LEGACY_INCOMPLETE)'
+                                        : 'Histórico de execuções indisponível ou não reconciliado (NOT_AVAILABLE)'
+                                    }
+                                  >
                                     N/A
                                   </span>
                                 )}

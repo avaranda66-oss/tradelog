@@ -949,16 +949,38 @@ export function ManageStrategyModal({
                   </span>
                 </div>
 
-                {/* Capital Liberado */}
+                {/* Capital Econômico Liberado / Requerido */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
-                  <span className="text-[10px] uppercase text-slate-400 font-bold block">Capital Liberado</span>
-                  <div className="text-base font-bold font-mono text-emerald-400">
-                    {preview.capitalReleasedReais !== null
+                  <span className="text-[10px] uppercase text-slate-400 font-bold block">
+                    {preview.capitalReleasedReais !== null && preview.capitalReleasedReais > 0
+                      ? 'Capital Econômico Liberado'
+                      : preview.additionalCapitalRequiredReais !== null && preview.additionalCapitalRequiredReais > 0
+                        ? 'Capital Adicional Requerido'
+                        : 'Variação de Capital'}
+                  </span>
+                  <div className={`text-base font-bold font-mono ${
+                    preview.capitalReleasedReais !== null && preview.capitalReleasedReais > 0
+                      ? 'text-emerald-400'
+                      : preview.additionalCapitalRequiredReais !== null && preview.additionalCapitalRequiredReais > 0
+                        ? 'text-amber-400'
+                        : 'text-slate-300'
+                  }`}>
+                    {preview.capitalReleasedReais !== null && preview.capitalReleasedReais > 0
                       ? `R$ ${preview.capitalReleasedReais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-                      : 'N/A'}
+                      : preview.additionalCapitalRequiredReais !== null && preview.additionalCapitalRequiredReais > 0
+                        ? `R$ ${preview.additionalCapitalRequiredReais.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                        : preview.capitalDeltaReais !== null
+                          ? 'R$ 0,00'
+                          : 'N/A'}
                   </div>
                   <span className="text-[10px] text-slate-500 block">
-                    {preview.capitalReleasedReais !== null ? 'Margem devolvida à carteira' : 'Risco residual não-comparável'}
+                    {preview.capitalReleasedReais !== null && preview.capitalReleasedReais > 0
+                      ? 'Redução do capital de referência'
+                      : preview.additionalCapitalRequiredReais !== null && preview.additionalCapitalRequiredReais > 0
+                        ? 'Aumento do capital de referência'
+                        : preview.capitalDeltaReais !== null
+                          ? 'Capital de referência inalterado'
+                          : 'Capital de referência não comparável'}
                   </span>
                 </div>
 
@@ -1001,16 +1023,22 @@ export function ManageStrategyModal({
                 <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">
                   Risco &amp; Payoff Canônico (Antes ➔ Depois)
                 </span>
-                {(preview.afterRisk.maxLossType === 'UNBOUNDED' || preview.afterRisk.maxLossType === 'UNKNOWN') && (
-                  <div className="p-3 rounded-xl bg-rose-500/10 border-2 border-rose-500/50 text-rose-300 flex items-center gap-2 text-xs">
-                    <span className="text-lg">🚨</span>
-                    <span>
-                      <strong>ATENÇÃO:</strong> A estrutura residual após o manejo possui risco{' '}
-                      <strong>{preview.afterRisk.maxLossType}</strong>.
+                {(preview.afterRisk.maxLossType === 'UNBOUNDED' || preview.afterRisk.riskRecognitionQuality === 'UNKNOWN' || preview.afterRisk.maxLossType === 'UNKNOWN') && (
+                  <div className="p-3.5 rounded-xl bg-rose-500/10 border-2 border-rose-500/50 text-rose-300 space-y-1 text-xs">
+                    <div className="flex items-center gap-2 font-bold text-rose-200">
+                      <span className="text-lg">🚨</span>
+                      <span>RISCO RESIDUAL NÃO COMPARÁVEL — ATENÇÃO OPERACIONAL</span>
+                    </div>
+                    <p className="text-rose-300/90 pl-7">
+                      A estrutura residual após o manejo possui perfil <strong>{preview.afterRisk.maxLossType}</strong> (reconhecimento: <strong>{preview.afterRisk.riskRecognitionQuality}</strong>).
                       {preview.afterRisk.maxLossType === 'UNBOUNDED'
-                        ? ' A perda máxima potencial é ilimitada. Certifique-se de que esta é realmente a sua intenção operacional.'
-                        : ' O perfil de risco não pode ser determinado para esta combinação. Prossiga com extrema cautela.'}
-                    </span>
+                        ? ' A perda máxima potencial é ilimitada (risco descoberto).'
+                        : ' O perfil de risco residual não pôde ser determinado com precisão canônica.'}
+                    </p>
+                    <p className="text-amber-300 font-semibold pl-7 flex items-center gap-1.5">
+                      <span>⚠️</span>
+                      <span>CDI / Alpha ficarão indisponíveis após a manobra.</span>
+                    </p>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-3">
@@ -1019,8 +1047,26 @@ export function ManageStrategyModal({
                     <span className="text-[9px] uppercase text-slate-500 font-bold block">Antes do Manejo</span>
                     <div className="text-xs font-mono text-slate-300 space-y-0.5">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Classificação</span>
-                        <span className={`font-bold ${preview.beforeRisk.maxLossType === 'FINITE' ? 'text-emerald-400' : preview.beforeRisk.maxLossType === 'UNBOUNDED' ? 'text-rose-400' : 'text-amber-400'}`}>
+                        <span className="text-slate-500">Risk Recognition</span>
+                        <span className={`font-bold ${
+                          preview.beforeRisk.riskRecognitionQuality === 'EXACT'
+                            ? 'text-emerald-400'
+                            : preview.beforeRisk.riskRecognitionQuality === 'APPROXIMATE'
+                              ? 'text-sky-400'
+                              : 'text-amber-400'
+                        }`}>
+                          {preview.beforeRisk.riskRecognitionQuality}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Max Loss Type</span>
+                        <span className={`font-bold ${
+                          preview.beforeRisk.maxLossType === 'FINITE'
+                            ? 'text-emerald-400'
+                            : preview.beforeRisk.maxLossType === 'UNBOUNDED'
+                              ? 'text-rose-400'
+                              : 'text-amber-400'
+                        }`}>
                           {preview.beforeRisk.maxLossType}
                         </span>
                       </div>
@@ -1058,8 +1104,26 @@ export function ManageStrategyModal({
                     <span className="text-[9px] uppercase text-slate-500 font-bold block">Após o Manejo</span>
                     <div className="text-xs font-mono text-slate-300 space-y-0.5">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Classificação</span>
-                        <span className={`font-bold ${preview.afterRisk.maxLossType === 'FINITE' ? 'text-emerald-400' : preview.afterRisk.maxLossType === 'UNBOUNDED' ? 'text-rose-400' : 'text-amber-400'}`}>
+                        <span className="text-slate-500">Risk Recognition</span>
+                        <span className={`font-bold ${
+                          preview.afterRisk.riskRecognitionQuality === 'EXACT'
+                            ? 'text-emerald-400'
+                            : preview.afterRisk.riskRecognitionQuality === 'APPROXIMATE'
+                              ? 'text-sky-400'
+                              : 'text-amber-400'
+                        }`}>
+                          {preview.afterRisk.riskRecognitionQuality}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Max Loss Type</span>
+                        <span className={`font-bold ${
+                          preview.afterRisk.maxLossType === 'FINITE'
+                            ? 'text-emerald-400'
+                            : preview.afterRisk.maxLossType === 'UNBOUNDED'
+                              ? 'text-rose-400'
+                              : 'text-amber-400'
+                        }`}>
                           {preview.afterRisk.maxLossType}
                         </span>
                       </div>

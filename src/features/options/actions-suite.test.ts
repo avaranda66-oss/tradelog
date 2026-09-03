@@ -24,7 +24,7 @@ import {
 } from '../../lib/db/schema';
 import { eq, inArray, and, isNull, asc } from 'drizzle-orm';
 import { calculateRealizedDiFactor } from './cdi-engine';
-import { calculateStrategyEconomicPerformance } from './calculations';
+import { calculateStrategyEconomicPerformance, getStrategyHeaderPnlPresentation } from './calculations';
 import { canonicalize, createManeuverFingerprint } from './maneuver-planner';
 
 function assert(condition: boolean, msg: string) {
@@ -83,6 +83,8 @@ export async function runActionsSuiteTests() {
   const dirCallId = 'fix_dir_call_1';
   const mnvCallPosId = 'pos_mnv_call_1';
   const mnvPutPosId = 'pos_mnv_put_1';
+  const advSpotPosId = 'pos_adv_spot_test';
+  const advSpotPos2Id = 'pos_adv_spot_test_2';
 
   try {
     // Limpeza Prévia Determinística
@@ -3276,6 +3278,301 @@ export async function runActionsSuiteTests() {
       }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.14 Complete Economic State Fingerprint Sensitivity Tests
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.14 Complete Economic State Fingerprint Sensitivity Tests:');
+
+    const basePayload = {
+      strategyId: 'strat_test',
+      strategyCollateralMode: 'IDLE_CASH',
+      strategyCollateralYieldPctCDI: 100,
+      collateralCoveragePct: 100,
+      maneuverType: 'SCALE_DOWN',
+      executionDate: '2026-09-02',
+      percentageReduced: 50,
+      unitsReduced: 100,
+      legsState: [
+        {
+          legId: 'leg_1',
+          positionId: 'pos_1',
+          economicRole: 'INCOME',
+          originalAllocatedQuantity: 200,
+          openAllocatedQuantity: 200,
+          positionOpenQuantity: 200,
+          entryPrice: 1.5,
+          underlyingCurrentSpot: 40.0,
+          strike: 42.0,
+          side: 'SELL',
+          optionType: 'CALL',
+          expirationDate: '2026-09-18',
+        },
+      ],
+      inputs: [{ legId: 'leg_1', price: 0.5, fees: 5.0 }],
+      openSegment: {
+        id: 'seg_1',
+        benchmarkCapitalReais: 8000,
+        capitalRemuneratedReais: 8000,
+        collateralMode: 'IDLE_CASH',
+        collateralPctCdi: 100,
+        quality: 'EXACT',
+      },
+    };
+    const baseFp = createManeuverFingerprint(basePayload);
+
+    // 1. Spot mutation -> fingerprint different
+    const spotMutatedPayload = {
+      ...basePayload,
+      legsState: [
+        {
+          ...basePayload.legsState[0],
+          underlyingCurrentSpot: 45.0,
+        },
+      ],
+    };
+    const spotMutatedFp = createManeuverFingerprint(spotMutatedPayload);
+    assert(spotMutatedFp !== baseFp, 'P4.3.2 Fingerprint: underlyingCurrentSpot mutation → fingerprint DIFERENTE');
+
+    // 2. Fees mutation -> fingerprint different
+    const feesMutatedPayload = {
+      ...basePayload,
+      inputs: [{ legId: 'leg_1', price: 0.5, fees: 10.0 }],
+    };
+    const feesMutatedFp = createManeuverFingerprint(feesMutatedPayload);
+    assert(feesMutatedFp !== baseFp, 'P4.3.2 Fingerprint: fees mutation → fingerprint DIFERENTE');
+
+    // 3. EntryPrice mutation -> fingerprint different
+    const entryPriceMutatedPayload = {
+      ...basePayload,
+      legsState: [
+        {
+          ...basePayload.legsState[0],
+          entryPrice: 2.0,
+        },
+      ],
+    };
+    const entryPriceMutatedFp = createManeuverFingerprint(entryPriceMutatedPayload);
+    assert(entryPriceMutatedFp !== baseFp, 'P4.3.2 Fingerprint: entryPrice mutation → fingerprint DIFERENTE');
+
+    // 4. OpenAllocated mutation mantendo GCD -> fingerprint different
+    const openAllocatedMutatedPayload = {
+      ...basePayload,
+      legsState: [
+        {
+          ...basePayload.legsState[0],
+          openAllocatedQuantity: 100,
+        },
+      ],
+    };
+    const openAllocatedMutatedFp = createManeuverFingerprint(openAllocatedMutatedPayload);
+    assert(openAllocatedMutatedFp !== baseFp, 'P4.3.2 Fingerprint: openAllocatedQuantity mutation → fingerprint DIFERENTE');
+
+    // 5. Collateral Mode & Yield mutation -> fingerprint different
+    const collateralModeMutated = { ...basePayload, strategyCollateralMode: 'REMUNERATED_100_CDI' };
+    assert(createManeuverFingerprint(collateralModeMutated) !== baseFp, 'P4.3.2 Fingerprint: strategyCollateralMode mutation → fingerprint DIFERENTE');
+
+    // 6. OpenSegment quality mutation -> fingerprint different
+    const segmentQualityMutated = {
+      ...basePayload,
+      openSegment: { ...basePayload.openSegment, quality: 'INSUFFICIENT_DATA' },
+    };
+    assert(createManeuverFingerprint(segmentQualityMutated) !== baseFp, 'P4.3.2 Fingerprint: openSegment.quality mutation → fingerprint DIFERENTE');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.15 Adversarial Spot Mutation Between Preview & Confirm
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.15 Adversarial Spot Mutation Between Preview & Confirm Tests:');
+
+    db.insert(optionPositions).values([
+      {
+        id: advSpotPosId,
+        portfolio: 'Principal',
+        tickerOption: 'PETRI400',
+        tickerUnderlying: 'PETR4',
+        optionType: 'CALL',
+        side: 'SELL',
+        strategyType: 'VENDA_CALL',
+        strike: 40.0,
+        quantity: 200,
+        openQuantity: 200,
+        closedQuantity: 0,
+        legacyClosedQuantity: 0,
+        entryPrice: 2.0,
+        currentPrice: 2.5,
+        underlyingCurrentSpot: 40.0,
+        allocatedCapital: 0,
+        entryDate: '2026-09-02',
+        expirationDate: '2026-09-18',
+        status: 'OPEN',
+        createdAt: '2026-09-02T12:00:00.000Z',
+        updatedAt: '2026-09-02T12:00:00.000Z',
+      },
+      {
+        id: advSpotPos2Id,
+        portfolio: 'Principal',
+        tickerOption: 'PETRI440',
+        tickerUnderlying: 'PETR4',
+        optionType: 'CALL',
+        side: 'BUY',
+        strategyType: 'COMPRA_CALL',
+        strike: 44.0,
+        quantity: 100,
+        openQuantity: 100,
+        closedQuantity: 0,
+        legacyClosedQuantity: 0,
+        entryPrice: 0.8,
+        currentPrice: 0.9,
+        underlyingCurrentSpot: 40.0,
+        allocatedCapital: 0,
+        entryDate: '2026-09-02',
+        expirationDate: '2026-09-18',
+        status: 'OPEN',
+        createdAt: '2026-09-02T12:00:00.000Z',
+        updatedAt: '2026-09-02T12:00:00.000Z',
+      },
+    ]).run();
+
+    const advSpotStratRes = await groupOptionPositionsAction({
+      name: 'Adversarial Spot Ratio Call',
+      strategyType: 'CUSTOM',
+      book: 'INCOME',
+      underlyingTicker: 'PETR4',
+      collateralMode: 'IDLE_CASH',
+      legs: [
+        { positionId: advSpotPosId, allocatedQuantity: 200, economicRole: 'INCOME' },
+        { positionId: advSpotPos2Id, allocatedQuantity: 100, economicRole: 'HEDGE' },
+      ],
+    });
+    assert(advSpotStratRes.success === true, 'P4.3.2 Adversarial: Estrutura Ratio Call criada com sucesso');
+    const advSpotStratId = advSpotStratRes.strategyId!;
+
+    const advLegs = db.query.optionStrategyLegs.findMany({
+      where: eq(optionStrategyLegs.strategyId, advSpotStratId),
+    }).sync();
+    const advLeg1 = advLegs.find((l) => l.positionId === advSpotPosId)!;
+    const advLeg2 = advLegs.find((l) => l.positionId === advSpotPos2Id)!;
+
+    const advPreviewRes = await previewScaleDownStrategyAction({
+      strategyId: advSpotStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [
+        { strategyLegId: advLeg1.id, price: 1.0, feesReais: 0 },
+        { strategyLegId: advLeg2.id, price: 0.5, feesReais: 0 },
+      ],
+    });
+    assert(advPreviewRes.success === true, 'P4.3.2 Adversarial: Preview obtido com spot 40');
+    const spot40Fingerprint = (advPreviewRes as any).plan!.previewFingerprint;
+
+    const advManeuversBefore = await db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, advSpotStratId),
+    });
+    const advExecutionsBefore = await db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.positionId, advSpotPosId),
+    });
+    const advSegmentsBefore = await db.query.strategyFundingSegments.findMany({
+      where: eq(strategyFundingSegments.strategyId, advSpotStratId),
+    });
+
+    // Mercado atualiza spot de 40 para 45
+    await db.update(optionPositions).set({
+      underlyingCurrentSpot: 45.0,
+    }).where(eq(optionPositions.id, advSpotPosId));
+
+    // Confirmar com fingerprint antigo
+    const advConfirmRes = await scaleDownOptionStrategyAction({
+      strategyId: advSpotStratId,
+      percentageReduced: 50,
+      executionDate: '2026-09-02',
+      legs: [
+        { strategyLegId: advLeg1.id, price: 1.0, feesReais: 0 },
+        { strategyLegId: advLeg2.id, price: 0.5, feesReais: 0 },
+      ],
+      previewFingerprint: spot40Fingerprint,
+    });
+
+    assert(advConfirmRes.success === false, 'P4.3.2 Adversarial: Confirmação com spot divergente é REJEITADA');
+    assert(advConfirmRes.errorCode === 'STALE_MANEUVER_PREVIEW', 'P4.3.2 Adversarial: Retorna errorCode STALE_MANEUVER_PREVIEW');
+
+    const advManeuversAfter = await db.query.strategyManeuverEvents.findMany({
+      where: eq(strategyManeuverEvents.strategyId, advSpotStratId),
+    });
+    const advExecutionsAfter = await db.query.optionPositionExecutions.findMany({
+      where: eq(optionPositionExecutions.positionId, advSpotPosId),
+    });
+    const advSegmentsAfter = await db.query.strategyFundingSegments.findMany({
+      where: eq(strategyFundingSegments.strategyId, advSpotStratId),
+    });
+
+    assert(advManeuversAfter.length === advManeuversBefore.length, 'P4.3.2 Adversarial Zero Writes: Nenhum maneuverEvent criado');
+    assert(advExecutionsAfter.length === advExecutionsBefore.length, 'P4.3.2 Adversarial Zero Writes: Nenhuma execution criada');
+    assert(advSegmentsAfter.length === advSegmentsBefore.length, 'P4.3.2 Adversarial Zero Writes: Nenhum funding segment novo');
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 9.16 Strategy Header P&L Presentation (Quality-Safe Contract Tests)
+    // ══════════════════════════════════════════════════════════════════════
+    console.log('\n9.16 Strategy Header P&L Presentation (Quality-Safe Contract Tests):');
+
+    // Caso 1: FULL Quality
+    const pnlFull = getStrategyHeaderPnlPresentation({
+      metrics: {
+        strategyRealizedPnlQuality: 'FULL',
+        strategyNetRealizedPnlReais: 250.0,
+        strategyKnownGrossRealizedPnlReais: 260.0,
+        strategyFeesReais: 10.0,
+        strategyUnrealizedPnlReais: 100.0,
+        strategyTotalNetPnlReais: 350.0,
+        roicPct: 3.5,
+      } as any,
+    });
+    assert(pnlFull.quality === 'FULL', 'P4.3.2 Header Presentation: FULL quality preservado');
+    assert(pnlFull.badge === null, 'P4.3.2 Header Presentation: FULL não possui badge de incompletude');
+    assert(pnlFull.realized.label === 'Realizado', 'P4.3.2 Header Presentation: FULL rotulado como Realizado');
+    assert(pnlFull.realized.formattedValue === '+R$ 250.00', 'P4.3.2 Header Presentation: FULL realizado factual');
+    assert(pnlFull.unrealized.formattedValue === '+R$ 100.00', 'P4.3.2 Header Presentation: FULL unrealized factual');
+    assert(pnlFull.total.label === 'P&L Total', 'P4.3.2 Header Presentation: FULL total rotulado P&L Total');
+    assert(pnlFull.total.formattedValue === '+R$ 350.00', 'P4.3.2 Header Presentation: FULL total factual');
+    assert(pnlFull.roic.show === true, 'P4.3.2 Header Presentation: FULL exibe ROIC');
+
+    // Caso 2: LEGACY_INCOMPLETE Quality
+    const pnlLegacy = getStrategyHeaderPnlPresentation({
+      metrics: {
+        strategyRealizedPnlQuality: 'LEGACY_INCOMPLETE',
+        strategyNetRealizedPnlReais: null,
+        strategyKnownGrossRealizedPnlReais: 60.0,
+        strategyFeesReais: 0,
+        strategyUnrealizedPnlReais: 80.0,
+        strategyTotalNetPnlReais: null,
+        roicPct: 1.2,
+      } as any,
+    });
+    assert(pnlLegacy.quality === 'LEGACY_INCOMPLETE', 'P4.3.2 Header Presentation: LEGACY_INCOMPLETE identificado');
+    assert(pnlLegacy.badge?.label === 'LEGACY INCOMPLETO', 'P4.3.2 Header Presentation: Badge LEGACY INCOMPLETO presente');
+    assert(pnlLegacy.realized.label === 'Realizado Conhecido', 'P4.3.2 Header Presentation: Rotulado como Realizado Conhecido');
+    assert(pnlLegacy.realized.formattedValue === '+R$ 60.00', 'P4.3.2 Header Presentation: Realizado conhecido exibido');
+    assert(pnlLegacy.total.formattedValue === 'N/A', 'P4.3.2 Header Presentation: P&L Total é estritamente N/A (NÃO MTM nem ZERO)');
+    assert(pnlLegacy.total.rawValue === null, 'P4.3.2 Header Presentation: P&L Total rawValue é estritamente null');
+    assert(pnlLegacy.roic.show === false, 'P4.3.2 Header Presentation: ROIC lifetime ocultado sob LEGACY_INCOMPLETE');
+
+    // Caso 3: NOT_AVAILABLE Quality
+    const pnlNotAvailable = getStrategyHeaderPnlPresentation({
+      metrics: {
+        strategyRealizedPnlQuality: 'NOT_AVAILABLE',
+        strategyNetRealizedPnlReais: null,
+        strategyKnownGrossRealizedPnlReais: 0,
+        strategyFeesReais: 0,
+        strategyUnrealizedPnlReais: 50.0,
+        strategyTotalNetPnlReais: null,
+        roicPct: 0.8,
+      } as any,
+    });
+    assert(pnlNotAvailable.quality === 'NOT_AVAILABLE', 'P4.3.2 Header Presentation: NOT_AVAILABLE identificado');
+    assert(pnlNotAvailable.badge?.label === 'HISTÓRICO INDISPONÍVEL', 'P4.3.2 Header Presentation: Badge HISTÓRICO INDISPONÍVEL presente');
+    assert(pnlNotAvailable.realized.formattedValue === 'N/A', 'P4.3.2 Header Presentation: Realizado é N/A quando sem histórico');
+    assert(pnlNotAvailable.total.formattedValue === 'N/A', 'P4.3.2 Header Presentation: P&L Total é estritamente N/A');
+    assert(pnlNotAvailable.total.rawValue === null, 'P4.3.2 Header Presentation: Total rawValue é estritamente null');
+    assert(pnlNotAvailable.roic.show === false, 'P4.3.2 Header Presentation: ROIC lifetime ocultado sob NOT_AVAILABLE');
+
   } finally {
     // Limpeza Final de Segurança (ordem estrita de chaves estrangeiras)
     const allCleanPosIds = [
@@ -3287,7 +3584,7 @@ export async function runActionsSuiteTests() {
       'pos_ledger_check', 'pos_adv_call', 'pos_adv_put',
       'pos_leg_prop_a', 'pos_leg_prop_b',
       'pos_bps_short_put', 'pos_bps_long_put', 'pos_unb_naked_call', 'pos_unb_long_call_part', 'pos_unsupp_diag_1', 'pos_unsupp_diag_2',
-      mnvCallPosId, mnvPutPosId,
+      mnvCallPosId, mnvPutPosId, advSpotPosId, advSpotPos2Id,
     ];
     const allCleanStratIds = [
       itubStratId, 'strat_itub_golden_42',

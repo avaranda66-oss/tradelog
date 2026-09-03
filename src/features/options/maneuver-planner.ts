@@ -497,6 +497,7 @@ export function buildScaleDownManeuverPlan(
         openAllocatedQuantity: curOpenByLegId.get(l.id)!,
         positionOpenQuantity: pos?.openQuantity ?? pos?.quantity ?? 0,
         entryPrice: pos?.entryPrice ?? 0,
+        underlyingCurrentSpot: pos?.underlyingCurrentSpot ?? null,
         strike: pos?.strike ?? 0,
         side: pos?.side ?? 'UNKNOWN',
         optionType: pos?.optionType ?? 'CALL',
@@ -515,6 +516,8 @@ export function buildScaleDownManeuverPlan(
 
   const fingerprintPayload = {
     strategyId: strategy.id,
+    strategyCollateralMode: strategy.collateralMode ?? null,
+    strategyCollateralYieldPctCDI: (strategy as any).collateralYieldPctCDI ?? null,
     collateralCoveragePct: (strategy as any).collateralCoveragePct ?? null,
     maneuverType: 'SCALE_DOWN',
     executionDate,
@@ -529,6 +532,7 @@ export function buildScaleDownManeuverPlan(
           capitalRemuneratedReais: openSegment.capitalRemuneratedReais,
           collateralMode: openSegment.collateralMode,
           collateralPctCdi: openSegment.collateralPctCdi,
+          quality: (openSegment as any).quality ?? null,
         }
       : null,
   };
@@ -825,6 +829,7 @@ export function buildPartialLegCloseManeuverPlan(
         openAllocatedQuantity: curOpenByLegId.get(l.id)!,
         positionOpenQuantity: p?.openQuantity ?? p?.quantity ?? 0,
         entryPrice: p?.entryPrice ?? 0,
+        underlyingCurrentSpot: p?.underlyingCurrentSpot ?? null,
         strike: p?.strike ?? 0,
         side: p?.side ?? 'UNKNOWN',
         optionType: p?.optionType ?? 'CALL',
@@ -835,6 +840,8 @@ export function buildPartialLegCloseManeuverPlan(
 
   const fingerprintPayload = {
     strategyId: strategy.id,
+    strategyCollateralMode: strategy.collateralMode ?? null,
+    strategyCollateralYieldPctCDI: (strategy as any).collateralYieldPctCDI ?? null,
     collateralCoveragePct: (strategy as any).collateralCoveragePct ?? null,
     maneuverType: 'LEG_CLOSE',
     executionDate,
@@ -850,6 +857,7 @@ export function buildPartialLegCloseManeuverPlan(
           capitalRemuneratedReais: openSegment.capitalRemuneratedReais,
           collateralMode: openSegment.collateralMode,
           collateralPctCdi: openSegment.collateralPctCdi,
+          quality: (openSegment as any).quality ?? null,
         }
       : null,
   };
